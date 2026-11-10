@@ -3,10 +3,10 @@
 //! See [`Engine`].
 
 use crate::commit_message::NoteDescriber;
-use crate::graph::{Graph, Saved};
+use crate::graph::{Graph, Renamed, Saved};
 use crate::note_merge::NoteMergeDriver;
 use crate::{Error, Result};
-use prism_index::Indexer;
+use prism_index::{Catalog, Indexer, Links, Resolved};
 use prism_sync::{Auth, Mode, Oid, Report, Repository, Schedule, Scheduler, SnapshotOptions, StopHandle, Syncer};
 use std::path::{Path, PathBuf};
 use std::sync::mpsc::{self, RecvTimeoutError};
@@ -130,6 +130,18 @@ pub struct Engine {
     thread: Option<std::thread::JoinHandle<()>>,
     #[cfg(feature = "relay")]
     listener: Mutex<Option<prism_relay::Listener>>,
+    #[cfg(feature = "watch")]
+    watcher: Mutex<Option<notify::RecommendedWatcher>>,
+}
+
+/// Whether a path a watcher reports is one of the graph's own files:
+/// not git's bookkeeping, and not a file half-written on its way in.
+#[cfg(feature = "watch")]
+fn is_graph_file(root: &Path, path: &Path) -> bool {
+    let relative = path.strip_prefix(root).unwrap_or(path);
+    let in_git = relative.components().any(|part| part.as_os_str() == ".git");
+    let temporary = path.file_name().is_some_and(|name| name.to_string_lossy().contains(".prism-"));
+    !in_git && !temporary
 }
 
 impl Engine {
@@ -167,6 +179,8 @@ impl Engine {
             thread: Some(thread),
             #[cfg(feature = "relay")]
             listener: Mutex::new(None),
+            #[cfg(feature = "watch")]
+            watcher: Mutex::new(None),
         })
     }
 
@@ -221,6 +235,45 @@ impl Engine {
             self.note_changed();
         }
         Ok(deleted)
+    }
+
+    /// Renames a page, and relinks the graph: every page that linked to
+    /// the old title, and every saved river that held it, names the new
+    /// one. The page's file and `id` stay as they are. See
+    /// [`Graph::rename_note`].
+    pub fn rename_note(&self, path: &str, new_title: &str) -> Result<Renamed> {
+        // The index must have seen everything written so far.
+        self.settle();
+        let db = self.index()?;
+        let old_title = match self.graph.note(path)? {
+            Some(note) => note.title(path),
+            None => return Err(Error::NotRenamable(path.to_owned())),
+        };
+        if let Some(Resolved::Note(other)) = Catalog::resolve(&db, new_title)? {
+            if other != path {
+                return Err(Error::TitleTaken(new_title.trim().to_owned()));
+            }
+        }
+        let mut linking: Vec<String> = Links::backlinks(&db, &[old_title])?.into_iter().map(|link| link.source).collect();
+        linking.dedup();
+        let renamed = self.graph.rename_note(path, new_title, &linking)?;
+        self.note_changed();
+        Ok(renamed)
+    }
+
+    /// Saves a river. See [`Graph::save_river`].
+    pub fn save_river(&self, name: &str, river: &prism_markup::River) -> Result<bool> {
+        let written = self.graph.save_river(name, river)?;
+        if written {
+            self.note_changed();
+        }
+        Ok(written)
+    }
+
+    /// Runs a query block's body against the indices. `this` is the
+    /// title of the page the query is in, for `{this}`.
+    pub fn query(&self, body: &str, this: Option<&str>) -> Result<prism_index::QueryResult> {
+        Ok(prism_index::query::run_text(&self.index()?, body, &prism_index::QueryOptions { this, include_private: false })?)
     }
 
     /// Something in the working tree changed, by whatever hand: index it
@@ -335,6 +388,31 @@ impl Engine {
         }
     }
 
+    /// Watches the graph's folder, and takes any write made around the
+    /// engine — by another app, by a person in a terminal — as
+    /// [`note_changed`](Self::note_changed): indexed at once, synced in a
+    /// while. What changed is told as [`Event::IndexUpdated`].
+    #[cfg(feature = "watch")]
+    pub fn watch(&self) -> Result<()> {
+        use notify::Watcher;
+        let commands = self.commands.clone();
+        // Events name files as the system does, links resolved.
+        let root = self.graph.root().canonicalize().unwrap_or_else(|_| self.graph.root().to_owned());
+        let watched = root.clone();
+        let mut watcher = notify::recommended_watcher(move |event: notify::Result<notify::Event>| {
+            let Ok(event) = event else { return };
+            if !matches!(event.kind, notify::EventKind::Access(_)) && event.paths.iter().any(|path| is_graph_file(&root, path)) {
+                let _ = commands.send(Command::Changed);
+            }
+        })
+        .map_err(|e| Error::Watch(e.to_string()))?;
+        watcher.watch(&watched, notify::RecursiveMode::Recursive).map_err(|e| Error::Watch(e.to_string()))?;
+        if let Ok(mut current) = self.watcher.lock() {
+            *current = Some(watcher);
+        }
+        Ok(())
+    }
+
     /// Stops the engine: a cycle under way stops at its next safe point,
     /// and the thread ends. Dropping the engine does the same.
     pub fn shutdown(mut self) {
@@ -345,6 +423,10 @@ impl Engine {
         #[cfg(feature = "relay")]
         if let Ok(mut listener) = self.listener.lock() {
             listener.take();
+        }
+        #[cfg(feature = "watch")]
+        if let Ok(mut watcher) = self.watcher.lock() {
+            watcher.take();
         }
         self.stop.stop();
         let _ = self.commands.send(Command::Stop);
@@ -372,7 +454,10 @@ struct Worker {
 
 impl Worker {
     fn run(mut self, inbox: mpsc::Receiver<Command>) {
-        self.reindex();
+        if self.reindex() {
+            // Written while no engine ran: to be committed like anything else.
+            self.scheduler.note_changed(Instant::now());
+        }
         loop {
             if let Some(mode) = self.scheduler.poll(Instant::now()) {
                 let _ = self.cycle(mode); // told to subscribers
@@ -395,10 +480,7 @@ impl Worker {
             let mut settled = Vec::new();
             for command in std::iter::once(command).chain(std::iter::from_fn(|| inbox.try_recv().ok())) {
                 match command {
-                    Command::Changed => {
-                        self.scheduler.note_changed(Instant::now());
-                        changed = true;
-                    }
+                    Command::Changed => changed = true,
                     Command::Sync(mode) => self.scheduler.request(mode),
                     Command::SyncNow(mode, answer) => {
                         self.scheduler.request(mode);
@@ -413,8 +495,11 @@ impl Worker {
                     Command::Stop => return,
                 }
             }
-            if changed {
-                self.reindex();
+            // Indexed now; synced in a while — if there is anything to
+            // commit. A file touched and left as it was, or a sync's own
+            // writing seen by a watcher, asks nothing of the remote.
+            if changed && self.reindex() {
+                self.scheduler.note_changed(Instant::now());
             }
             for answer in settled {
                 let _ = answer.send(());
@@ -422,19 +507,23 @@ impl Worker {
         }
     }
 
-    /// Brings the indices up to the working tree as it is now.
-    fn reindex(&mut self) {
+    /// Brings the indices up to the working tree as it is now. Says
+    /// whether the working tree has anything not yet committed.
+    fn reindex(&mut self) -> bool {
         let repo = self.syncer.repository();
-        let update = repo.snapshot(&self.snapshot).map_err(crate::Error::from).and_then(|snapshot| Ok(self.indexer.update(repo, snapshot.tree)?));
-        match update {
-            Ok(update) if update.is_noop() => {}
-            Ok(update) => {
-                if let Some(tree) = update.tree {
-                    self.shared.emit(Event::IndexUpdated { tree, changed: update.changed });
-                }
+        let snapshot = match repo.snapshot(&self.snapshot) {
+            Ok(snapshot) => snapshot,
+            Err(error) => {
+                self.shared.emit(Event::IndexFailed(error.to_string()));
+                return true; // unknown: let a sync find out
             }
+        };
+        match self.indexer.update(repo, snapshot.tree) {
+            Ok(update) if update.is_noop() => {}
+            Ok(update) => self.shared.emit(Event::IndexUpdated { tree: snapshot.tree, changed: update.changed }),
             Err(error) => self.shared.emit(Event::IndexFailed(error.to_string())),
         }
+        repo.head_tree().map(|head| head != Some(snapshot.tree)).unwrap_or(true)
     }
 
     fn cycle(&mut self, mode: Mode) -> std::result::Result<Report, SyncFailure> {

@@ -7,9 +7,11 @@ rust-version.workspace = true
 license.workspace = true
 
 [features]
-default = ["relay"]
+default = ["relay", "watch"]
 # Listening to a sync relay for pushes from other devices.
 relay = ["dep:prism-relay"]
+# Watching the graph's folder for writes made around the engine.
+watch = ["dep:notify"]
 
 [dependencies]
 prism-markup.workspace = true
@@ -19,6 +21,7 @@ prism-github = { workspace = true, features = ["ureq"] }
 prism-relay = { workspace = true, features = ["client"], optional = true }
 thiserror.workspace = true
 unicode-normalization = "0.1"
+notify = { version = "8", optional = true }
 
 [dev-dependencies]
 tempfile.workspace = true

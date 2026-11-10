@@ -14,7 +14,7 @@
 
 use crate::note_merge::merge_notes;
 use crate::{Error, Result};
-use prism_markup::{Block, Day, Note, NoteKind, Week};
+use prism_markup::{river, Block, Day, Note, NoteKind, River, Week};
 use prism_sync::textmerge::{self, Labels};
 use std::path::{Path, PathBuf};
 use unicode_normalization::UnicodeNormalization;
@@ -23,6 +23,16 @@ use unicode_normalization::UnicodeNormalization;
 #[derive(Debug, Clone)]
 pub struct Graph {
     root: PathBuf,
+}
+
+/// What [`Graph::rename_note`] did.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Renamed {
+    pub old_title: String,
+    pub new_title: String,
+    /// Every file rewritten: the page itself, the pages that linked to
+    /// it, the rivers that held it.
+    pub rewritten: Vec<String>,
 }
 
 /// How [`Graph::save_merging`] ended.
@@ -186,6 +196,76 @@ impl Graph {
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(false),
             Err(e) => Err(Error::io(format!("deleting {path}"), e)),
         }
+    }
+
+    // --- Renaming ----------------------------------------------------------
+
+    /// Renames a page: retitles it where its title is written, and makes
+    /// every page in `linking` — and every saved river — name the new
+    /// title where it named the old. The page's file stays where it is;
+    /// its `id` and its path are what do not change.
+    ///
+    /// `linking` is the pages that may link to it: its backlinks, from
+    /// the index ([`Engine::rename_note`](crate::Engine::rename_note)
+    /// finds them). A page listed that has no such link is left alone.
+    pub fn rename_note(&self, path: &str, new_title: &str, linking: &[String]) -> Result<Renamed> {
+        let new_title = new_title.trim();
+        if NoteKind::of(path) != Some(NoteKind::Note) || new_title.is_empty() {
+            return Err(Error::NotRenamable(path.to_owned()));
+        }
+        let mut note = self.note(path)?.ok_or_else(|| Error::NotRenamable(path.to_owned()))?;
+        let old_title = note.title(path);
+        let mut renamed = Renamed { old_title: old_title.clone(), new_title: new_title.to_owned(), rewritten: Vec::new() };
+        if old_title == new_title {
+            return Ok(renamed);
+        }
+        note.set_title(new_title);
+        // A page may link to itself.
+        note.relink(&old_title, new_title);
+        self.save(path, &note)?;
+        renamed.rewritten.push(path.to_owned());
+        for source in linking.iter().filter(|source| source.as_str() != path) {
+            let Some(mut linking_note) = self.note(source)? else { continue };
+            if linking_note.relink(&old_title, new_title) > 0 && self.save(source, &linking_note)? {
+                renamed.rewritten.push(source.clone());
+            }
+        }
+        for name in self.river_names() {
+            let Some(mut river) = self.river(&name)? else { continue };
+            if river.rename(&old_title, new_title) && self.save_river(&name, &river)? {
+                renamed.rewritten.push(river::path(&name));
+            }
+        }
+        Ok(renamed)
+    }
+
+    // --- Rivers ------------------------------------------------------------
+
+    /// The graph's saved rivers, by name, sorted.
+    pub fn river_names(&self) -> Vec<String> {
+        let Ok(entries) = std::fs::read_dir(self.root.join(river::RIVERS_DIR)) else { return Vec::new() };
+        let mut names: Vec<String> = entries
+            .flatten()
+            .filter_map(|entry| entry.file_name().to_str().map(str::to_owned))
+            .filter(|name| !name.starts_with('.'))
+            .filter_map(|name| name.strip_suffix(".md").map(str::to_owned))
+            .collect();
+        names.sort_by_key(|name| name.to_lowercase());
+        names
+    }
+
+    /// A saved river; `None` when none has the name.
+    pub fn river(&self, name: &str) -> Result<Option<River>> {
+        Ok(self.read(&river::path(name))?.map(|text| River::parse(&text)))
+    }
+
+    /// Saves a river under a name. Says whether its file changed.
+    pub fn save_river(&self, name: &str, river: &River) -> Result<bool> {
+        self.write(&river::path(name), &river.to_markdown())
+    }
+
+    pub fn delete_river(&self, name: &str) -> Result<bool> {
+        self.delete(&river::path(name))
     }
 
     // --- New things --------------------------------------------------------
@@ -409,6 +489,40 @@ mod tests {
         assert_eq!(graph.add_asset("no extension", b"x").unwrap(), "assets/no-extension");
         assert_eq!(graph.add_asset(".hidden", b"x").unwrap(), "assets/hidden");
         assert_eq!(std::fs::read(graph.root().join("assets/q3-report-final.pdf")).unwrap(), b"one");
+    }
+
+    #[test]
+    fn renaming_retitles_the_page_and_relinks_the_rest() {
+        let (_dir, graph) = graph();
+        graph.write("notes/atlas.md", "---\nid: 01jbxk3t6y8q2zp4m9v7c5r0wd\n---\n# Project Atlas\n\n- about [[Project Atlas]] itself\n").unwrap();
+        graph.write("notes/ada.md", "# Ada\n\nWorks on [[project atlas|the project]].\n").unwrap();
+        graph.write("notes/other.md", "# Other\n\nNo link here.\n").unwrap();
+        graph.write("daily/2026-10-31.md", "- [[Project Atlas]] kick-off\n").unwrap();
+        let mut river = River::default();
+        river.cards = vec![prism_markup::river::Card::new("Project Atlas"), prism_markup::river::Card::new("Ada")];
+        river.folded = vec!["Project Atlas".into()];
+        assert!(graph.save_river("Work", &river).unwrap());
+        assert_eq!(graph.river_names(), ["Work"]);
+
+        let linking = vec!["notes/ada.md".to_owned(), "notes/other.md".to_owned(), "daily/2026-10-31.md".to_owned(), "notes/gone.md".to_owned()];
+        let renamed = graph.rename_note("notes/atlas.md", " Atlas Reborn ", &linking).unwrap();
+        assert_eq!(renamed.old_title, "Project Atlas");
+        assert_eq!(renamed.rewritten, ["notes/atlas.md", "notes/ada.md", "daily/2026-10-31.md", "rivers/Work.md"]);
+        assert_eq!(
+            graph.read("notes/atlas.md").unwrap().unwrap(),
+            "---\nid: 01jbxk3t6y8q2zp4m9v7c5r0wd\n---\n# Atlas Reborn\n\n- about [[Atlas Reborn]] itself\n"
+        );
+        assert_eq!(graph.read("notes/ada.md").unwrap().unwrap(), "# Ada\n\nWorks on [[Atlas Reborn|the project]].\n");
+        assert_eq!(graph.read("daily/2026-10-31.md").unwrap().unwrap(), "- [[Atlas Reborn]] kick-off\n");
+        assert_eq!(graph.read("rivers/Work.md").unwrap().unwrap(), "---\nfolded:\n  - Atlas Reborn\n---\n- [[Atlas Reborn]]\n- [[Ada]]\n");
+        assert_eq!(graph.river("Work").unwrap().unwrap().titles().collect::<Vec<_>>(), ["Atlas Reborn", "Ada"]);
+
+        // The same title again changes nothing; a day cannot be renamed.
+        assert!(graph.rename_note("notes/atlas.md", "Atlas Reborn", &linking).unwrap().rewritten.is_empty());
+        assert!(matches!(graph.rename_note("daily/2026-10-31.md", "Halloween", &[]), Err(Error::NotRenamable(_))));
+        assert!(matches!(graph.rename_note("notes/missing.md", "X", &[]), Err(Error::NotRenamable(_))));
+        assert!(graph.delete_river("Work").unwrap());
+        assert!(graph.river("Work").unwrap().is_none() && graph.river_names().is_empty());
     }
 
     #[test]

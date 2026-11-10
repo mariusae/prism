@@ -98,6 +98,18 @@ pub fn parse(text: &str) -> Vec<Span> {
     parse_range(text, 0, text.len())
 }
 
+/// Where a wiki link's target is written in the text: what a rename
+/// rewrites. `None` for a span that is no wiki link.
+pub fn wiki_target_range(text: &str, span: &Span) -> Option<Range<usize>> {
+    let SpanKind::WikiLink { embed, .. } = &span.kind else { return None };
+    let start = span.range.start + if *embed { 3 } else { 2 };
+    let body = text.get(start..span.range.end.checked_sub(2)?)?;
+    // `target`, `target|shown`, or `target\|shown` in a table.
+    let written = &body[..body.find("\\|").or_else(|| body.find('|')).unwrap_or(body.len())];
+    let leading = written.len() - written.trim_start().len();
+    Some(start + leading..start + leading + written.trim().len())
+}
+
 /// Every span in a text, nested ones included, outermost first.
 pub fn walk(spans: &[Span]) -> impl Iterator<Item = &Span> {
     spans.iter().flat_map(Span::walk)
@@ -534,6 +546,14 @@ mod tests {
             ]
         );
         assert_eq!(spans("[[]] [[ ]] [[a\nb]] [[unclosed"), []);
+    }
+
+    #[test]
+    fn a_wiki_links_target_is_found_where_it_is_written() {
+        let text = "[[ Ada ]] ![[Project Atlas|the project]] [[A\\|b]] **bold**";
+        let spans = parse(text);
+        let targets: Vec<_> = spans.iter().filter_map(|s| wiki_target_range(text, s)).map(|r| &text[r]).collect();
+        assert_eq!(targets, ["Ada", "Project Atlas", "A"]);
     }
 
     #[test]

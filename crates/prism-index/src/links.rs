@@ -90,7 +90,8 @@ impl Links {
 
     /// The names linked to that no page answers to — pages waiting to be
     /// written — with how many links each has, most wanted first. Dates
-    /// are left out: a day's page is always there to be written. Needs
+    /// are left out (a day's page is always there to be written), and
+    /// links to saved rivers, which are files and not pages. Needs
     /// the [`Catalog`](crate::Catalog) in the same database.
     pub fn unresolved(db: &Connection) -> Result<Vec<(String, usize)>> {
         let mut statement = db.prepare(
@@ -99,6 +100,9 @@ impl Links {
              GROUP BY key ORDER BY wanted DESC, key",
         )?;
         let rows: Vec<(String, usize)> = statement.query_map([], |r| Ok((r.get(0)?, r.get::<_, i64>(1)? as usize)))?.collect::<rusqlite::Result<_>>()?;
-        Ok(rows.into_iter().filter(|(name, _)| prism_markup::Day::parse(name).is_none() && prism_markup::Week::parse(name).is_none()).collect())
+        // Nor is a link to a saved river a page to be written.
+        let waiting =
+            |name: &str| prism_markup::Day::parse(name).is_none() && prism_markup::Week::parse(name).is_none() && prism_markup::river::name_of(name).is_none();
+        Ok(rows.into_iter().filter(|(name, _)| waiting(name)).collect())
     }
 }

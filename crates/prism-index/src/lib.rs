@@ -61,11 +61,13 @@
 
 mod catalog;
 mod links;
+pub mod query;
 mod search;
 mod tasks;
 
 pub use catalog::{Catalog, NoteRow, Resolved};
 pub use links::{Backlink, Links};
+pub use query::{QueryOptions, QueryResult, Show};
 pub use search::{Hit, Search};
 pub use tasks::{TaskRow, Tasks};
 

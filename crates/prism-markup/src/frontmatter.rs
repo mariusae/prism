@@ -193,6 +193,21 @@ impl Frontmatter {
         }
     }
 
+    /// Sets a key to a list written an item a line, however short: for a
+    /// list two devices may both add to, so that git merges the two.
+    pub fn set_list_by_line(&mut self, key: &str, items: Vec<String>) {
+        let value = Value::List(items);
+        let lines = write_entry(key, &value, true);
+        match self.entries.iter_mut().find(|e| e.key.as_deref() == Some(key)) {
+            Some(entry) if entry.lines == lines => {}
+            Some(entry) => {
+                entry.lines = lines;
+                entry.value = Some(value);
+            }
+            None => self.entries.push(Entry { key: Some(key.to_owned()), lines, value: Some(value) }),
+        }
+    }
+
     /// Takes a key out, with its lines. Says whether it was there.
     pub fn remove(&mut self, key: &str) -> bool {
         let before = self.entries.len();

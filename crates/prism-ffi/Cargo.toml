@@ -1,0 +1,23 @@
+[package]
+name = "prism-ffi"
+description = "Prism's engine for Swift (and Kotlin): UniFFI bindings over the prism crate."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[lib]
+name = "prism_ffi"
+crate-type = ["cdylib", "staticlib", "lib"]
+
+[[bin]]
+name = "uniffi-bindgen"
+path = "uniffi-bindgen.rs"
+
+[dependencies]
+prism = { path = "../prism" }
+uniffi = { version = "0.29", features = ["cli"] }
+thiserror.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true

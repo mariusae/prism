@@ -66,6 +66,17 @@ impl Search {
     }
 }
 
+impl Search {
+    /// Every page with every word typed, in no order: for a query's
+    /// `text:` condition.
+    pub fn matching(db: &Connection, typed: &str) -> Result<Vec<String>> {
+        let Some(query) = fts_query(typed) else { return Ok(Vec::new()) };
+        let mut statement = db.prepare("SELECT path FROM search WHERE search MATCH ?1")?;
+        let paths = statement.query_map([query], |r| r.get(0))?.collect::<rusqlite::Result<_>>()?;
+        Ok(paths)
+    }
+}
+
 /// What was typed, as an FTS5 query: each word quoted, so nothing typed
 /// is taken for syntax, and the last one a prefix.
 fn fts_query(typed: &str) -> Option<String> {

@@ -29,6 +29,8 @@
 //! - [`Frontmatter`] reads and edits the header.
 //! - [`table`] and [`query`] read the two block kinds with structure of
 //!   their own.
+//! - [`fields`] reads the typed fields a tag gives its pages, and
+//!   [`river`] a saved river's file.
 //!
 //! # The one promise
 //!
@@ -74,17 +76,21 @@
 
 pub mod block;
 pub mod date;
+pub mod fields;
 pub mod frontmatter;
 pub mod inline;
 pub mod note;
 pub mod outline;
 pub mod query;
+pub mod river;
 pub mod table;
 
 pub use block::{Block, BlockKind, Callout, Code, Document, Item, Layout, LineEnding, Marker, Row, Task};
 pub use date::{Day, Timestamp, Week, Weekday};
+pub use fields::{FieldKind, FieldSpec, FieldValue};
 pub use frontmatter::{Frontmatter, Value};
 pub use inline::{Span, SpanKind, Style};
 pub use note::{name_key, ImageRef, Meta, Note, NoteKind, NoteLink, References, TaskRef, WebLink};
 pub use query::{Clause, Query};
+pub use river::River;
 pub use table::Table;

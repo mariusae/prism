@@ -7,6 +7,7 @@ members = [
     "crates/prism-github",
     "crates/prism-relay",
     "crates/prism",
+    "crates/prism-ffi",
 ]
 # The Cloudflare binding builds for wasm32 only; see its README.
 exclude = ["crates/prism-relay-worker"]

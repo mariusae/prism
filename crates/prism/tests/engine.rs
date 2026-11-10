@@ -308,3 +308,76 @@ fn tungstenite_accept(stream: std::net::TcpStream, saw_token: std::sync::mpsc::S
     })
     .unwrap()
 }
+
+#[test]
+fn renaming_a_page_relinks_the_graph_and_the_indices_follow() {
+    let world = World::new();
+    let a = world.first("a", Schedule::default());
+    a.write("notes/atlas.md", "# Project Atlas\n").unwrap();
+    a.write("notes/ada.md", "# Ada\n\nWorks on [[project atlas]].\n").unwrap();
+    a.write("daily/2026-10-31.md", "- [[Project Atlas]] kick-off\n").unwrap();
+    a.write("notes/taken.md", "# Taken\n").unwrap();
+
+    assert!(matches!(a.rename_note("notes/atlas.md", "taken"), Err(prism::Error::TitleTaken(_))));
+    let renamed = a.rename_note("notes/atlas.md", "Atlas Reborn").unwrap();
+    assert_eq!(renamed.rewritten, ["notes/atlas.md", "daily/2026-10-31.md", "notes/ada.md"]);
+    assert_eq!(a.graph().read("notes/ada.md").unwrap().unwrap(), "# Ada\n\nWorks on [[Atlas Reborn]].\n");
+    a.settle();
+    let db = a.index().unwrap();
+    assert_eq!(Catalog::resolve(&db, "Atlas Reborn").unwrap().unwrap().path(), "notes/atlas.md");
+    assert_eq!(Catalog::resolve(&db, "Project Atlas").unwrap(), None);
+    assert_eq!(Links::backlinks(&db, &["Atlas Reborn".into()]).unwrap().len(), 2);
+    assert!(Links::unresolved(&db).unwrap().is_empty());
+    // The rename's rewrites are committed like any other writing.
+    assert_eq!(a.sync_blocking(Mode::Full).unwrap().committed.as_deref(), Some("Add 4 notes"));
+    a.rename_note("notes/atlas.md", "Atlas Again").unwrap();
+    assert_eq!(a.sync_blocking(Mode::Full).unwrap().committed.as_deref(), Some("Update 3 notes"));
+
+    // Queries run against the same indices.
+    let found = a.query("links to: {this}\nis: note", Some("Atlas Again")).unwrap();
+    assert_eq!(found.pages.iter().map(|p| p.title.as_str()).collect::<Vec<_>>(), ["Ada"]);
+}
+
+#[test]
+fn a_change_that_leaves_nothing_to_commit_asks_nothing_of_the_remote() {
+    let world = World::new();
+    let schedule = Schedule { idle: Duration::from_millis(50), ..Schedule::default() };
+    let a = world.first("a", schedule);
+    a.write("notes/n.md", "# N\n").unwrap();
+    a.sync_blocking(Mode::Full).unwrap();
+    let events = a.subscribe();
+    // Told something changed, when nothing did; and a file rewritten as it was.
+    a.note_changed();
+    std::fs::write(a.graph().root().join("notes/n.md"), "# N\n").unwrap();
+    a.note_changed();
+    a.settle();
+    std::thread::sleep(Duration::from_millis(400));
+    assert!(events.try_iter().all(|event| !matches!(event, Event::SyncStarted(_))), "no cycle was started");
+}
+
+#[cfg(feature = "watch")]
+#[test]
+fn a_watched_graph_notices_what_is_written_around_the_engine() {
+    let world = World::new();
+    let schedule = Schedule { idle: Duration::from_millis(100), ..Schedule::default() };
+    let a = world.first("a", schedule);
+    a.settle();
+    a.watch().unwrap();
+    let events = a.subscribe();
+    std::thread::sleep(Duration::from_millis(200)); // let the watch take hold
+    std::fs::create_dir_all(a.graph().root().join("notes")).unwrap();
+    std::fs::write(a.graph().root().join("notes/external.md"), "# Written elsewhere\n").unwrap();
+    wait_for(&events, "the external write indexed", |e| {
+        matches!(e, Event::IndexUpdated { changed, .. } if changed.contains(&"notes/external.md".to_owned())).then_some(())
+    });
+    assert_eq!(Catalog::resolve(&a.index().unwrap(), "Written elsewhere").unwrap().unwrap().path(), "notes/external.md");
+    // And, writing having paused, it is pushed without anyone asking.
+    let report = wait_for(&events, "the push", |e| match e {
+        Event::SyncFinished(Ok(report)) => Some(report.clone()),
+        _ => None,
+    });
+    assert_eq!(report.committed.as_deref(), Some("Add Written elsewhere"));
+    // The sync's own bookkeeping in .git starts nothing more.
+    std::thread::sleep(Duration::from_millis(600));
+    assert!(events.try_iter().all(|event| !matches!(event, Event::SyncStarted(_))));
+}

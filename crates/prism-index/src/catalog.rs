@@ -1,7 +1,7 @@
 //! The catalog: every page, what it is called, and what it says of itself.
 
 use crate::{File, Index, Result};
-use prism_markup::{name_key, Day, NoteKind, Week};
+use prism_markup::{name_key, Day, FieldSpec, NoteKind, Week};
 use rusqlite::{params, Connection, OptionalExtension, Transaction};
 
 /// Every page of the graph: its title and names, its tags, its
@@ -235,6 +235,30 @@ impl Catalog {
             }
         }
         Ok(fields)
+    }
+
+    /// The typed fields a tag gives the pages tagged with it: the
+    /// `fields` its own page lists. None, for a tag with no page.
+    pub fn field_specs(db: &Connection, tag: &str) -> Result<Vec<FieldSpec>> {
+        let Some(Resolved::Note(path)) = Catalog::resolve(db, tag.trim_start_matches('#'))? else { return Ok(Vec::new()) };
+        let mut statement = db.prepare("SELECT value FROM note_fields WHERE path = ?1 AND key = ?2 ORDER BY position")?;
+        let items: Vec<String> = statement.query_map(params![path, prism_markup::fields::FIELDS_KEY], |r| r.get(0))?.collect::<rusqlite::Result<_>>()?;
+        Ok(items.iter().filter_map(|item| FieldSpec::parse(item)).collect())
+    }
+
+    /// The fields a page's tags give it, in the order of its tags, each
+    /// once: the form an app shows for the page.
+    pub fn schema(db: &Connection, path: &str) -> Result<Vec<FieldSpec>> {
+        const OWN: [&str; 5] = ["title", "id", "tags", "created", "modified"];
+        let mut schema: Vec<FieldSpec> = Vec::new();
+        for tag in Catalog::tags_of(db, path)? {
+            for spec in Catalog::field_specs(db, &tag)? {
+                if !OWN.contains(&spec.name.as_str()) && !schema.iter().any(|known| known.name == spec.name) {
+                    schema.push(spec);
+                }
+            }
+        }
+        Ok(schema)
     }
 
     /// The pages whose frontmatter has a key — with a given value, when

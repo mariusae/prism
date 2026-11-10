@@ -9,7 +9,8 @@
 
 use crate::block::{Block, BlockKind, Document, Task};
 use crate::date::{Day, Timestamp, Week};
-use crate::frontmatter::Frontmatter;
+use crate::fields::FieldSpec;
+use crate::frontmatter::{Frontmatter, Value};
 use crate::inline::{self, SpanKind};
 
 /// Where a graph keeps its pages.
@@ -326,6 +327,115 @@ impl Note {
         out
     }
 
+    /// The fields this page, as a tag's page, gives the pages tagged with
+    /// it. See [`crate::fields`].
+    pub fn field_specs(&self) -> Vec<FieldSpec> {
+        self.frontmatter.as_ref().map(FieldSpec::of).unwrap_or_default()
+    }
+
+    /// Retitles the note where its title is written: the frontmatter's
+    /// `title` when it has one, else its first `# Heading` — which is made
+    /// when there is neither.
+    pub fn set_title(&mut self, title: &str) {
+        let title = title.trim();
+        if self.field("title").is_some_and(|t| !t.trim().is_empty()) {
+            self.frontmatter_mut().set("title", title);
+        } else if self.title_heading().is_some() {
+            self.body.blocks[0].text = title.to_owned();
+        } else {
+            self.body.blocks.insert(0, Block::heading(1, title));
+        }
+    }
+
+    /// Makes the note name `to` wherever it named `from`: what every
+    /// other page needs when a page is renamed. Rewritten are
+    ///
+    /// - `[[from]]`, `[[from|shown]]` and `![[from]]` — in tables too,
+    ///   their bars escaped — never inside code;
+    /// - the titles a query block asks for (`tag:`, `links to:`, …);
+    /// - frontmatter: an item of any list, plain or as a `[[link]]`, and
+    ///   a field holding just the title.
+    ///
+    /// Names are compared as links are resolved: case and spacing aside.
+    /// Returns how many places were rewritten; only those lines change.
+    pub fn relink(&mut self, from: &str, to: &str) -> usize {
+        let key = name_key(from);
+        let mut count = 0;
+        fn visit(blocks: &mut [Block], key: &str, to: &str, count: &mut usize) {
+            for block in blocks {
+                if block.has_inline_content() {
+                    let spans = inline::parse(&block.text);
+                    let mut ranges: Vec<_> = inline::walk(&spans)
+                        .filter(|span| matches!(&span.kind, SpanKind::WikiLink { target, .. } if name_key(target) == key))
+                        .filter_map(|span| inline::wiki_target_range(&block.text, span))
+                        .collect();
+                    // Last first, so the ranges before stay where they are.
+                    ranges.sort_by_key(|range| std::cmp::Reverse(range.start));
+                    for range in ranges {
+                        block.text.replace_range(range, to);
+                        *count += 1;
+                    }
+                } else if block.code_parts().is_some_and(|code| code.info == "query") {
+                    let lines: Vec<String> = block
+                        .text
+                        .split('\n')
+                        .map(|line| match line.split_once(':') {
+                            Some((clause, value))
+                                if name_key(value) == key
+                                    && matches!(clause.trim().to_ascii_lowercase().as_str(), "tag" | "not tag" | "links to" | "linked from" | "listed in") =>
+                            {
+                                *count += 1;
+                                format!("{clause}: {to}")
+                            }
+                            _ => line.to_owned(),
+                        })
+                        .collect();
+                    block.text = lines.join("\n");
+                }
+                visit(&mut block.children, key, to, count);
+            }
+        }
+        visit(&mut self.body.blocks, &key, to, &mut count);
+
+        if let Some(front) = &mut self.frontmatter {
+            let rename = |item: &str| -> Option<String> {
+                let trimmed = item.trim();
+                match trimmed.strip_prefix("[[").and_then(|inner| inner.strip_suffix("]]")) {
+                    Some(inner) => {
+                        let (target, shown) = inner.split_once('|').map_or((inner, None), |(t, s)| (t, Some(s)));
+                        (name_key(target) == key).then(|| match shown {
+                            Some(shown) => format!("[[{to}|{shown}]]"),
+                            None => format!("[[{to}]]"),
+                        })
+                    }
+                    None => (name_key(trimmed) == key).then(|| to.to_owned()),
+                }
+            };
+            let entries: Vec<(String, Value)> = front.iter().map(|(k, v)| (k.to_owned(), v.clone())).collect();
+            for (name, value) in entries {
+                // What the page calls itself is not a link to another.
+                if matches!(name.as_str(), "title" | "aliases" | "id" | "caption") {
+                    continue;
+                }
+                let renamed = match &value {
+                    Value::Text(text) => rename(text).map(Value::Text),
+                    Value::List(items) => {
+                        let hits = items.iter().filter(|item| rename(item).is_some()).count();
+                        (hits > 0).then(|| Value::List(items.iter().map(|item| rename(item).unwrap_or_else(|| item.clone())).collect()))
+                    }
+                };
+                if let Some(renamed) = renamed {
+                    count += match (&value, &renamed) {
+                        (Value::List(old), Value::List(new)) => old.iter().zip(new).filter(|(a, b)| a != b).count().max(1),
+                        _ => 1,
+                    };
+                    front.set(&name, renamed);
+                }
+            }
+        }
+        count
+    }
+
     /// Sets a task's checkbox by its block's path.
     pub fn set_task(&mut self, path: &[usize], done: bool) -> bool {
         match self.body.get_mut(path).and_then(Block::item_mut) {
@@ -426,6 +536,41 @@ mod tests {
         let mut bare = Note::parse("# Bare\n");
         bare.frontmatter_mut().set("wiki", "true");
         assert_eq!(bare.to_markdown(), "---\nwiki: true\n---\n# Bare\n");
+    }
+
+    #[test]
+    fn relinking_rewrites_every_way_a_page_is_named() {
+        let source = "---\ntitle: Ada Lovelace\ntags: [Person, Project Atlas]\nrelated:\n  - \"[[project atlas|the project]]\"\n  - Grace Hopper\ncompany: Project Atlas\ncaption: Project Atlas\n---\n# Heading\n\n- See [[Project Atlas]], [[project  atlas|it]] and ![[PROJECT ATLAS]]; not [[Project Atlas 2]] or `[[Project Atlas]]`\n\n| a |\n|---|\n| [[Project Atlas\\|x]] |\n\n```query\ntag: Project Atlas\ntitle: Project Atlas\nlinks to: project atlas\n```\n\n```\n[[Project Atlas]]\n```\n";
+        let mut note = Note::parse(source);
+        assert_eq!(note.relink("Project Atlas", "Atlas Reborn"), 9);
+        let expected = source
+            .replace("tags: [Person, Project Atlas]", "tags: [Person, Atlas Reborn]")
+            .replace("[[project atlas|the project]]", "[[Atlas Reborn|the project]]")
+            .replace("company: Project Atlas", "company: Atlas Reborn")
+            .replace("See [[Project Atlas]], [[project  atlas|it]] and ![[PROJECT ATLAS]]", "See [[Atlas Reborn]], [[Atlas Reborn|it]] and ![[Atlas Reborn]]")
+            .replace("[[Project Atlas\\|x]]", "[[Atlas Reborn\\|x]]")
+            .replace("tag: Project Atlas", "tag: Atlas Reborn")
+            .replace("links to: project atlas", "links to: Atlas Reborn");
+        assert_eq!(note.to_markdown(), expected);
+        // Nothing names it now: nothing changes.
+        assert_eq!(note.relink("Project Atlas", "Again"), 0);
+        assert_eq!(note.to_markdown(), expected);
+    }
+
+    #[test]
+    fn a_title_is_set_where_it_is_written() {
+        let mut titled = Note::parse("---\ntitle: Old\n---\n# Heading stays\n");
+        titled.set_title("New");
+        assert_eq!(titled.to_markdown(), "---\ntitle: New\n---\n# Heading stays\n");
+        let mut headed = Note::parse("---\nid: x\n---\n#  Old\n\ntext\n");
+        headed.set_title(" New ");
+        assert_eq!(headed.to_markdown(), "---\nid: x\n---\n#  New\n\ntext\n");
+        let mut bare = Note::parse("- just a list\n");
+        bare.set_title("New");
+        assert_eq!(bare.to_markdown(), "# New\n- just a list\n");
+        assert_eq!(bare.title("notes/x.md"), "New");
+        let tag = Note::parse("---\nfields:\n  - birthday (date)\n---\n");
+        assert_eq!(tag.field_specs()[0].to_string(), "birthday (date)");
     }
 
     #[test]

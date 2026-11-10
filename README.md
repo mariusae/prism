@@ -14,7 +14,9 @@ The apps are views. Everything hard lives here, once, in Rust:
 - the **relay** that tells devices the moment another one pushes,
   deployable as a Cloudflare Worker;
 - an **engine** that runs all of it in the background and says what it
-  did, as events.
+  did, as events — with queries, renaming that relinks the graph, saved
+  rivers and a file watcher;
+- **Swift bindings**, so the apps can sit on it.
 
 ## The crates
 
@@ -49,9 +51,12 @@ The apps are views. Everything hard lives here, once, in Rust:
 | [`prism-relay`](crates/prism-relay) | The relay's decisions as pure functions; APNs; the device's listener. | github |
 | [`prism-relay-worker`](crates/prism-relay-worker) | The relay hosted on Cloudflare Workers. Plumbing only. | relay |
 | [`prism`](crates/prism) | `Graph` and `Engine`: what an app is built on. Re-exports the rest. | all of the above |
+| [`prism-ffi`](crates/prism-ffi) | The engine for Swift: UniFFI bindings, with a Swift program that tests them. | prism |
 
 Each crate's own documentation (`cargo doc --open`) is the reference;
-this page is the map.
+this page is the map. [The data model](docs/data-model.md) is described
+in one place: files, fields, blocks, queries, rivers, and how the indices
+are built and kept current.
 
 ## The ideas it is built on
 
@@ -163,6 +168,7 @@ cargo test                       # everything, natively
 PRISM_GRAPH=~/notes cargo test -p prism-markup --test graph -- --nocapture
 PRISM_GRAPH=~/notes cargo test --release -p prism --test real_graph -- --nocapture
 cd crates/prism-relay-worker && cargo build --target wasm32-unknown-unknown
+crates/prism-ffi/build-swift.sh  # generates the Swift bindings and runs a Swift test
 ```
 
 The sync engine is tested against real repositories: a bare remote on
@@ -178,13 +184,11 @@ edited note written, snapshotted and indexed in under 10 ms.
 
 ## Not here yet
 
-- **Running queries.** Query blocks are parsed (`prism_markup::query`);
-  the executor over the catalog is to be written.
-- **A C ABI.** The apps are Swift; the engine needs a binding layer
-  (UniFFI, most likely) before they can be rebuilt on it.
+- **An XCFramework.** The Swift bindings are generated and tested on
+  macOS (`crates/prism-ffi/build-swift.sh`); the library has not been
+  built for iOS or packaged for Xcode.
 - **SSH remotes and shallow clones.** HTTPS with a token only, and always
   the whole history.
-- **Renaming with relinking**, typed fields, rivers: app-level features
-  of the old GraphKit that build on the catalog and the block tree.
-- **A file watcher.** The engine is told of writes made around it
-  (`Engine::note_changed`); it does not watch for them.
+- **Renaming a title's parts.** A rename relinks links to the page's
+  title; links to a part of a `Project // Topic` title are left.
+- **The apps.**

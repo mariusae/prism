@@ -82,7 +82,7 @@ mod note_merge;
 
 pub use commit_message::NoteDescriber;
 pub use engine::{Engine, EngineConfig, Event, Status, SyncFailure};
-pub use graph::{slug, ulid, Graph, Saved};
+pub use graph::{slug, ulid, Graph, Renamed, Saved};
 pub use note_merge::{merge_notes, NoteMergeDriver};
 
 /// Notes as data: frontmatter, the block tree, inline spans.
@@ -110,6 +110,15 @@ pub enum Error {
     /// A path that could lead out of the graph, or names nothing.
     #[error("not a path in the graph: {0:?}")]
     BadPath(String),
+    /// A day's or a week's page is named by its date, and cannot be
+    /// renamed; nor can a file that is no page.
+    #[error("{0} cannot be renamed")]
+    NotRenamable(String),
+    /// Another page already answers to the title.
+    #[error("another page is already called {0:?}")]
+    TitleTaken(String),
+    #[error("watching the graph's folder: {0}")]
+    Watch(String),
     #[error("the graph's remote is not a GitHub repository")]
     NotOnGitHub,
     #[error("{context}: {source}")]
