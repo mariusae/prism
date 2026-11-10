@@ -685,6 +685,17 @@ public final class River: Identifiable {
         if folded { writing = nil }
     }
 
+    /// Moves a card to a place among those shown: where it was dragged
+    /// to. One the query found is held by hand from then on — it has been
+    /// given a place of its own.
+    public func move(_ id: Card.ID, toPlace place: Int) {
+        if let index = found.firstIndex(where: { $0.id == id }) { cards.append(found.remove(at: index)) }
+        guard let from = cards.firstIndex(where: { $0.id == id }) else { return }
+        let to = min(max(place, 0), cards.count - 1)
+        guard to != from else { return }
+        cards.insert(cards.remove(at: from), at: to)
+    }
+
     public func move(_ id: Card.ID, by step: Int) {
         guard let index = cards.firstIndex(where: { $0.id == id }) else { return }
         let to = index + step

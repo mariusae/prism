@@ -92,6 +92,12 @@ final class TickStripView: NSView {
     private var sizes: [Double] = []
     private var litCards: Set<Int> = []
     var onPick: (Int) -> Void = { _ in }
+    /// A tick picked up and put down elsewhere in the column: its card
+    /// moved from one place in the river to another.
+    var onMove: (Int, Int) -> Void = { _, _ in }
+    /// The tick being carried: which, where the pointer has it, and the
+    /// place among the ticks shown it would be put down at.
+    private var carried: (index: Int, y: CGFloat, slot: Int)?
     var preview: (Int) -> TickPreview? = { _ in nil }
     /// A lit tick's colour, and an unlit one's.
     var text = NSColor.labelColor
@@ -210,7 +216,20 @@ final class TickStripView: NSView {
             l.removeFromSuperlayer()
             layers.removeValue(forKey: i)
         }
-        for t in ticks {
+        // A tick being carried: the others close up where it was and part
+        // where it would go, and it goes with the pointer.
+        let top = block.top
+        var slots: [Int: Int] = [:]
+        if let carried, let from = ticks.firstIndex(where: { $0.index == carried.index }) {
+            for (k, t) in ticks.enumerated() where k != from {
+                let without = k > from ? k - 1 : k
+                slots[t.index] = without >= carried.slot ? without + 1 : without
+            }
+        }
+        for var t in ticks {
+            if let carried {
+                if t.index == carried.index { t.y = carried.y } else if let slot = slots[t.index] { t.y = top + (CGFloat(slot) + 0.5) * StripLayout.pitch }
+            }
             let l = layers[t.index] ?? {
                 let l = CALayer()
                 column.insertSublayer(l, below: up)
@@ -218,14 +237,15 @@ final class TickStripView: NSView {
                 return l
             }()
             // Wider and brighter near the pointer.
-            let swell = pointer.map { StripLayout.swollen(abs($0 - t.y)) } ?? 1
+            let isCarried = carried?.index == t.index
+            let swell = isCarried ? StripLayout.swell : (carried == nil ? pointer.map { StripLayout.swollen(abs($0 - t.y)) } ?? 1 : 1)
             let near = (swell - 1) / (StripLayout.swell - 1)
             let w = StripLayout.tickWidth * swell
             let h = StripLayout.heights[t.height]
             l.frame = NSRect(x: tickRight - w, y: t.y - h / 2, width: w, height: h)
             l.cornerRadius = min(min(h, w) / 2, 1.5)
             effectiveAppearance.performAsCurrentDrawingAppearance {
-                let base = hovered == t.index ? text : (t.lit ? text : tertiary)
+                let base = hovered == t.index || isCarried ? text : (t.lit ? text : tertiary)
                 l.backgroundColor = (base.blended(withFraction: near * 0.7, of: text) ?? base).cgColor
             }
         }
@@ -331,17 +351,45 @@ final class TickStripView: NSView {
 
     override func mouseExited(with event: NSEvent) { hover(at: nil) }
 
-    private var pressed: Int?
+    private var pressed: (index: Int, at: NSPoint)?
 
     override func mouseDown(with event: NSEvent) {
         pressed = nil
+        carried = nil
         let p = convert(event.locationInWindow, from: nil)
         guard onColumn(p), chevron(at: p.y) == nil, let t = tick(near: p.y) else { return }
-        pressed = t.index
+        pressed = (t.index, p)
+    }
+
+    /// A tick held and moved is picked up: it goes with the pointer, up
+    /// and down the column, and the others make room where it would land.
+    override func mouseDragged(with event: NSEvent) {
+        guard let pressed, ticks.count > 1 else { return }
+        let p = convert(event.locationInWindow, from: nil)
+        if carried == nil, abs(p.y - pressed.at.y) <= 4 { return }
+        let b = block
+        let y = min(max(p.y, b.top + StripLayout.pitch / 2), b.bottom - StripLayout.pitch / 2)
+        let slot = min(max(Int((y - b.top) / StripLayout.pitch), 0), ticks.count - 1)
+        if carried == nil {
+            card.hide()
+            NSCursor.closedHand.push()
+        }
+        carried = (pressed.index, y, slot)
+        pointer = nil
+        hovered = nil
+        draw(animated: true)
     }
 
     override func mouseUp(with event: NSEvent) {
         defer { pressed = nil }
+        if let put = carried {
+            // Put down: its card goes where it was put.
+            carried = nil
+            NSCursor.pop()
+            let to = (ticks.first?.index ?? 0) + put.slot
+            if to != put.index { onMove(put.index, to) } else { draw(animated: true) }
+            return
+        }
         let p = convert(event.locationInWindow, from: nil)
         guard onColumn(p) else { return }
         if let c = chevron(at: p.y) { return go(c) }
@@ -455,6 +503,7 @@ struct TickStrip: NSViewRepresentable {
     /// The cards that show, by their place.
     var lit: Set<Int>
     var onPick: (Int) -> Void
+    var onMove: (Int, Int) -> Void = { _, _ in }
     var preview: (Int) -> TickPreview?
 
     func makeNSView(context: Context) -> TickStripView {
@@ -468,6 +517,7 @@ struct TickStrip: NSViewRepresentable {
 
     func updateNSView(_ view: TickStripView, context: Context) {
         view.onPick = onPick
+        view.onMove = onMove
         view.preview = preview
         view.set(sizes: sizes, lit: lit)
     }

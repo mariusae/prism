@@ -70,7 +70,11 @@ public enum Measures {
     public static let margin: CGFloat = 24, gutter: CGFloat = 24
     public static let cardTrailing: CGFloat = 20
     public static let cardGap: CGFloat = 12, foldedGap: CGFloat = 6
-    public static let riverSides: CGFloat = 20, riverEnds: CGFloat = 16
+    /// The river's sides: room for the ticks at its right edge — widened
+    /// as they are under the pointer — and air between them and the cards,
+    /// however narrow the window; the same on the left, so the cards sit
+    /// in the middle.
+    public static let riverSides: CGFloat = 46, riverEnds: CGFloat = 16
     public static let partGap: CGFloat = 8
     #else
     public static let cardRadius: CGFloat = 14

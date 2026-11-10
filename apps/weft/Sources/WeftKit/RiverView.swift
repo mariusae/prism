@@ -1,6 +1,7 @@
 import Prism
 import PrismEmblem
 import SwiftUI
+import UniformTypeIdentifiers
 
 /// The river: the open cards, one after another.
 struct RiverView: View {
@@ -11,6 +12,8 @@ struct RiverView: View {
     /// show: what the ticks at the river's edge are drawn from.
     @State private var heights: [Card.ID: CGFloat] = [:]
     @State private var showing: Set<Card.ID> = []
+    /// The card picked up to be moved, while it is carried.
+    @State private var carried: Card.ID?
 
     /// A card's size for its tick: its height, once it has been laid out;
     /// till then, a guess from how much its note holds.
@@ -47,6 +50,26 @@ struct RiverView: View {
                                 .onScrollVisibilityChange(threshold: 0.001) { visible in
                                     if visible { showing.insert(card.id) } else { showing.remove(card.id) }
                                 }
+                                .opacity(carried == card.id ? 0.45 : 1)
+                                // Picked up by anything of it that is not its words, and
+                                // carried: the others make room as it passes over them.
+                                .onDrag {
+                                    carried = card.id
+                                    let provider = NSItemProvider()
+                                    provider.registerDataRepresentation(forTypeIdentifier: CardMove.type.identifier, visibility: .ownProcess) { done in
+                                        done(Data(card.id.uuidString.utf8), nil)
+                                        return nil
+                                    }
+                                    return provider
+                                } preview: {
+                                    Text(store.label(path: card.path, title: card.title))
+                                        .font(.system(size: 15, weight: .semibold)).lineLimit(1)
+                                        .padding(.horizontal, 16).padding(.vertical, 10)
+                                        .frame(maxWidth: 320, alignment: .leading)
+                                        .background(RoundedRectangle(cornerRadius: 10, style: .continuous).fill(Color.inkCard))
+                                        .foregroundStyle(Color.inkText)
+                                }
+                                .onDrop(of: [CardMove.type], delegate: CardMove(target: card.id, river: river, store: store, carried: $carried))
                                 .padding(.bottom, card.folded ? Measures.foldedGap : Measures.cardGap)
                                 .id(card.id)
                                 .transition(.opacity)
@@ -60,6 +83,16 @@ struct RiverView: View {
                 }
             }
             .background(Color.inkPage)
+            // A card let go of anywhere — over no card, off the window — is
+            // no longer carried: nothing says so but the button coming up.
+            .task(id: carried) {
+                guard carried != nil else { return }
+                while !Task.isCancelled, NSEvent.pressedMouseButtons != 0 { try? await Task.sleep(for: .milliseconds(120)) }
+                if !Task.isCancelled {
+                    carried = nil
+                    store.rememberRivers()
+                }
+            }
             // The ticks are the river's scroll bar: its own is put away.
             .scrollIndicators(.hidden)
             .overlay(alignment: .trailing) {
@@ -73,6 +106,11 @@ struct RiverView: View {
                             // Gone to at once, as Manifold goes: nothing slides.
                             river.selected = cards[index].id
                             proxy.scrollTo(cards[index].id, anchor: .top)
+                        },
+                        onMove: { from, to in
+                            guard cards.indices.contains(from) else { return }
+                            withAnimation(.snappy(duration: 0.24)) { river.move(cards[from].id, toPlace: to) }
+                            store.rememberRivers()
                         },
                         preview: { index in cards.indices.contains(index) ? preview(of: cards[index]) : nil }
                     )
@@ -305,4 +343,31 @@ struct RiverTile: View {
         .scaleEffect(isHovered ? 1.015 : 1)
         .animation(.easeOut(duration: 0.12), value: isHovered)
     }
+}
+
+/// A card carried over the river's others: each it passes over makes
+/// room, so that it is put down where it is seen to be.
+struct CardMove: DropDelegate {
+    /// What is carried: a card of this app's, and no one else's to take.
+    static let type = UTType(exportedAs: "com.mariusae.weft.card")
+
+    let target: Card.ID
+    let river: River
+    let store: GraphStore
+    @Binding var carried: Card.ID?
+
+    func dropEntered(info: DropInfo) {
+        guard let carried, carried != target, let place = river.all.firstIndex(where: { $0.id == target }) else { return }
+        withAnimation(.snappy(duration: 0.22)) { river.move(carried, toPlace: place) }
+    }
+
+    func dropUpdated(info: DropInfo) -> DropProposal? { DropProposal(operation: .move) }
+
+    func performDrop(info: DropInfo) -> Bool {
+        carried = nil
+        store.rememberRivers()
+        return true
+    }
+
+    func dropExited(info: DropInfo) {}
 }
