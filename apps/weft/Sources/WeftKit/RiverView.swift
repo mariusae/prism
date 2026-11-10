@@ -1,4 +1,5 @@
 import Prism
+import PrismEmblem
 import SwiftUI
 
 /// The river: the open cards, one after another.
@@ -79,7 +80,7 @@ struct StartPage: View {
         VStack(alignment: .leading, spacing: 2) {
             Text(title.uppercased()).font(.caption.weight(.semibold)).foregroundStyle(Color.inkSecondary).padding(.leading, 10).padding(.bottom, 4)
             ForEach(pages, id: \.path) { page in
-                PageRow(page: page) { withAnimation(.snappy(duration: 0.28)) { store.open(page: page) } }
+                PageRow(store: store, page: page) { withAnimation(.snappy(duration: 0.28)) { store.open(page: page) } }
             }
         }
     }
@@ -87,6 +88,7 @@ struct StartPage: View {
 
 /// A page in a list: its symbol, its title, when it was written.
 struct PageRow: View {
+    let store: GraphStore
     let page: PageInfo
     var action: () -> Void
     @State private var isHovered = false
@@ -94,8 +96,8 @@ struct PageRow: View {
     var body: some View {
         Button(action: action) {
             HStack(spacing: 9) {
-                Image(systemName: symbol(forKind: page.kind)).font(.system(size: 12)).foregroundStyle(Color.inkSecondary).frame(width: 16)
-                Text(page.title).font(.system(size: 14.5)).foregroundStyle(Color.inkText).lineLimit(1)
+                EmblemView(store.emblem(page), size: 20, quiet: Color.inkSecondary)
+                Text(store.emblem(page).caption(page.title)).font(.system(size: 14.5)).foregroundStyle(Color.inkText).lineLimit(1)
                 Spacer(minLength: 12)
                 if let modified = page.modified {
                     Text(Date(timeIntervalSince1970: TimeInterval(modified)), format: .relative(presentation: .named)).font(.system(size: 12)).foregroundStyle(Color.inkFaint)

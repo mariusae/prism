@@ -5,6 +5,7 @@ use prism::index::{rusqlite::Connection, Catalog, Links, NoteRow, Resolved, Sear
 use prism::markup::{river, FieldKind, NoteKind, River};
 use prism::sync::{Auth, Config, Identity, Mode, Report, Schedule};
 use prism::{Engine, EngineConfig, Event, Status};
+use std::collections::HashMap;
 use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::{Duration, UNIX_EPOCH};
 
@@ -680,6 +681,12 @@ impl PrismEngine {
     /// A page's frontmatter, as indexed.
     pub fn fields(&self, path: String) -> Result<Vec<PageField>> {
         Ok(Catalog::fields(&self.db(), &path)?.into_iter().map(|(key, values)| PageField { key, values }).collect())
+    }
+
+    /// What every page that has a field says for it — the field's first
+    /// value, by the page's path. For what a list shows of each row.
+    pub fn field_values(&self, key: String) -> Result<HashMap<String, String>> {
+        Ok(Catalog::field_values(&self.db(), &key)?.into_iter().collect())
     }
 
     /// The typed fields a page's tags give it: the form to show for it.

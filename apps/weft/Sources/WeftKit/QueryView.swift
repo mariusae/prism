@@ -1,4 +1,5 @@
 import Prism
+import PrismEmblem
 import SwiftUI
 
 /// What a query block finds, drawn where the block is written.
@@ -37,7 +38,7 @@ struct QueryView: View {
                         ForEach(found.pages, id: \.path) { page in
                             Button { open(page) } label: {
                                 HStack(spacing: 4) {
-                                    Image(systemName: symbol(forKind: page.kind)).font(.system(size: TextSettings.size * 0.72, weight: .medium))
+                                    EmblemView(store.emblem(page), size: TextSettings.size * 0.95, style: .plain, quiet: Color.inkAccent)
                                     Text(page.title).font(.system(size: TextSettings.size, design: TextSettings.design)).lineLimit(1)
                                 }
                                 .padding(.horizontal, 6)

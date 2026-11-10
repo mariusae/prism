@@ -344,6 +344,19 @@ impl Catalog {
         Ok(schema)
     }
 
+    /// What every page that has a field says for it: each page's path
+    /// with the field's first value. One read of the key's index, for
+    /// what a list shows of each of its rows — a page's icon, its colour.
+    pub fn field_values(db: &Connection, key: &str) -> Result<Vec<(String, String)>> {
+        let mut statement = db.prepare(&format!(
+            "SELECT f.path, f.value FROM note_fields f JOIN notes ON notes.path = f.path
+             WHERE f.key = ?1 AND {SEEN} AND f.position = (SELECT min(position) FROM note_fields WHERE path = f.path AND key = f.key)
+             ORDER BY f.path"
+        ))?;
+        let rows = statement.query_map([key], |r| Ok((r.get(0)?, r.get(1)?)))?.collect::<rusqlite::Result<_>>()?;
+        Ok(rows)
+    }
+
     /// The pages whose frontmatter has a key — with a given value, when
     /// one is asked for.
     pub fn with_field(db: &Connection, key: &str, value: Option<&str>) -> Result<Vec<NoteRow>> {

@@ -10,6 +10,7 @@ let package = Package(
     products: [
         .library(name: "Prism", targets: ["Prism"]),
         .library(name: "PrismEditor", targets: ["PrismEditor"]),
+        .library(name: "PrismEmblem", targets: ["PrismEmblem"]),
     ],
     targets: [
         .binaryTarget(name: "PrismFFI", path: "PrismFFI.xcframework"),
@@ -28,6 +29,12 @@ let package = Package(
         // note the engine holds open (`NoteEditor`), as an outline or as
         // text, and knows nothing of the app around it.
         .target(name: "PrismEditor", dependencies: ["Prism"]),
+        // What stands for a page or a river wherever it is shown small: its
+        // icon, or a letter of its name, in its colour. A decision about
+        // looks, so not the engine's — but one every app should make the
+        // same way, so it is made here, once.
+        .target(name: "PrismEmblem"),
+        .testTarget(name: "PrismEmblemTests", dependencies: ["PrismEmblem"]),
         // The engine driven end to end from Swift: `swift run PrismChecks`.
         .executableTarget(name: "PrismChecks", dependencies: ["Prism"]),
     ],

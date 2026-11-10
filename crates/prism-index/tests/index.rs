@@ -113,6 +113,8 @@ fn the_catalog_knows_every_page_and_resolves_names() {
     assert_eq!(titles(Catalog::complete(db, "love", 10).unwrap()), ["Ada Lovelace"]);
     assert_eq!(titles(Catalog::with_field(db, "status", Some("Active")).unwrap()), ["Project Atlas"]);
     assert_eq!(titles(Catalog::with_field(db, "private", None).unwrap()), ["Grace Hopper"]);
+    assert_eq!(Catalog::field_values(db, "status").unwrap(), [("notes/project-atlas.md".to_owned(), "active".to_owned())]);
+    assert!(Catalog::field_values(db, "no-such-field").unwrap().is_empty());
     let fields = Catalog::fields(db, "notes/project-atlas.md").unwrap();
     assert_eq!(fields[1], ("aliases".to_owned(), vec!["Atlas".to_owned()]));
     assert_eq!(fields.last().unwrap(), &("related".to_owned(), vec!["Grace Hopper".to_owned()]));

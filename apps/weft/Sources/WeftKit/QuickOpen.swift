@@ -1,4 +1,5 @@
 import Prism
+import PrismEmblem
 import SwiftUI
 
 /// Find a page, or name a new one: the one place everything is gone to
@@ -42,6 +43,8 @@ struct QuickOpen: View {
         var name: String
         var detail: String = ""
         var snippet: String?
+        /// For a page: what stands for it, in place of the symbol.
+        var emblem: Emblem?
         var open: @MainActor (GraphStore) -> Void
     }
 
@@ -148,9 +151,10 @@ struct QuickOpen: View {
     private func rowView(_ row: Row) -> some View {
         let index = rows.firstIndex(where: { $0.id == row.id }) ?? -1
         return HStack(alignment: .firstTextBaseline, spacing: 10) {
-            Image(systemName: row.symbol).font(.system(size: 12)).foregroundStyle(Color.inkSecondary).frame(width: 16)
+            EmblemView(row.emblem ?? Emblem(symbol: row.symbol), size: 20, style: row.emblem == nil ? .plain : .tile, quiet: Color.inkSecondary)
+                .alignmentGuide(.firstTextBaseline) { $0[VerticalAlignment.center] + 5 }
             VStack(alignment: .leading, spacing: 2) {
-                Text(row.name).font(.system(size: 14.5)).foregroundStyle(Color.inkText).lineLimit(1)
+                Text(row.emblem?.caption(row.name) ?? row.name).font(.system(size: 14.5)).foregroundStyle(Color.inkText).lineLimit(1)
                 if let snippet = row.snippet {
                     Text(snippet).font(.system(size: 12)).foregroundStyle(Color.inkSecondary).lineLimit(2)
                 }
@@ -193,7 +197,7 @@ struct QuickOpen: View {
     // MARK: What it finds
 
     private func page(_ page: PageInfo, detail: String? = nil, snippet: String? = nil) -> Row {
-        Row(id: "page:\(page.path)\(snippet == nil ? "" : ":text")", symbol: symbol(forKind: page.kind), name: page.title, detail: detail ?? when(page), snippet: snippet) {
+        Row(id: "page:\(page.path)\(snippet == nil ? "" : ":text")", symbol: symbol(forKind: page.kind), name: page.title, detail: detail ?? when(page), snippet: snippet, emblem: snippet == nil ? store.emblem(page) : nil) {
             $0.open(page: page, after: $0.river.selected)
         }
     }

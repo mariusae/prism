@@ -1,4 +1,5 @@
 import Prism
+import PrismEmblem
 import SwiftUI
 
 /// What the app's menus, and its keys, ask of the window in front.
@@ -98,16 +99,25 @@ struct RiverBar: View {
     let store: GraphStore
     var onFind: () -> Void
     @State private var hovered: UUID?
+    /// The river whose name, icon and colour are being chosen.
+    @State private var styling: UUID?
 
     var body: some View {
         HStack(spacing: 2) {
             ForEach(Array(store.rivers.enumerated()), id: \.element.id) { index, river in
                 let current = index == store.currentRiver
                 HStack(spacing: 6) {
-                    if current {
+                    // What stands for the river — and, clicked, where it is
+                    // named and given an icon. One river with nothing of its
+                    // own is simply the place to search from.
+                    if store.rivers.count > 1 || river.isStyled {
+                        Button { styling = river.id } label: { EmblemView(river.emblem, size: 18, quiet: Color.inkSecondary).contentShape(Rectangle()) }
+                            .buttonStyle(.plain)
+                            .help("Name this river, and choose its icon and colour")
+                    } else {
                         Image(systemName: "magnifyingglass").font(.system(size: 11, weight: .semibold)).foregroundStyle(Color.inkSecondary)
                     }
-                    Text(river.title)
+                    Text(store.rivers.count > 1 || river.isStyled ? river.emblem.caption(river.title) : river.title)
                         .font(.system(size: 12.5, weight: current ? .semibold : .regular))
                         .foregroundStyle(current ? Color.inkText : Color.inkSecondary)
                         .lineLimit(1)
@@ -120,13 +130,27 @@ struct RiverBar: View {
                     }
                 }
                 .padding(.horizontal, 12)
-                .frame(minWidth: current ? 220 : 64, maxWidth: current ? 360 : 150, minHeight: 28)
-                .background(Capsule().fill(Color.inkText.opacity(current ? 0.07 : (hovered == river.id ? 0.04 : 0))))
+                // A width of its own, not one to be stretched: the bar's glass
+                // is fitted to what is in it, and must be told how much that is.
+                .frame(width: current ? (store.rivers.count > 1 ? 200 : 240) : 120, height: 28)
+                // The bar's own glass is the pill. With one river nothing is
+                // drawn inside it; with several, the one shown is marked.
+                .background(Capsule().fill(Color.inkText.opacity(store.rivers.count > 1 && current ? 0.08 : (hovered == river.id ? 0.04 : 0))))
                 .contentShape(Capsule())
                 .onTapGesture {
                     if current { onFind() } else { withAnimation(.snappy(duration: 0.2)) { store.currentRiver = index } }
                 }
                 .onHover { hovered = $0 ? river.id : (hovered == river.id ? nil : hovered) }
+                .contextMenu {
+                    Button(river.name == nil ? "Name and Save…" : "Rename…", systemImage: "character.cursor.ibeam") { styling = river.id }
+                    Button("Icon and Colour…", systemImage: "paintpalette") { styling = river.id }
+                    if let name = river.name { Button("Delete Saved River", systemImage: "trash", role: .destructive) { store.deleteSaved(name) } }
+                    Divider()
+                    Button("Close River", systemImage: "xmark") { withAnimation(.snappy(duration: 0.2)) { store.closeRiver(at: index) } }
+                }
+                .popover(isPresented: Binding(get: { styling == river.id }, set: { if !$0 { styling = nil } }), arrowEdge: .bottom) {
+                    RiverLook(store: store, river: river)
+                }
                 .help(current ? "Find a page, or name a new one (⌘O) — or just start typing" : river.title)
             }
             Button { withAnimation(.snappy(duration: 0.2)) { store.newRiver() } } label: {
@@ -136,6 +160,38 @@ struct RiverBar: View {
             .foregroundStyle(Color.inkSecondary)
             .help("New River (⌘T)")
         }
+        // Set in from the glass by the same on every side, so that what
+        // is marked inside it sits concentric with it.
+        .padding(.horizontal, 4)
+        .fixedSize()
         .animation(.snappy(duration: 0.2), value: store.currentRiver)
+    }
+}
+
+/// A river's name, icon and colour, chosen. Naming it saves it.
+struct RiverLook: View {
+    let store: GraphStore
+    let river: River
+    @State private var name = ""
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            HStack(spacing: 8) {
+                EmblemView(Emblem(title: name.isEmpty ? river.title : name, icon: river.icon, color: river.color), size: 24)
+                TextField("Name this river to save it", text: $name)
+                    .textFieldStyle(.plain)
+                    .font(.system(size: 14, weight: .semibold))
+                    .onSubmit { store.rename(river, to: name) }
+            }
+            .padding(.horizontal, 14)
+            .padding(.top, 14)
+            EmblemPicker(
+                title: name.isEmpty ? river.title : name,
+                icon: Binding(get: { river.icon }, set: { river.icon = $0; store.rememberRivers() }),
+                color: Binding(get: { river.color }, set: { river.color = $0; store.rememberRivers() })
+            )
+        }
+        .onAppear { name = river.name ?? "" }
+        .onDisappear { store.rename(river, to: name) }
     }
 }

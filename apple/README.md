@@ -55,3 +55,22 @@ NoteEditorView(
 ```
 
 The view is AppKit's on the Mac. The iPhone and iPad's is not written yet.
+
+## PrismEmblem
+
+What stands for a page or a river wherever it is shown small — a tab, a
+row, the corner of a card. A decision about looks, so not the engine's;
+but one every app should make the same way, so it is made here, once:
+
+1. its `icon:` (an SF Symbol's name), if it was given one;
+2. otherwise a letter of its name — `Emblem.letter(for:)`: the first
+   letter or digit, past any punctuation and a leading "The", or the
+   emoji a name opens with — unless its kind has a symbol (a day's
+   calendar);
+3. in its `color:` (one of `EmblemColor`'s twelve names), if it was
+   given one.
+
+`Emblem` is the rule, `EmblemView` draws it, `EmblemPicker` chooses an
+icon and a colour. A page's `icon` and `color` are ordinary frontmatter
+fields; `PrismEngine.fieldValues(key:)` reads either for every page in
+one go, for lists.

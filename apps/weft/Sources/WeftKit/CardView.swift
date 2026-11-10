@@ -1,5 +1,6 @@
 import Prism
 import PrismEditor
+import PrismEmblem
 import SwiftUI
 
 /// One card of a river: a page, written in where it stands.
@@ -16,6 +17,7 @@ struct CardView: View {
     @State private var bodyHeight: CGFloat = 24
     @State private var isHovered = false
     @State private var isRenaming = false
+    @State private var choosesLook = false
     @State private var newTitle = ""
     @State private var backlinks: [Source] = []
     @State private var tags: [String] = []
@@ -28,6 +30,7 @@ struct CardView: View {
         _draft = State(initialValue: store.draft(path: card.path, title: card.title))
     }
 
+    private var emblem: Emblem { Emblem(title: draft.title, icon: draft.icon, color: draft.color, kindSymbol: isDay ? "calendar" : nil) }
     private var isSelected: Bool { river.selected == card.id }
     private var isWriting: Bool { river.writing == card.id }
     private var isDay: Bool { card.path.hasPrefix("daily/") || card.path.hasPrefix("weekly/") }
@@ -65,7 +68,7 @@ struct CardView: View {
     private struct Source: Hashable {
         var path: String
         var title: String
-        var symbol: String
+        var emblem: Emblem
     }
 
     private func refresh() {
@@ -75,7 +78,7 @@ struct CardView: View {
             let page = (try? store.engine.page(path: link.source)) ?? nil
             let isRiver = link.source.hasPrefix("rivers/")
             let title = page?.title ?? String(link.source.split(separator: "/").last ?? "").replacingOccurrences(of: ".md", with: "")
-            return Source(path: link.source, title: title, symbol: isRiver ? "square.stack" : symbol(forKind: page?.kind ?? "note"))
+            return Source(path: link.source, title: title, emblem: store.emblem(path: link.source, title: title))
         }
         tags = (try? store.engine.tagsOf(path: card.path)) ?? []
     }
@@ -94,19 +97,25 @@ struct CardView: View {
     @ViewBuilder private var mark: some View {
         switch draft.task {
         case .none:
-            Menu { menu } label: {
-                Image(systemName: isDay ? "calendar" : "note.text")
-                    .font(.system(size: (TextSettings.size + 1) * 0.92))
-                    .symbolRenderingMode(.monochrome)
-                    .foregroundStyle(Color.inkSecondary.opacity(isHovered ? 1 : 0.6))
-                    .frame(width: Measures.gutter, height: 22)
+            // Its emblem — its icon, or a letter of its title, in its
+            // colour — which, clicked, is where those are chosen.
+            Button { choosesLook = true } label: {
+                EmblemView(emblem, size: 22, style: isDay && draft.icon == nil && draft.color == nil ? .plain : .tile, quiet: Color.inkSecondary)
+                    .opacity(draft.color != nil || isHovered ? 1 : 0.8)
+                    .frame(width: Measures.gutter + 4, height: 22)
                     .contentShape(Rectangle())
             }
-            .menuStyle(.button)
             .buttonStyle(.plain)
-            .menuIndicator(.hidden)
-            .fixedSize()
-            .help("What can be done with this card")
+            .disabled(!draft.exists)
+            .popover(isPresented: $choosesLook, arrowEdge: .bottom) {
+                EmblemPicker(
+                    title: draft.title,
+                    icon: Binding(get: { draft.icon }, set: { draft.setLook(icon: $0, color: draft.color) }),
+                    color: Binding(get: { draft.color }, set: { draft.setLook(icon: draft.icon, color: $0) }),
+                    kindSymbol: isDay ? "calendar" : nil
+                )
+            }
+            .help("Choose an icon and a colour")
         case .todo, .done:
             Button { withAnimation(.snappy(duration: 0.2)) { draft.setTask(draft.task == .done ? .todo : .done) } } label: {
                 Image(systemName: draft.task == .done ? "checkmark.circle.fill" : "circle")
@@ -134,7 +143,7 @@ struct CardView: View {
                         .onExitCommand { isRenaming = false }
                         .onChange(of: titleFocused) { _, focused in if !focused { finishRenaming() } }
                 } else {
-                    Text(draft.title)
+                    Text(emblem.caption(draft.title))
                         .font(titleFont)
                         .italic(!draft.exists)
                         .strikethrough(draft.task == .done, color: Color.inkSecondary)
@@ -230,19 +239,19 @@ struct CardView: View {
         row(mark: { Color.clear.frame(height: 1) }) {
             FlowLayout(spacing: 6) {
                 ForEach(tags, id: \.self) { tag in
-                    FootPill(title: tag, symbol: "number", tint: Color.inkAccent) { store.open(name: tag, after: card.id, in: river) }
+                    FootPill(title: tag, emblem: Emblem(symbol: "number"), tint: Color.inkAccent) { store.open(name: tag, after: card.id, in: river) }
                 }
                 if !backlinks.isEmpty {
                     Text(tags.isEmpty ? "Linked from" : "· linked from").font(.caption).foregroundStyle(Color.inkSecondary).padding(.vertical, 3)
                     ForEach(backlinks.prefix(6), id: \.self) { source in
-                        FootPill(title: source.title, symbol: source.symbol, tint: Color.inkSecondary) {
+                        FootPill(title: source.title, emblem: source.emblem, tint: Color.inkSecondary) {
                             withAnimation(.snappy(duration: 0.28)) { store.river.open(Card(path: source.path, title: source.title), after: card.id) }
                         }
                     }
                     if backlinks.count > 6 {
                         Menu("and \(backlinks.count - 6) more") {
                             ForEach(backlinks.dropFirst(6), id: \.self) { source in
-                                Button(source.title, systemImage: source.symbol) { store.river.open(Card(path: source.path, title: source.title), after: card.id) }
+                                Button(source.title) { store.river.open(Card(path: source.path, title: source.title), after: card.id) }
                             }
                         }
                         .menuStyle(.button)
@@ -272,7 +281,7 @@ struct CardView: View {
     private var peek: some View {
         row(mark: { mark }) {
             HStack(alignment: .firstTextBaseline, spacing: 8) {
-                (Text(draft.title).bold().foregroundStyle(draft.task == .done ? Color.inkSecondary : Color.inkText).strikethrough(draft.task == .done)
+                (Text(emblem.caption(draft.title)).bold().foregroundStyle(draft.task == .done ? Color.inkSecondary : Color.inkText).strikethrough(draft.task == .done)
                     + Text("  ") + Text(draft.summary).foregroundStyle(Color.inkSecondary))
                     .font(.system(size: TextSettings.size, design: TextSettings.design))
                     .lineLimit(2)
@@ -301,6 +310,7 @@ struct CardView: View {
         }
         Divider()
         if !isDay { Button("Rename…", systemImage: "character.cursor.ibeam") { startRenaming() } }
+        if draft.exists { Button("Icon and Colour…", systemImage: "paintpalette") { choosesLook = true } }
         Picker("Write As", selection: Binding(get: { draft.mode }, set: { draft.setMode($0) })) {
             Label("Outline", systemImage: "list.bullet.indent").tag(EditorMode.outline)
             Label("Text", systemImage: "text.alignleft").tag(EditorMode.text)
@@ -430,7 +440,7 @@ struct CardButtonFace: View {
 /// A small pill at a card's foot: a tag, or a page that links here.
 struct FootPill: View {
     let title: String
-    let symbol: String
+    let emblem: Emblem
     let tint: Color
     let action: () -> Void
     @State private var isHovered = false
@@ -438,8 +448,8 @@ struct FootPill: View {
     var body: some View {
         Button(action: action) {
             HStack(spacing: 3) {
-                Image(systemName: symbol).font(.system(size: 9, weight: .semibold))
-                Text(title).font(.system(size: 12)).lineLimit(1)
+                EmblemView(emblem, size: 12, style: .plain, quiet: tint)
+                Text(emblem.caption(title)).font(.system(size: 12)).lineLimit(1)
             }
             .padding(.horizontal, 7)
             .padding(.vertical, 2.5)

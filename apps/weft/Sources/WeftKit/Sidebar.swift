@@ -1,4 +1,5 @@
 import Prism
+import PrismEmblem
 import SwiftUI
 
 /// The sidebar: search, and the graph through a few lenses.
@@ -14,7 +15,7 @@ struct Sidebar: View {
     @FocusState private var searching: Bool
 
     enum Lens: String, CaseIterable {
-        case recent, inbox, tasks, wiki, tags
+        case recent, inbox, tasks, wiki, tags, rivers
         var symbol: String {
             switch self {
             case .recent: return "clock"
@@ -22,6 +23,7 @@ struct Sidebar: View {
             case .tasks: return "checklist"
             case .wiki: return "book.closed"
             case .tags: return "tag"
+            case .rivers: return "square.stack"
             }
         }
         var name: String {
@@ -31,6 +33,7 @@ struct Sidebar: View {
             case .tasks: return "Tasks"
             case .wiki: return "Wiki"
             case .tags: return "Tags"
+            case .rivers: return "Saved Rivers"
             }
         }
     }
@@ -64,6 +67,7 @@ struct Sidebar: View {
         case .wiki: pages = query("is: wiki")
         case .tasks: tasks = (try? store.engine.openTasks()) ?? []
         case .tags: tags = (try? store.engine.tags()) ?? []
+        case .rivers: break
         }
     }
 
@@ -113,7 +117,15 @@ struct Sidebar: View {
     @ViewBuilder private var lensRows: some View {
         switch chosen {
         case .recent, .inbox, .wiki:
-            ForEach(pages, id: \.path) { page in titleRow(page.title, symbol(forKind: page.kind)) { open(path: page.path, title: page.title) } }
+            ForEach(pages, id: \.path) { page in titleRow(page.title, store.emblem(page)) { open(path: page.path, title: page.title) } }
+        case .rivers:
+            ForEach(store.savedRivers) { saved in
+                titleRow(saved.name, saved.emblem, detail: "\(saved.cards)") { withAnimation(.snappy(duration: 0.2)) { store.openSaved(saved.name) } }
+                    .contextMenu { Button("Delete River", systemImage: "trash", role: .destructive) { store.deleteSaved(saved.name) } }
+            }
+            if store.savedRivers.isEmpty {
+                Text("Name a river — click its tab's emblem — and it is saved here, on every device.").font(.callout).foregroundStyle(Color.inkSecondary)
+            }
         case .tasks:
             ForEach(Array(tasks.enumerated()), id: \.offset) { _, task in
                 HStack(alignment: .firstTextBaseline, spacing: 7) {
@@ -158,12 +170,13 @@ struct Sidebar: View {
         if hits.isEmpty { Text("Nothing found").foregroundStyle(Color.inkSecondary) }
     }
 
-    private func titleRow(_ title: String, _ symbol: String, action: @escaping () -> Void) -> some View {
+    private func titleRow(_ title: String, _ emblem: Emblem, detail: String? = nil, action: @escaping () -> Void) -> some View {
         Button(action: action) {
             HStack(spacing: 7) {
-                Image(systemName: symbol).font(.caption).foregroundStyle(Color.inkSecondary).frame(width: 16)
-                Text(title).lineLimit(1)
+                EmblemView(emblem, size: 18, quiet: Color.inkSecondary)
+                Text(emblem.caption(title)).lineLimit(1)
                 Spacer(minLength: 0)
+                if let detail { Text(detail).font(.caption).foregroundStyle(Color.inkSecondary) }
             }
             .contentShape(Rectangle())
         }

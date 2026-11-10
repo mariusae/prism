@@ -1,6 +1,7 @@
 import Foundation
 import Observation
 import Prism
+import PrismEmblem
 
 /// A graph, as the app holds it: the engine, and what of it is on screen.
 ///
@@ -33,6 +34,14 @@ public final class GraphStore {
 
     public var rivers: [River] = []
     public var currentRiver = 0
+
+    /// What pages were given to be shown by — `icon:` and `color:` in
+    /// their frontmatter — by path: read off the index in one go, so that
+    /// a list of any length draws each row's emblem without a read a row.
+    public private(set) var icons: [String: String] = [:]
+    public private(set) var colors: [String: String] = [:]
+    /// The rivers saved in the graph, as the sidebar lists them.
+    public private(set) var savedRivers: [SavedRiverInfo] = []
 
     public init(root: URL, token: TokenProvider? = nil) throws {
         self.root = root
@@ -86,6 +95,31 @@ public final class GraphStore {
     private func refreshCounts() {
         pageCount = (try? engine.allPages().count) ?? pageCount
         conflicted = (try? engine.conflictedPages()) ?? []
+        icons = (try? engine.fieldValues(key: "icon")) ?? icons
+        colors = (try? engine.fieldValues(key: "color")) ?? colors
+        savedRivers = engine.riverNames().map { name in
+            let river = (try? engine.river(name: name)) ?? nil
+            return SavedRiverInfo(name: name, icon: river?.icon, color: river?.color, cards: river?.cards.count ?? 0)
+        }
+    }
+
+    // MARK: - Emblems
+
+    /// What stands for a page wherever it is shown small: its icon, or a
+    /// letter of its title, in its colour. The rule is PrismEmblem's; all
+    /// this adds is where a page's icon and colour are found.
+    public func emblem(path: String, title: String) -> Emblem {
+        let kind: String? = path.hasPrefix("daily/") || path.hasPrefix("weekly/") ? "calendar" : (path.hasPrefix("rivers/") ? "square.stack" : nil)
+        return Emblem(title: title, icon: icons[path], color: colors[path], kindSymbol: kind)
+    }
+
+    public func emblem(_ page: PageInfo) -> Emblem { emblem(path: page.path, title: page.title) }
+
+    /// A page's icon or colour was just chosen: shown at once, everywhere,
+    /// ahead of the index hearing of it.
+    func styled(path: String, icon: String?, color: String?) {
+        icons[path] = icon
+        colors[path] = color
     }
 
     // MARK: - Names and pages
@@ -145,6 +179,79 @@ public final class GraphStore {
         rememberRivers()
     }
 
+    // MARK: - Saved rivers
+
+    /// Writes a named river into the graph, as `rivers/<name>.md`: what
+    /// makes it a saved river, on every device. What the file holds that
+    /// this app does not show — a query, cards placed by hand — is kept.
+    public func save(_ river: River) {
+        guard let name = river.name else { return }
+        var saved = ((try? engine.river(name: name)) ?? nil) ?? SavedRiver(cards: [], query: nil, placed: [], folded: [], opened: [], hidden: [], icon: nil, color: nil, place: nil)
+        let known = Dictionary(saved.cards.map { ($0.title, $0) }, uniquingKeysWith: { first, _ in first })
+        saved.cards = river.cards.map { known[$0.title] ?? RiverCard(title: $0.title, foldedRows: [], placeRank: nil, placeKey: nil) }
+        saved.folded = river.cards.filter(\.folded).map(\.title)
+        saved.icon = river.icon
+        saved.color = river.color
+        if (try? engine.saveRiver(name: name, river: saved)) == true { refreshSaved(name: name, river: river) }
+    }
+
+    private func refreshSaved(name: String, river: River) {
+        let info = SavedRiverInfo(name: name, icon: river.icon, color: river.color, cards: river.cards.count)
+        if let index = savedRivers.firstIndex(where: { $0.name == name }) { savedRivers[index] = info } else {
+            savedRivers.append(info)
+            savedRivers.sort { $0.name.lowercased() < $1.name.lowercased() }
+        }
+    }
+
+    /// Names a river — which saves it — or, with no name, makes it this
+    /// device's own again. The file under its old name goes.
+    public func rename(_ river: River, to name: String) {
+        let name = name.trimmingCharacters(in: .whitespaces).replacingOccurrences(of: "/", with: "-")
+        let new: String? = name.isEmpty ? nil : name
+        guard new != river.name else { return }
+        if let old = river.name {
+            // Carried over whole, so that what this app does not show of it is not lost.
+            if let new, let kept = (try? engine.river(name: old)) ?? nil { _ = try? engine.saveRiver(name: new, river: kept) }
+            _ = try? engine.deleteRiver(name: old)
+            savedRivers.removeAll { $0.name == old }
+        }
+        river.name = new
+        rememberRivers()
+    }
+
+    /// Shows a saved river: the tab that has it, or a new one.
+    public func openSaved(_ name: String) {
+        if let index = rivers.firstIndex(where: { $0.name == name }) {
+            currentRiver = index
+            return
+        }
+        guard let saved = (try? engine.river(name: name)) ?? nil else { return }
+        let river = River()
+        river.name = name
+        river.icon = saved.icon
+        river.color = saved.color
+        river.cards = saved.cards.map { card in
+            let target = resolve(card.title)
+            var made = Card(path: target?.path ?? engine.pathForTitle(title: card.title), title: card.title)
+            made.folded = saved.folded.contains(card.title)
+            return made
+        }
+        // In place of a river with nothing in it, rather than beside it.
+        if self.river.cards.isEmpty, self.river.name == nil { rivers[currentRiver] = river } else {
+            rivers.append(river)
+            currentRiver = rivers.count - 1
+        }
+        rememberRivers()
+    }
+
+    /// Takes a saved river out of the graph. A tab showing it stays, unsaved.
+    public func deleteSaved(_ name: String) {
+        _ = try? engine.deleteRiver(name: name)
+        savedRivers.removeAll { $0.name == name }
+        for river in rivers where river.name == name { river.name = nil }
+        rememberRivers()
+    }
+
     public func closeRiver(at index: Int) {
         guard rivers.indices.contains(index) else { return }
         rivers.remove(at: index)
@@ -171,6 +278,7 @@ public final class GraphStore {
     }
 
     public func rememberRivers() {
+        for river in rivers { save(river) }
         let kept = Kept(rivers: rivers.map(\.kept), current: currentRiver)
         if let data = try? JSONEncoder().encode(kept), let text = String(data: data, encoding: .utf8) {
             try? engine.setLocalValue(name: "weft/rivers", value: text)
@@ -210,6 +318,16 @@ enum Host {
     }
 }
 
+/// A river saved in the graph: what a list shows of it.
+public struct SavedRiverInfo: Hashable, Identifiable {
+    public var name: String
+    public var icon: String?
+    public var color: String?
+    public var cards: Int
+    public var id: String { name }
+    public var emblem: Emblem { Emblem(title: name, icon: icon, color: color) }
+}
+
 /// A card: a page open in a river.
 public struct Card: Identifiable, Hashable, Codable {
     public var id = UUID()
@@ -228,7 +346,11 @@ public struct Card: Identifiable, Hashable, Codable {
 @Observable
 public final class River: Identifiable {
     public let id: UUID
+    /// Its name, once it has been given one: a named river is a saved one.
     public var name: String?
+    /// What it was given to be shown by: an SF Symbol's name, a colour's.
+    public var icon: String?
+    public var color: String?
     public var cards: [Card] = []
     /// The card chosen: the one the keys go to.
     public var selected: Card.ID?
@@ -243,14 +365,23 @@ public final class River: Identifiable {
         var id: UUID
         var name: String?
         var cards: [Card]
+        var icon: String?
+        var color: String?
     }
 
-    var kept: Kept { Kept(id: id, name: name, cards: cards) }
+    var kept: Kept { Kept(id: id, name: name, cards: cards, icon: icon, color: color) }
+
+    /// What stands for it on its tab: its icon, or a letter of its name.
+    public var emblem: Emblem { Emblem(title: title, icon: icon, color: color) }
+    /// Whether it has anything of its own to be shown by.
+    public var isStyled: Bool { name != nil || icon != nil || color != nil }
 
     init(kept: Kept) {
         id = kept.id
         name = kept.name
         cards = kept.cards
+        icon = kept.icon
+        color = kept.color
     }
 
     public var title: String {
@@ -438,6 +569,23 @@ public final class PageDraft {
             editor.setField(key: key, value: values[0])
         }
         changed()
+    }
+
+    /// What the page was given to be shown by: `icon:`, `color:`.
+    public var icon: String? {
+        _ = revision
+        return editor.field(key: "icon")
+    }
+
+    public var color: String? {
+        _ = revision
+        return editor.field(key: "color")
+    }
+
+    public func setLook(icon: String?, color: String?) {
+        if icon != self.icon { setField("icon", values: icon.map { [$0] } ?? []) }
+        if color != self.color { setField("color", values: color.map { [$0] } ?? []) }
+        store?.styled(path: path, icon: icon, color: color)
     }
 
     /// Whether a field marks the page: pinned, in the inbox.

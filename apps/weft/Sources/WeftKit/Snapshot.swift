@@ -2,6 +2,7 @@
 import AppKit
 import Prism
 import PrismEditor
+import PrismEmblem
 import SwiftUI
 
 /// Draws the app's window to a PNG, for checking it without a person at
@@ -65,6 +66,19 @@ enum Snapshot {
         for name in names("WEFT_FOLD") {
             if let card = store.river.cards.first(where: { $0.title == name }) { store.river.toggleFold(card.id) }
         }
+        // WEFT_RIVERS=3: so many rivers open, the first shown.
+        if let count = Int(environment["WEFT_RIVERS"] ?? ""), count > 1 {
+            for _ in 1..<count { store.newRiver() }
+            store.currentRiver = 0
+        }
+        // WEFT_RIVER_LOOKS="Work:briefcase:blue|:star:|Reading::green": the
+        // rivers' names, icons and colours, in order.
+        for (index, look) in names("WEFT_RIVER_LOOKS").enumerated() where store.rivers.indices.contains(index) {
+            let parts = look.split(separator: ":", omittingEmptySubsequences: false).map(String.init)
+            store.rivers[index].name = parts.first.flatMap { $0.isEmpty ? nil : $0 }
+            store.rivers[index].icon = parts.count > 1 && !parts[1].isEmpty ? parts[1] : nil
+            store.rivers[index].color = parts.count > 2 && !parts[2].isEmpty ? parts[2] : nil
+        }
         // WEFT_MODE=outline or text: every card open shown that way.
         if let mode = environment["WEFT_MODE"] {
             for card in store.river.cards { store.draft(path: card.path, title: card.title).setMode(mode == "outline" ? .outline : .text) }
@@ -79,7 +93,12 @@ enum Snapshot {
         let frame = CGRect(x: 0, y: 0, width: size.first ?? 1240, height: size.last ?? 860)
         let window = NSWindow(contentRect: frame, styleMask: [.titled, .closable, .resizable, .fullSizeContentView], backing: .buffered, defer: false)
         window.appearance = NSAppearance(named: environment["WEFT_DARK"] != nil ? .darkAqua : .aqua)
-        window.contentView = NSHostingView(rootView: ContentView(store: store, actions: actions).frame(width: frame.width, height: frame.height))
+        if environment["WEFT_PICKER"] != nil {
+            // The icon and colour picker alone, as its popover shows it.
+            window.contentView = NSHostingView(rootView: EmblemPicker(title: "Project Atlas", icon: .constant("map"), color: .constant("teal")).frame(width: frame.width, height: frame.height))
+        } else {
+            window.contentView = NSHostingView(rootView: ContentView(store: store, actions: actions).frame(width: frame.width, height: frame.height))
+        }
         window.setFrame(frame, display: false)
         window.layoutIfNeeded()
         self.window = window
