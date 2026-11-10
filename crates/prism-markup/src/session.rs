@@ -200,9 +200,24 @@ impl Session {
 
     /// The title the note's first heading gives, its markup taken out.
     pub fn title(&self) -> Option<String> {
-        let line = self.heading.lines().next()?;
+        let line = self.heading.lines().find(|line| !line.trim().is_empty())?;
         let words = line.strip_prefix("# ")?.trim();
         (!words.is_empty()).then(|| inline::plain_text(words.trim_end_matches('#')))
+    }
+
+    /// Whether the note, kept at `path`, was never given a title: see
+    /// [`Note::is_untitled`](crate::Note::is_untitled).
+    pub fn is_untitled(&self, path: &str) -> bool {
+        self.title().is_none() && crate::NoteKind::is_unnamed(path)
+    }
+
+    /// What the note, kept at `path`, is called where it is shown: its
+    /// title, or its first words. See [`label`](crate::note::label).
+    pub fn label(&self, path: &str) -> String {
+        crate::note::label(self.is_untitled(path).then_some(&self.body), || {
+            let fixed = crate::NoteKind::of(path).is_some_and(crate::NoteKind::has_fixed_title);
+            self.title().filter(|_| !fixed).unwrap_or_else(|| crate::NoteKind::fallback_title(path))
+        })
     }
 
     /// Titles the note: its first heading, made if it had none.
@@ -211,10 +226,13 @@ impl Session {
         if title.is_empty() {
             return;
         }
-        self.heading = match self.heading.split_once('\n') {
-            Some((_, after)) => format!("# {title}\n{after}"),
-            None if self.heading.is_empty() => format!("# {title}\n\n"),
-            None => format!("# {title}"),
+        // The blank lines a file has before its heading are kept.
+        let blank = self.heading.len() - self.heading.trim_start_matches(['\n', '\r', ' ', '\t']).len();
+        let (before, heading) = self.heading.split_at(blank);
+        self.heading = match heading.split_once('\n') {
+            Some((_, after)) => format!("{before}# {title}\n{after}"),
+            None if heading.is_empty() => format!("{before}# {title}\n\n"),
+            None => format!("{before}# {title}"),
         };
     }
 
@@ -282,6 +300,9 @@ impl Session {
     /// in an outline, `- ` typed at the start of a line makes it a bullet.
     pub fn replace(&mut self, range: Range<usize>, replacement: &str) -> Change {
         let range = clamp(&self.text, range);
+        // `->` and `<-`, as they are typed, are the arrows they draw.
+        let arrow = arrow(&self.text, &range, replacement);
+        let (range, replacement) = arrow.map_or((range, replacement), |(range, arrow)| (range, arrow));
         // Typing on from where typing left off is one change to undo.
         let typing_on =
             range.is_empty() && self.typing == Some(range.start) && !replacement.contains('\n') && replacement != " " && replacement.chars().count() == 1;
@@ -438,8 +459,9 @@ impl Session {
             ">" => Some(BlockKind::Quote),
             hashes if !hashes.is_empty() && hashes.len() <= 6 && hashes.bytes().all(|b| b == b'#') => Some(BlockKind::Heading(hashes.len() as u8)),
             numbered => {
-                let (digits, delimiter) = numbered.split_at(numbered.len().checked_sub(1)?);
-                let delimiter = delimiter.chars().next().filter(|c| *c == '.' || *c == ')')?;
+                // By characters: what was typed may end in any letter.
+                let delimiter = numbered.chars().last().filter(|c| *c == '.' || *c == ')')?;
+                let digits = &numbered[..numbered.len() - 1];
                 let number = digits.parse().ok().filter(|_| digits.len() <= 9)?;
                 item(Marker::Ordered { number, delimiter }, None)
             }
@@ -659,15 +681,37 @@ fn turned(kind: &BlockKind, command: &Command) -> Option<BlockKind> {
     })
 }
 
+/// The arrow that what is typed completes: `>` after `-` is →, `-` after
+/// `<` is ←, and the two characters become the one. Not in code — there
+/// they are what was meant — and not the `-->` that ends a comment.
+fn arrow(text: &str, range: &Range<usize>, typed: &str) -> Option<(Range<usize>, &'static str)> {
+    if !range.is_empty() {
+        return None;
+    }
+    let before = &text[..range.start];
+    let arrow = match typed {
+        ">" if before.ends_with('-') && !before.ends_with("--") => "→",
+        "-" if before.ends_with('<') => "←",
+        _ => return None,
+    };
+    // Inside a code span or a fence, a backtick before here is still open.
+    if before.matches('`').count() % 2 == 1 {
+        return None;
+    }
+    Some((range.start - 1..range.start, arrow))
+}
+
 /// How much of a note's text after its frontmatter is its title: a first
-/// line that is `# Title`, with the blank lines after it.
+/// line that is `# Title` — after blank lines, if the file has any there
+/// — with the blank lines after it.
 fn heading_len(rest: &str) -> usize {
-    let first = rest.split_inclusive('\n').next().unwrap_or("");
+    let blank: usize = rest.split_inclusive('\n').take_while(|line| line.trim().is_empty() && line.ends_with('\n')).map(str::len).sum();
+    let first = rest[blank..].split_inclusive('\n').next().unwrap_or("");
     let words = first.trim_end_matches(['\n', '\r']);
     if words.strip_prefix("# ").is_none_or(|title| title.trim().is_empty()) {
         return 0;
     }
-    let mut end = first.len();
+    let mut end = blank + first.len();
     for line in rest[end..].split_inclusive('\n') {
         if !line.trim().is_empty() {
             break;
@@ -740,6 +784,33 @@ mod tests {
     fn at_end_of(view: &str, line: &str) -> usize {
         let start = view.find(line).unwrap_or_else(|| panic!("no line {line:?} in {view:?}"));
         start + view[start..].find('\n').unwrap_or(view.len() - start)
+    }
+
+    #[test]
+    fn arrows_are_made_as_they_are_typed() {
+        for mode in [Mode::Outline, Mode::Text] {
+            let mut session = Session::new("", mode);
+            let mut caret = 0;
+            for typed in "a -> b <- c, `x -> y`, <!-- no -->".chars() {
+                caret = session.replace(caret..caret, &typed.to_string()).selection.end;
+            }
+            assert_eq!(session.text(), "a → b ← c, `x -> y`, <!-- no -->", "{mode:?}");
+        }
+        // What is pasted is left as it is.
+        let mut session = Session::new("", Mode::Text);
+        session.replace(0..0, "a -> b");
+        assert_eq!(session.text(), "a -> b");
+    }
+
+    #[test]
+    fn a_heading_after_blank_lines_is_still_the_title() {
+        let source = "---\nicon: link\n---\n\n# Cerebras on X\n\n- URL: <https://example.com>\n";
+        let mut session = Session::new(source, Mode::Outline);
+        assert_eq!(session.title().as_deref(), Some("Cerebras on X"));
+        assert_eq!(session.text(), "URL: <https://example.com>");
+        assert_eq!(session.markdown(), source);
+        session.set_title("Cerebras");
+        assert_eq!(session.markdown(), "---\nicon: link\n---\n\n# Cerebras\n\n- URL: <https://example.com>\n");
     }
 
     #[test]

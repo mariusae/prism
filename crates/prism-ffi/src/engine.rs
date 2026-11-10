@@ -18,6 +18,37 @@ pub trait TokenProvider: Send + Sync {
     fn token(&self) -> Result<String, PrismError>;
 }
 
+/// The parts of a clone, in the order they happen.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, uniffi::Enum)]
+pub enum ClonePart {
+    /// The history is coming down.
+    Receiving,
+    /// What came down is being put together.
+    Resolving,
+    /// The files are being written out.
+    CheckingOut,
+}
+
+/// How far along a clone is.
+#[derive(Debug, Clone, PartialEq, uniffi::Record)]
+pub struct CloneProgress {
+    pub part: ClonePart,
+    /// Of the whole clone, from 0 to 1.
+    pub fraction: f64,
+    /// So many of so many, within the part.
+    pub done: u64,
+    pub total: u64,
+    /// The bytes that have come down so far, while receiving.
+    pub bytes: u64,
+}
+
+/// Told how far along a clone is, a few times a second, on the thread
+/// that clones.
+#[uniffi::export(with_foreign)]
+pub trait CloneWatcher: Send + Sync {
+    fn on_progress(&self, progress: CloneProgress);
+}
+
 /// Told what the engine does, as it happens, on a thread of the
 /// engine's: hop to the main thread before touching the interface.
 #[uniffi::export(with_foreign)]
@@ -152,6 +183,12 @@ pub struct PageInfo {
     /// epoch: read off git's history, not written in the page.
     pub created: Option<i64>,
     pub modified: Option<i64>,
+    /// What to show it as called: its title, or — for a note never given
+    /// one — its first words.
+    pub label: String,
+    /// Whether it was never given a title: `title` is then its file's
+    /// name, which a link to it says and nothing should show.
+    pub is_untitled: bool,
 }
 
 /// What a name leads to.
@@ -304,6 +341,8 @@ fn page(row: NoteRow) -> PageInfo {
         is_blank: row.blank,
         created: row.created,
         modified: row.modified,
+        label: row.label,
+        is_untitled: row.untitled,
     }
 }
 
@@ -451,9 +490,32 @@ impl PrismEngine {
     }
 
     /// Clones a repository into `root`, and opens it. Waits for the clone.
-    #[uniffi::constructor(default(token = None))]
-    pub fn clone_repository(url: String, root: String, options: EngineOptions, token: Option<Arc<dyn TokenProvider>>) -> Result<Arc<PrismEngine>> {
-        PrismEngine::make(Engine::clone_from(&url, &root, PrismEngine::config(options, token))?)
+    /// `watcher`, if given, is told how far along the clone is.
+    #[uniffi::constructor(default(token = None, watcher = None))]
+    pub fn clone_repository(
+        url: String,
+        root: String,
+        options: EngineOptions,
+        token: Option<Arc<dyn TokenProvider>>,
+        watcher: Option<Arc<dyn CloneWatcher>>,
+    ) -> Result<Arc<PrismEngine>> {
+        let config = PrismEngine::config(options, token);
+        PrismEngine::make(Engine::clone_watched(&url, &root, config, |progress| {
+            if let Some(watcher) = &watcher {
+                let part = match progress.part {
+                    prism::sync::ClonePart::Receiving => ClonePart::Receiving,
+                    prism::sync::ClonePart::Resolving => ClonePart::Resolving,
+                    prism::sync::ClonePart::CheckingOut => ClonePart::CheckingOut,
+                };
+                watcher.on_progress(CloneProgress {
+                    part,
+                    fraction: progress.fraction(),
+                    done: progress.done as u64,
+                    total: progress.total as u64,
+                    bytes: progress.bytes as u64,
+                });
+            }
+        })?)
     }
 
     /// Makes a new, empty graph at `root` — a repository with no commits
@@ -618,6 +680,25 @@ impl PrismEngine {
     /// which must be on GitHub.
     pub fn listen(&self, relay: String) -> Result<()> {
         Ok(self.engine.listen(&relay)?)
+    }
+
+    /// Stops listening to the relay, if it was.
+    pub fn stop_listening(&self) {
+        self.engine.stop_listening();
+    }
+
+    /// Tells a relay this phone's push token (hex), for the graph's
+    /// repository: a silent push then wakes the app when another device
+    /// pushes, and the app answers it with `remoteChanged`. `topic` is
+    /// the app's bundle identifier; `sandbox`, whether it is signed for
+    /// development. Waits for the relay: not for the main thread.
+    pub fn register_phone(&self, relay: String, push_token: String, topic: String, sandbox: bool) -> Result<()> {
+        Ok(self.engine.register_phone(&relay, &push_token, &topic, sandbox)?)
+    }
+
+    /// Takes this phone's push token back from a relay.
+    pub fn unregister_phone(&self, relay: String, push_token: String) -> Result<()> {
+        Ok(self.engine.unregister_phone(&relay, &push_token)?)
     }
 
     /// Watches the graph's folder for writes made around the engine.

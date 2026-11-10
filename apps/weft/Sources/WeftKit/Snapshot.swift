@@ -79,6 +79,8 @@ enum Snapshot {
             store.rivers[index].icon = parts.count > 1 && !parts[1].isEmpty ? parts[1] : nil
             store.rivers[index].color = parts.count > 2 && !parts[2].isEmpty ? parts[2] : nil
         }
+        // WEFT_SHOW=2: the river shown, by its place among the tabs.
+        if let shown = Int(environment["WEFT_SHOW"] ?? ""), store.rivers.indices.contains(shown) { store.currentRiver = shown }
         // WEFT_MODE=outline or text: every card open shown that way.
         if let mode = environment["WEFT_MODE"] {
             for card in store.river.cards { store.draft(path: card.path, title: card.title).setMode(mode == "outline" ? .outline : .text) }
@@ -93,7 +95,12 @@ enum Snapshot {
         let frame = CGRect(x: 0, y: 0, width: size.first ?? 1240, height: size.last ?? 860)
         let window = NSWindow(contentRect: frame, styleMask: [.titled, .closable, .resizable, .fullSizeContentView], backing: .buffered, defer: false)
         window.appearance = NSAppearance(named: environment["WEFT_DARK"] != nil ? .darkAqua : .aqua)
-        if environment["WEFT_PICKER"] != nil {
+        if environment["WEFT_QUERY_EDITOR"] != nil {
+            // The query river editor alone, as its sheet shows it: for the river shown, if it has a query.
+            window.contentView = NSHostingView(rootView: QueryRiverEditor(store: store, ask: store.river.query == nil ? .new : .edit(store.river)))
+        } else if environment["WEFT_SETTINGS"] != nil {
+            window.contentView = NSHostingView(rootView: SettingsView())
+        } else if environment["WEFT_PICKER"] != nil {
             // The icon and colour picker alone, as its popover shows it.
             window.contentView = NSHostingView(rootView: EmblemPicker(title: "Project Atlas", icon: .constant("map"), color: .constant("teal")).frame(width: frame.width, height: frame.height))
         } else {

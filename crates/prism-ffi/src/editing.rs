@@ -396,6 +396,18 @@ impl NoteEditor {
         self.session().body().is_blank()
     }
 
+    /// Whether the note, kept at `path`, was never given a title: no
+    /// first heading, and a file's name that says nothing.
+    pub fn is_untitled(&self, path: String) -> bool {
+        self.session().is_untitled(&path)
+    }
+
+    /// What the note, kept at `path`, is called where it is shown: its
+    /// title, or — untitled — its first words.
+    pub fn label(&self, path: String) -> String {
+        self.session().label(&path)
+    }
+
     /// The title the note's first heading gives.
     pub fn title(&self) -> Option<String> {
         self.session().title()
@@ -454,6 +466,8 @@ pub enum BodyCompletionKind {
     Link,
     Embed,
     Tag,
+    /// `@typed`: a page looked for, by name or by what it says, to link to.
+    Mention,
 }
 
 /// A name half-typed at the caret. Offsets are UTF-16.
@@ -477,6 +491,7 @@ pub fn completion_at(body: String, caret: u32) -> Option<BodyCompletion> {
             CompletionKind::Link => BodyCompletionKind::Link,
             CompletionKind::Embed => BodyCompletionKind::Embed,
             CompletionKind::Tag => BodyCompletionKind::Tag,
+            CompletionKind::Mention => BodyCompletionKind::Mention,
         },
         typed: found.typed,
         start: offsets.to16(found.range.start),

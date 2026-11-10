@@ -24,6 +24,15 @@ import Testing
     #expect(Emblem(title: "Atlas", icon: "  ").glyph == .letter("A"))
 }
 
+@Test func aNoteIsNotGivenALetter() {
+    #expect(Emblem(title: "Atlas", letter: false).glyph == .none)
+    #expect(!Emblem(title: "Atlas", letter: false).isShown)
+    // Given a colour alone, it is a dot of it; given an icon or a kind, that.
+    #expect(Emblem(title: "Atlas", color: "teal", letter: false).isShown)
+    #expect(Emblem(title: "Atlas", icon: "map", letter: false).symbol == "map")
+    #expect(Emblem(title: "2026-10-31", kindSymbol: "calendar", letter: false).symbol == "calendar")
+}
+
 @Test func anEmojiIsSaidOnce() {
     #expect(Emblem(title: "🚀 Launch").caption("🚀 Launch") == "Launch")
     #expect(Emblem(title: "🚀").caption("🚀") == "🚀")

@@ -14,16 +14,23 @@ cp Resources/Info.plist "$app/Contents/Info.plist"
 
 # The GitHub App weft signs in through: its details from a file kept
 # beside the iOS xcconfig and never committed. Read here, never printed.
-for github_config in iOS/GitHub.local.xcconfig ../../../reflect-mac/iOS/GitHub.local.xcconfig; do
-  [ -f "$github_config" ] && break
-done
-github_value() {
-  [ -f "$github_config" ] || return 0
-  sed -n "s/^[[:space:]]*$1[[:space:]]*=[[:space:]]*//p" "$github_config" | tail -1 | sed 's/[[:space:]]*$//'
+# Weft's own file wins; else the GitHub App is Prism's, from reflect-mac.
+# The relay is never taken from reflect-mac, whose relay is the old apps':
+# it is the one named in iOS/GitHub.xcconfig, unless Weft's own file says.
+own=iOS/GitHub.local.xcconfig
+shared=../../../reflect-mac/iOS/GitHub.local.xcconfig
+value_in() {
+  [ -f "$1" ] || return 0
+  sed -n "s/^[[:space:]]*$2[[:space:]]*=[[:space:]]*//p" "$1" | tail -1 | sed 's/[[:space:]]*$//'
 }
 for pair in GitHubClientID:GITHUB_CLIENT_ID GitHubClientSecret:GITHUB_CLIENT_SECRET \
             GitHubAppSlug:GITHUB_APP_SLUG SyncRelayHost:SYNC_RELAY_HOST; do
-  /usr/libexec/PlistBuddy -c "Add :${pair%%:*} string $(github_value "${pair#*:}")" "$app/Contents/Info.plist" >/dev/null
+  name=${pair#*:}
+  value=$(value_in "$own" "$name")
+  if [ -z "$value" ]; then
+    if [ "$name" = SYNC_RELAY_HOST ]; then value=$(value_in iOS/GitHub.xcconfig "$name"); else value=$(value_in "$shared" "$name"); fi
+  fi
+  /usr/libexec/PlistBuddy -c "Add :${pair%%:*} string $value" "$app/Contents/Info.plist" >/dev/null
 done
 
 # The icon is Icon Composer's (Resources/Icons/Weft.icon), compiled by

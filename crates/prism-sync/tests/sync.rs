@@ -116,6 +116,23 @@ fn converge(a: &mut Device, b: &mut Device) {
 }
 
 #[test]
+fn a_clone_says_how_far_along_it_is() {
+    let world = World::new();
+    let mut a = world.first_device("a");
+    for n in 0..20 {
+        a.write(&format!("notes/{n}.md"), format!("# Note {n}\n"));
+    }
+    a.sync();
+    let mut heard = Vec::new();
+    Repository::clone_watched(world.remote.to_str().unwrap(), world.root.join("b"), &Auth::Default, |progress| heard.push(progress)).unwrap();
+    // It never goes backwards, and it ends with every file written out.
+    assert!(heard.windows(2).all(|pair| pair[0].fraction() <= pair[1].fraction()), "{heard:?}");
+    let last = heard.last().unwrap();
+    assert_eq!((last.part, last.done, last.fraction()), (prism_sync::ClonePart::CheckingOut, last.total, 1.0));
+    assert!(world.root.join("b/notes/19.md").exists());
+}
+
+#[test]
 fn the_first_sync_fills_an_empty_remote_and_a_clone_has_it_all() {
     let world = World::new();
     let mut a = world.first_device("a");

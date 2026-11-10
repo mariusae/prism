@@ -34,6 +34,12 @@ pub struct NoteRow {
     /// When it was last changed: its file's time while it holds something
     /// not yet committed, else the last commit that changed it.
     pub modified: Option<i64>,
+    /// What it is shown as called: its title, or — for a note never
+    /// given one — its first words. See `prism_markup::note::label`.
+    pub label: String,
+    /// Whether it was never given a title. Its `title` is then its
+    /// file's name: what a link to it says, and nothing to show.
+    pub untitled: bool,
 }
 
 /// What a name leads to.
@@ -60,18 +66,20 @@ impl Index for Catalog {
     }
 
     fn version(&self) -> u32 {
-        3
+        4
     }
 
     fn create(&self, tx: &Transaction<'_>) -> Result<()> {
         // Earlier versions' tables had other columns.
-        if column_exists(tx, "notes", "path")? && !column_exists(tx, "notes", "blank")? {
+        if column_exists(tx, "notes", "path")? && !column_exists(tx, "notes", "label")? {
             tx.execute_batch("DROP TABLE notes; DROP TABLE IF EXISTS note_tags; DROP TABLE IF EXISTS note_fields;")?;
         }
         tx.execute_batch(
             "CREATE TABLE IF NOT EXISTS notes (
                  path TEXT PRIMARY KEY, title TEXT NOT NULL, kind TEXT NOT NULL,
-                 private INTEGER NOT NULL, conflicted INTEGER NOT NULL, blank INTEGER NOT NULL
+                 private INTEGER NOT NULL, conflicted INTEGER NOT NULL, blank INTEGER NOT NULL,
+                 -- What it is shown as called: its title, or an untitled note's first words.
+                 label TEXT NOT NULL, untitled INTEGER NOT NULL
              ) WITHOUT ROWID;
              -- Pages in the order they are listed in.
              CREATE INDEX IF NOT EXISTS notes_title ON notes (title COLLATE NOCASE, path);
@@ -118,8 +126,8 @@ impl Index for Catalog {
         };
         let conflicted = file.text().is_some_and(prism_sync::conflict::detect);
         tx.execute(
-            "INSERT INTO notes (path, title, kind, private, conflicted, blank) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
-            params![file.path, meta.title, kind, meta.private, conflicted, note.body.is_blank()],
+            "INSERT INTO notes (path, title, kind, private, conflicted, blank, label, untitled) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+            params![file.path, meta.title, kind, meta.private, conflicted, note.body.is_blank(), note.label(file.path), note.is_untitled(file.path)],
         )?;
         let mut insert_name = tx.prepare_cached("INSERT INTO note_names (key, name, path, rank) VALUES (?1, ?2, ?3, ?4)")?;
         let mut insert_word = tx.prepare_cached("INSERT INTO name_words (suffix, path, score) VALUES (?1, ?2, ?3)")?;
@@ -164,12 +172,15 @@ pub(crate) fn row(row: &rusqlite::Row<'_>) -> rusqlite::Result<NoteRow> {
         blank: row.get(5)?,
         created: row.get(6)?,
         modified: row.get(7)?,
+        label: row.get(8)?,
+        untitled: row.get(9)?,
     })
 }
 
 /// A page's row, with the times that apply to it.
 pub(crate) const COLUMNS: &str = "notes.path, notes.title, notes.kind, notes.private, notes.conflicted, notes.blank,
-     (SELECT created FROM prism_dates WHERE prism_dates.path = notes.path), (SELECT modified FROM prism_dates WHERE prism_dates.path = notes.path)";
+     (SELECT created FROM prism_dates WHERE prism_dates.path = notes.path), (SELECT modified FROM prism_dates WHERE prism_dates.path = notes.path),
+     notes.label, notes.untitled";
 
 /// The pages this connection may see: see [`crate::show_private`].
 pub(crate) const SEEN: &str = "(notes.private = 0 OR (SELECT shows_private FROM temp.prism_scope))";

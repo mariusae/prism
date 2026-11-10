@@ -64,7 +64,9 @@ pub mod textmerge;
 pub use auth::{https_for, Auth, TokenSource};
 pub use error::{Error, Result};
 pub use merge::{FileMerge, MergeDriver, TreeMerge};
-pub use repo::{Applied, Change, ChangeKind, CommitNode, CommitSummary, Entry, Identity, Oid, PushOutcome, Repository, Snapshot, SnapshotOptions};
+pub use repo::{
+    Applied, Change, ChangeKind, ClonePart, CloneProgress, CommitNode, CommitSummary, Entry, Identity, Oid, PushOutcome, Repository, Snapshot, SnapshotOptions,
+};
 pub use schedule::{Schedule, Scheduler};
 pub use sync::{Config, Describe, MergeKind, Mode, Pending, PlainDescriber, Report, StopHandle, Syncer};
 pub use textmerge::{Labels, Merged};

@@ -256,7 +256,14 @@ impl Engine {
 
     /// Clones a repository into `root`, and starts an engine on it.
     pub fn clone_from(url: &str, root: impl AsRef<Path>, config: EngineConfig) -> Result<Engine> {
-        Repository::clone(url, root.as_ref(), &config.auth)?;
+        Engine::clone_watched(url, root, config, |_| {})
+    }
+
+    /// As [`clone_from`](Self::clone_from), saying how far along the
+    /// clone is as it goes. Once the clone is down the graph is indexed,
+    /// which is not counted: that is the engine starting, as ever.
+    pub fn clone_watched(url: &str, root: impl AsRef<Path>, config: EngineConfig, progress: impl FnMut(prism_sync::CloneProgress)) -> Result<Engine> {
+        Repository::clone_watched(url, root.as_ref(), &config.auth, progress)?;
         Engine::start(root, config)
     }
 
@@ -588,6 +595,56 @@ impl Engine {
             *current = Some(watcher);
         }
         Ok(())
+    }
+
+    /// Stops listening to the relay, if it was.
+    #[cfg(feature = "relay")]
+    pub fn stop_listening(&self) {
+        if let Ok(mut current) = self.listener.lock() {
+            current.take();
+        }
+    }
+
+    /// Tells a relay this phone's push token, for the graph's repository:
+    /// a silent push then wakes the app when another device pushes, and
+    /// the app answers it with [`remote_changed`](Self::remote_changed).
+    /// For a device that cannot hold a socket open. Waits for the relay.
+    ///
+    /// `push_token` is the token Apple gave the app, in hex; `topic` the
+    /// app's bundle identifier; `sandbox` whether the app is signed for
+    /// development.
+    #[cfg(feature = "relay")]
+    pub fn register_phone(&self, relay: &str, push_token: &str, topic: &str, sandbox: bool) -> Result<()> {
+        self.tell_relay(relay, push_token, topic, sandbox, true)
+    }
+
+    /// Takes this phone's push token back from a relay: on signing out,
+    /// or leaving the graph.
+    #[cfg(feature = "relay")]
+    pub fn unregister_phone(&self, relay: &str, push_token: &str) -> Result<()> {
+        self.tell_relay(relay, push_token, "", false, false)
+    }
+
+    #[cfg(feature = "relay")]
+    fn tell_relay(&self, relay: &str, push_token: &str, topic: &str, sandbox: bool, registering: bool) -> Result<()> {
+        use prism_github::http::HttpClient;
+        use prism_relay::{apns::Environment, client, relay::Registration};
+        let repository = self.remote_url.as_deref().and_then(prism_github::repository_from_remote).ok_or(Error::NotOnGitHub)?;
+        let token = self.auth.current_token().unwrap_or_else(|| Err("no GitHub token is set up".into())).map_err(Error::Relay)?;
+        let registration = Registration {
+            repository,
+            token: push_token.to_owned(),
+            environment: if sandbox { Environment::Sandbox } else { Environment::Production },
+            topic: topic.to_owned(),
+        };
+        let request =
+            if registering { client::register_request(relay, &token, &registration) } else { client::unregister_request(relay, &token, &registration) };
+        let answer = prism_github::UreqClient::default().send(request).map_err(Error::Relay)?;
+        if (200..300).contains(&answer.status) {
+            Ok(())
+        } else {
+            Err(Error::Relay(format!("answered {}: {}", answer.status, String::from_utf8_lossy(&answer.body).trim())))
+        }
     }
 
     /// Stops the engine: a cycle under way stops at its next safe point,

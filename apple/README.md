@@ -63,12 +63,14 @@ row, the corner of a card. A decision about looks, so not the engine's;
 but one every app should make the same way, so it is made here, once:
 
 1. its `icon:` (an SF Symbol's name), if it was given one;
-2. otherwise a letter of its name — `Emblem.letter(for:)`: the first
-   letter or digit, past any punctuation and a leading "The", or the
-   emoji a name opens with — unless its kind has a symbol (a day's
+2. otherwise the symbol of its kind, if its kind has one (a day's
    calendar);
-3. in its `color:` (one of `EmblemColor`'s twelve names), if it was
-   given one.
+3. otherwise, for a river, a letter of its name — `Emblem.letter(for:)`:
+   the first letter or digit, past any punctuation and a leading "The",
+   or the emoji a name opens with. A note is given no letter: with no
+   icon it has none, and its words have the room;
+4. in its `color:` (one of `EmblemColor`'s twelve names), if it was
+   given one — a note given only a colour is a dot of it.
 
 `Emblem` is the rule, `EmblemView` draws it, `EmblemPicker` chooses an
 icon and a colour. A page's `icon` and `color` are ordinary frontmatter

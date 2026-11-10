@@ -35,10 +35,14 @@ public enum EmblemColor: String, CaseIterable, Hashable, Sendable {
 /// One rule, the same in every app:
 ///
 /// 1. If it was given an icon, that icon.
-/// 2. Otherwise a letter of its name ([`Emblem.letter(for:)`]) — unless
-///    its kind has a symbol of its own (a day is a calendar).
-/// 3. Either way, in its colour if it was given one; else in whatever
-///    quiet colour the place it is shown in uses.
+/// 2. Otherwise the symbol of its kind, if its kind has one: a day is a
+///    calendar.
+/// 3. Otherwise — for a river — a letter of its name
+///    ([`Emblem.letter(for:)`]). A note is not given a letter: a note
+///    with no icon has none, and where it is shown its words have the
+///    room. One given only a colour is a dot of that colour.
+/// 4. In its colour if it was given one; else in whatever quiet colour
+///    the place it is shown in uses.
 ///
 /// What a page was given is in its frontmatter — `icon:` an SF Symbol's
 /// name, `color:` one of [`EmblemColor`]'s — and a river's likewise.
@@ -48,6 +52,8 @@ public struct Emblem: Hashable, Sendable {
         case symbol(String)
         /// A letter, a digit or an emoji of the name.
         case letter(String)
+        /// Nothing: a note that was given no icon.
+        case none
     }
 
     public var glyph: Glyph
@@ -59,14 +65,18 @@ public struct Emblem: Hashable, Sendable {
     ///   - color: the colour it was given, by name.
     ///   - kindSymbol: the symbol of its kind, when its kind is more
     ///     telling than a letter of its name: `calendar` for a day.
-    public init(title: String, icon: String? = nil, color: String? = nil, kindSymbol: String? = nil) {
+    ///   - letter: whether a letter of its name stands for it when
+    ///     nothing else does: so for a river, not for a note.
+    public init(title: String, icon: String? = nil, color: String? = nil, kindSymbol: String? = nil, letter: Bool = true) {
         let icon = icon?.trimmingCharacters(in: .whitespaces)
         if let icon, !icon.isEmpty {
             glyph = .symbol(icon)
         } else if let kindSymbol {
             glyph = .symbol(kindSymbol)
-        } else {
+        } else if letter {
             glyph = .letter(Emblem.letter(for: title))
+        } else {
+            glyph = .none
         }
         self.color = EmblemColor(named: color)
     }
@@ -75,6 +85,16 @@ public struct Emblem: Hashable, Sendable {
     public init(symbol: String, color: EmblemColor? = nil) {
         glyph = .symbol(symbol)
         self.color = color
+    }
+
+    /// Whether there is anything to draw: an icon, a letter, or — for a
+    /// note given only a colour — a dot of it.
+    public var isShown: Bool { glyph != .none || color != nil }
+
+    /// The icon, when what stands for it is one.
+    public var symbol: String? {
+        if case .symbol(let name) = glyph { return name }
+        return nil
     }
 
     /// A name as it is written beside this emblem: without the emoji it
@@ -138,12 +158,15 @@ public struct EmblemView: View {
                     .font(.system(size: size * (style == .tile ? 0.6 : 0.74), weight: .bold, design: .rounded))
                     .minimumScaleFactor(0.5)
                     .lineLimit(1)
+            case .none:
+                // Given only a colour: a dot of it. Given nothing: nothing.
+                if emblem.color != nil { Circle().frame(width: size * 0.42, height: size * 0.42) }
             }
         }
         .foregroundStyle(tint)
         .frame(width: size, height: size)
         .background {
-            if style == .tile {
+            if style == .tile, emblem.glyph != .none {
                 RoundedRectangle(cornerRadius: size * 0.3, style: .continuous).fill(tint.opacity(emblem.color == nil ? 0.12 : 0.18))
             }
         }

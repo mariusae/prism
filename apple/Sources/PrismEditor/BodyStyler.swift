@@ -336,8 +336,28 @@ final class BodyLayoutManager: NSLayoutManager {
     var theme = EditorTheme.system(size: 14)
     /// An outline's rows, whose marks are drawn beside them; empty for text.
     var rows: [BodyLine] = []
+    /// What is drawn in place of the first line's bullet, if anything is.
+    var lead: EditorLead?
+    /// Where the first line begins, when it is a plain bulleted one: the
+    /// only line a lead can stand at the head of.
+    var leadStart: Int?
+    /// Where the lead was last drawn, in the container: where it is clicked.
+    private(set) var leadBox: CGRect?
 
     private var size: CGFloat { theme.size }
+
+    /// Draws the lead where a bullet would be: about `centre`, on the line.
+    private func drawLead(_ lead: EditorLead, midX: CGFloat, baseline: CGFloat, origin: CGPoint) {
+        let side = (size * 1.05).rounded()
+        let box = CGRect(x: midX - side / 2, y: baseline - theme.body.capHeight / 2 - side / 2, width: side, height: side)
+        Self.draw(symbol: lead.symbol, in: box, pointSize: side * (lead.isDone ? 1 : 0.92), weight: .regular, colors: lead.isDone ? [.white, theme.accent] : [lead.tint ?? theme.secondary])
+        leadBox = box.offsetBy(dx: -origin.x, dy: -origin.y).insetBy(dx: -4, dy: -4)
+    }
+
+    /// Whether a point of the container is on the lead.
+    func isLead(at point: CGPoint) -> Bool {
+        lead != nil && leadBox?.contains(point) == true
+    }
 
     /// Where a row's first line is: its line's box, and its baseline.
     private func firstLine(of row: BodyLine) -> (rect: CGRect, baseline: CGFloat)? {
@@ -371,7 +391,9 @@ final class BodyLayoutManager: NSLayoutManager {
             guard case .item(let number, let done, let bullet) = row.kind, let line = firstLine(of: row) else { continue }
             let box = markBox(of: row, on: line).offsetBy(dx: origin.x, dy: origin.y)
             let baseline = line.baseline + origin.y
-            if let done {
+            if let lead, leadStart == Int(row.start), done == nil, number == nil {
+                drawLead(lead, midX: box.midX, baseline: baseline, origin: origin)
+            } else if let done {
                 let side = (size * 0.95).rounded()
                 let name = bullet == "+" ? (done ? "checkmark.circle.fill" : "circle") : (done ? "checkmark.square.fill" : "square")
                 Self.draw(symbol: name, in: CGRect(x: box.midX - side / 2, y: baseline - font.capHeight / 2 - side / 2, width: side, height: side), pointSize: side, weight: .regular, colors: done ? [.white, theme.accent] : [theme.secondary])
@@ -414,6 +436,10 @@ final class BodyLayoutManager: NSLayoutManager {
             let glyph = glyphRange(forCharacterRange: range, actualCharacterRange: nil)
             let rect = boundingRect(forGlyphRange: glyph, in: container)
             let baseline = lineFragmentRect(forGlyphAt: glyph.location, effectiveRange: nil).minY + location(forGlyphAt: glyph.location).y
+            if let lead = self.lead, let start = self.leadStart, range.location >= start, range.location <= start + 1 {
+                self.drawLead(lead, midX: rect.midX + origin.x, baseline: baseline + origin.y, origin: origin)
+                return
+            }
             let diameter = max(4.5, (size * 0.3).rounded())
             let dot = CGRect(x: rect.midX - diameter / 2, y: baseline - font.xHeight / 2 - diameter / 2, width: diameter, height: diameter).offsetBy(dx: origin.x, dy: origin.y)
             theme.secondary.setFill()

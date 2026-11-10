@@ -146,6 +146,20 @@ when another page has the name. Two devices can still each make a page of
 one name before they sync. That cannot be prevented, so it is reported:
 `Catalog::duplicates` lists every name more than one page claims.
 
+### Untitled notes and labels
+
+A note is **untitled** when it has no first `# Heading` and its file's
+name says nothing: only an id, or `untitled`, or `untitled-` and a stamp
+(`notes/untitled-2026-11-10-135831-jmgs.md`). Its *title* is still its
+file's name — that is what a link to it says — but nothing shows it.
+
+What a note is shown as called is its **label** (`note::label`,
+`Note::label`, `Session::label`): a titled note's title; an untitled
+one's first words — the first line of its body that says anything, markup
+taken out, cut to 80 characters — or "Untitled" when nothing is written.
+The catalog keeps `label` and `untitled` beside `title`, so a list of any
+length shows labels without reading a note.
+
 ## 3. A note
 
 ```text
@@ -666,10 +680,10 @@ written, snapshotted and indexed in about 4 ms (release build).
 
 ## 15. The index schema
 
-### `catalog` — pages, names, fields (version 3)
+### `catalog` — pages, names, fields (version 4)
 
 ```sql
-notes       (path PRIMARY KEY, title, kind, private, conflicted, blank)
+notes       (path PRIMARY KEY, title, kind, private, conflicted, blank, label, untitled)
             -- indexed on (title, path); on path where conflicted
 note_names  (key, name, path, rank)                 -- indexed on key, on path
 name_words  (suffix, path, score)                   -- indexed on suffix, on path

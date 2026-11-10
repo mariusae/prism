@@ -55,8 +55,8 @@ public extension Color {
 
 public extension Ink {
     /// The editor, in Weft's colours and at the size cards are set in.
-    static var editorTheme: EditorTheme {
-        EditorTheme(text: text, secondary: secondary, faint: faint, accent: accent, codeBackground: hover, highlight: marked, size: TextSettings.size, isSerif: TextSettings.isSerif)
+    @MainActor static var editorTheme: EditorTheme {
+        EditorTheme(text: text, secondary: secondary, faint: faint, accent: accent, codeBackground: hover, highlight: marked, size: TextSettings.size, face: TextSettings.face)
     }
 }
 
@@ -86,43 +86,54 @@ public enum Measures {
 /// The size and face cards are set in.
 public enum TextSettings {
     #if os(macOS)
-    public static let defaultSize: CGFloat = 14, range: ClosedRange<CGFloat> = 11...22
+    public static let defaultSize: CGFloat = 15, range: ClosedRange<CGFloat> = 11...22
     #else
     public static let defaultSize: CGFloat = 17, range: ClosedRange<CGFloat> = 14...24
     #endif
 
-    public static var size: CGFloat {
-        let kept = UserDefaults.standard.double(forKey: "WeftTextSize")
-        return kept == 0 ? defaultSize : min(max(CGFloat(kept), range.lowerBound), range.upperBound)
-    }
-
-    public static var isSerif: Bool { UserDefaults.standard.string(forKey: "Typeface") == "apple" }
-    public static var design: Font.Design { isSerif ? .serif : .default }
-
-    public static func font(_ size: CGFloat, weight: PlatformFont.Weight = .regular, italic: Bool = false) -> PlatformFont {
-        var font = PlatformFont.systemFont(ofSize: size, weight: weight)
-        var descriptor = font.fontDescriptor
-        if isSerif, let serif = descriptor.withDesign(.serif) { descriptor = serif }
-        if italic {
-            #if os(macOS)
-            descriptor = descriptor.withSymbolicTraits(descriptor.symbolicTraits.union(.italic))
-            #else
-            descriptor = descriptor.withSymbolicTraits(descriptor.symbolicTraits.union(.traitItalic)) ?? descriptor
-            #endif
+    /// What is chosen, kept in the app's defaults — under the names the
+    /// app has always kept them by — and watched: a view that reads the
+    /// size or the face is drawn again when either is changed.
+    @MainActor
+    @Observable
+    final class Chosen {
+        static let shared = Chosen()
+        var size: CGFloat {
+            didSet { UserDefaults.standard.set(Double(size), forKey: "WeftTextSize") }
         }
-        #if os(macOS)
-        font = NSFont(descriptor: descriptor, size: size) ?? font
-        #else
-        font = UIFont(descriptor: descriptor, size: size)
-        #endif
-        return font
+        var face: EditorFace {
+            didSet { UserDefaults.standard.set(TextSettings.name(of: face), forKey: "Typeface") }
+        }
+
+        private init() {
+            let kept = UserDefaults.standard.double(forKey: "WeftTextSize")
+            size = kept == 0 ? TextSettings.defaultSize : min(max(CGFloat(kept), TextSettings.range.lowerBound), TextSettings.range.upperBound)
+            switch UserDefaults.standard.string(forKey: "Typeface") {
+            case "apple", "serif": face = .serif
+            case "rounded": face = .rounded
+            case "mono": face = .mono
+            default: face = .sans
+            }
+        }
     }
 
-    public static func mono(_ size: CGFloat) -> PlatformFont {
-        PlatformFont.monospacedSystemFont(ofSize: size, weight: .regular)
+    /// A face's name in the defaults: the serif face has always been "apple".
+    static func name(of face: EditorFace) -> String { face == .serif ? "apple" : face.rawValue }
+
+    @MainActor public static var size: CGFloat {
+        get { Chosen.shared.size }
+        set { Chosen.shared.size = min(max(newValue.rounded(), range.lowerBound), range.upperBound) }
     }
 
-    public static var titleSize: CGFloat {
+    @MainActor public static var face: EditorFace {
+        get { Chosen.shared.face }
+        set { Chosen.shared.face = newValue }
+    }
+
+    @MainActor public static var isSerif: Bool { face == .serif }
+    @MainActor public static var design: Font.Design { face.fontDesign }
+
+    @MainActor public static var titleSize: CGFloat {
         #if os(macOS)
         return (size * 1.35).rounded()
         #else

@@ -36,6 +36,42 @@ const MODE_EXECUTABLE: u32 = 0o100755;
 const MODE_LINK: u32 = 0o120000;
 const MODE_COMMIT: u32 = 0o160000;
 
+/// The parts of a clone, in the order they happen.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ClonePart {
+    /// The history's objects are coming down.
+    Receiving,
+    /// What came down is being put together.
+    Resolving,
+    /// The files are being written out.
+    CheckingOut,
+}
+
+/// How far along a clone is: so many of so many, in one of its parts.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct CloneProgress {
+    pub part: ClonePart,
+    pub done: usize,
+    pub total: usize,
+    /// What has come down so far, while receiving.
+    pub bytes: usize,
+}
+
+impl CloneProgress {
+    const EVERY: std::time::Duration = std::time::Duration::from_millis(60);
+
+    /// How far along the whole clone is, from 0 to 1: receiving is most
+    /// of it, since that is where the network is.
+    pub fn fraction(&self) -> f64 {
+        let within = if self.total == 0 { 0.0 } else { (self.done as f64 / self.total as f64).min(1.0) };
+        match self.part {
+            ClonePart::Receiving => 0.75 * within,
+            ClonePart::Resolving => 0.75 + 0.1 * within,
+            ClonePart::CheckingOut => 0.85 + 0.15 * within,
+        }
+    }
+}
+
 /// A git repository with a working tree.
 pub struct Repository {
     git: git2::Repository,
@@ -186,9 +222,41 @@ impl Repository {
 
     /// Clones `url` into `path`, with all of its history.
     pub fn clone(url: &str, path: impl AsRef<Path>, auth: &Auth) -> Result<Repository> {
+        Repository::clone_watched(url, path, auth, |_| {})
+    }
+
+    /// As [`clone`](Self::clone), saying how far along it is as it goes:
+    /// a few times a second at most, and once as each part ends.
+    pub fn clone_watched(url: &str, path: impl AsRef<Path>, auth: &Auth, progress: impl FnMut(CloneProgress)) -> Result<Repository> {
+        // Told by two of git's callbacks, one after the other.
+        let told = std::cell::RefCell::new((progress, None::<std::time::Instant>));
+        let tell = |now: CloneProgress| {
+            let mut told = told.borrow_mut();
+            if now.done >= now.total || told.1.is_none_or(|last| last.elapsed() >= CloneProgress::EVERY) {
+                told.1 = Some(std::time::Instant::now());
+                (told.0)(now);
+            }
+        };
+        let mut callbacks = auth.callbacks();
+        callbacks.transfer_progress(|stats| {
+            // Objects come down, then the deltas among them are resolved.
+            let now = if stats.received_objects() < stats.total_objects() || stats.total_deltas() == 0 {
+                CloneProgress { part: ClonePart::Receiving, done: stats.received_objects(), total: stats.total_objects(), bytes: stats.received_bytes() }
+            } else {
+                CloneProgress { part: ClonePart::Resolving, done: stats.indexed_deltas(), total: stats.total_deltas(), bytes: stats.received_bytes() }
+            };
+            tell(now);
+            true
+        });
         let mut fetch = git2::FetchOptions::new();
-        fetch.remote_callbacks(auth.callbacks());
-        let git = git2::build::RepoBuilder::new().fetch_options(fetch).clone(url, path.as_ref()).map_err(|e| auth.explain(e, Error::Fetch))?;
+        fetch.remote_callbacks(callbacks);
+        let mut checkout = git2::build::CheckoutBuilder::new();
+        checkout.progress(|_, done, total| tell(CloneProgress { part: ClonePart::CheckingOut, done, total, bytes: 0 }));
+        let git = git2::build::RepoBuilder::new()
+            .fetch_options(fetch)
+            .with_checkout(checkout)
+            .clone(url, path.as_ref())
+            .map_err(|e| auth.explain(e, Error::Fetch))?;
         Ok(Repository { git })
     }
 

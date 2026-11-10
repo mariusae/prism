@@ -38,8 +38,8 @@ struct QueryView: View {
                         ForEach(found.pages, id: \.path) { page in
                             Button { open(page) } label: {
                                 HStack(spacing: 4) {
-                                    EmblemView(store.emblem(page), size: TextSettings.size * 0.95, style: .plain, quiet: Color.inkAccent)
-                                    Text(page.title).font(.system(size: TextSettings.size, design: TextSettings.design)).lineLimit(1)
+                                    if store.emblem(page).isShown { EmblemView(store.emblem(page), size: TextSettings.size * 0.95, style: .plain, quiet: Color.inkAccent) }
+                                    Text(store.emblem(page).caption(page.label)).font(.system(size: TextSettings.size, design: TextSettings.design)).lineLimit(1)
                                 }
                                 .padding(.horizontal, 6)
                                 .padding(.vertical, 2)
@@ -48,6 +48,7 @@ struct QueryView: View {
                                 .contentShape(Rectangle())
                             }
                             .buttonStyle(.plain)
+                            .pointerStyle(.link)
                         }
                     }
                     if Int(found.total) > found.pages.count {

@@ -45,6 +45,18 @@ impl NoteKind {
         (stem.starts_with("notes/") && !stem.ends_with('/')).then_some(NoteKind::Note)
     }
 
+    /// Whether a file's name is one a note is given when it is given no
+    /// name: only an id, or `untitled`, or `untitled-` and a stamp. Such
+    /// a name titles nothing: see [`Note::is_untitled`].
+    pub fn is_unnamed(path: &str) -> bool {
+        if NoteKind::of(path) != Some(NoteKind::Note) {
+            return false;
+        }
+        let name = path.rsplit('/').next().unwrap_or(path);
+        let stem = name.strip_suffix(".md").unwrap_or(name).to_lowercase();
+        is_ulid(name.strip_suffix(".md").unwrap_or(name)) || stem == "untitled" || stem.starts_with("untitled-") || stem.starts_with("untitled ")
+    }
+
     /// The path a day's page is kept at.
     pub fn day_path(day: Day) -> String {
         format!("{DAILY_DIR}/{day}.md")
@@ -85,6 +97,34 @@ pub fn is_ulid(text: &str) -> bool {
     text.len() == 26
         && text.bytes().next().is_some_and(|b| (b'0'..=b'7').contains(&b))
         && text.bytes().all(|b| b.is_ascii_digit() || (b.is_ascii_alphabetic() && !matches!(b.to_ascii_lowercase(), b'i' | b'l' | b'o' | b'u')))
+}
+
+/// How many characters of its first words an untitled note is called by.
+pub const LABEL_LENGTH: usize = 80;
+
+/// What a note is called where it is shown — a row of a list, a folded
+/// card, a link to it. A titled note's title; an untitled one's first
+/// words: the first line of its body that says anything, its markup
+/// taken out, cut to [`LABEL_LENGTH`] characters. "Untitled", for one
+/// with nothing written in it.
+///
+/// `untitled_body` is the body of a note that has no title, `None` for
+/// one that has; `title` is asked only for the latter.
+pub fn label(untitled_body: Option<&Document>, title: impl FnOnce() -> String) -> String {
+    let Some(body) = untitled_body else { return title() };
+    match first_words(&body.blocks) {
+        Some(words) if words.chars().count() > LABEL_LENGTH => format!("{}…", words.chars().take(LABEL_LENGTH).collect::<String>().trim_end()),
+        Some(words) => words,
+        None => "Untitled".to_owned(),
+    }
+}
+
+/// The first line that says anything, in the order the blocks are read.
+fn first_words(blocks: &[Block]) -> Option<String> {
+    blocks.iter().find_map(|block| {
+        let own = if block.kind == BlockKind::Code { None } else { block.text.lines().map(inline::plain_text).find(|line| !line.is_empty()) };
+        own.or_else(|| first_words(&block.children))
+    })
 }
 
 /// The key two names are compared by: links find pages "case aside", and
@@ -233,6 +273,20 @@ impl Note {
     }
 
     /// Whether a frontmatter flag is set.
+    /// Whether the note was never given a title: it has no first
+    /// heading, and its file's name says nothing either (see
+    /// [`NoteKind::is_unnamed`]). Such a note is shown without a title,
+    /// and called by its first words where it must be called something.
+    pub fn is_untitled(&self, path: &str) -> bool {
+        self.title_heading().is_none() && NoteKind::is_unnamed(path)
+    }
+
+    /// What the note is called where it is shown: its title — or, never
+    /// having been given one, its first words. See [`label`].
+    pub fn label(&self, path: &str) -> String {
+        label(self.is_untitled(path).then_some(&self.body), || self.title(path))
+    }
+
     pub fn flag(&self, key: &str) -> bool {
         self.frontmatter.as_ref().is_some_and(|f| f.flag(key))
     }
@@ -521,6 +575,29 @@ mod tests {
         assert_eq!(Note::parse("# From **Heading**\n").title("notes/x.md"), "From Heading");
         assert_eq!(Note::parse("- no heading\n").title("notes/my-file.md"), "my-file");
         assert_eq!(Note::parse("").title("notes/01JBXK3T6Y8Q2ZP4M9V7C5R0WD.md"), "Untitled");
+    }
+
+    #[test]
+    fn an_untitled_note_is_called_by_its_first_words() {
+        let path = "notes/untitled-2026-11-10-135831-jmgs.md";
+        let note = Note::parse("---\npinned: true\n---\n- ![](assets/pasted.png)\n- [ ] And *also*: [[semantic search]]\n");
+        assert!(note.is_untitled(path));
+        assert_eq!(note.label(path), "And also: semantic search");
+        // Still answered to by its file's name, which is what links to it say.
+        assert_eq!(note.title(path), "untitled-2026-11-10-135831-jmgs");
+        // A heading titles it, whatever its file is called; so does a name that says something.
+        assert!(!Note::parse("# Plans\n\nwords\n").is_untitled(path));
+        assert_eq!(Note::parse("# Plans\n\nwords\n").label(path), "Plans");
+        assert!(!note.is_untitled("notes/semantic-search.md"));
+        assert_eq!(note.label("notes/semantic-search.md"), "semantic-search");
+        assert!(!note.is_untitled("daily/2026-11-10.md"));
+        // Nothing written, or only a picture: nothing to call it by.
+        assert_eq!(Note::parse("").label("notes/untitled.md"), "Untitled");
+        assert_eq!(Note::parse("![](a.png)\n").label("notes/01JBXK3T6Y8Q2ZP4M9V7C5R0WD.md"), "Untitled");
+        // Code is not words; long words are cut.
+        assert_eq!(Note::parse("```\nlet x = 1;\n```\nafter\n").label(path), "after");
+        let long = Note::parse(&"word ".repeat(40)).label(path);
+        assert!(long.ends_with('…') && long.chars().count() <= LABEL_LENGTH + 1, "{long}");
         // A `title:` field is a field, and no title.
         let fielded = Note::parse("---\ntitle: A Field\n---\n# From Heading\n");
         assert_eq!(fielded.title("notes/x.md"), "From Heading");

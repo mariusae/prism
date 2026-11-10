@@ -30,7 +30,7 @@ struct CardView: View {
         _draft = State(initialValue: store.draft(path: card.path, title: card.title))
     }
 
-    private var emblem: Emblem { Emblem(title: draft.title, icon: draft.icon, color: draft.color, kindSymbol: isDay ? "calendar" : nil) }
+    private var emblem: Emblem { Emblem(title: draft.title, icon: draft.icon, color: draft.color, kindSymbol: isDay ? "calendar" : nil, letter: false) }
     private var isSelected: Bool { river.selected == card.id }
     private var isWriting: Bool { river.writing == card.id }
     private var isDay: Bool { card.path.hasPrefix("daily/") || card.path.hasPrefix("weekly/") }
@@ -38,18 +38,51 @@ struct CardView: View {
     private var titleFont: Font { .system(size: TextSettings.titleSize, weight: .semibold, design: TextSettings.design) }
 
     var body: some View {
+        // Read, so that the card is laid out again when the text's height changes.
+        let _ = bodyHeight
         VStack(alignment: .leading, spacing: card.folded ? 0 : Measures.partGap) {
             if card.folded {
                 peek
             } else {
-                header
+                if showsHeader { header }
                 if draft.isConflicted { conflict }
                 editor
                 if !tags.isEmpty || !backlinks.isEmpty { foot }
             }
         }
         .padding(.trailing, Measures.cardTrailing)
-        .padding(.top, card.folded ? 11 : 9)
+        .padding(.top, card.folded ? 11 : (showsHeader ? 9 : 14))
+        // A note with no title has no line for what is done to it: that
+        // stands over its corner while the pointer is on the card, and
+        // its ring or icon, if it has one, in its margin.
+        .overlay(alignment: .topTrailing) {
+            if !card.folded, !showsHeader {
+                actions
+                    .padding(2)
+                    .background(RoundedRectangle(cornerRadius: 8, style: .continuous).fill(Color.inkCard).opacity(showsActions ? 0.94 : 0))
+                    .padding(.top, 7)
+                    .padding(.trailing, Measures.cardTrailing - 2)
+            }
+        }
+        .overlay(alignment: .topLeading) {
+            // Only for a note that opens with no bullet for it to stand in
+            // place of: then small, in the margin beside its first line.
+            if !card.folded, !showsHeader, editorLead != nil, !NoteEditorView.takesLead(draft.editor) {
+                lead(size: TextSettings.size).opacity(0.85).frame(width: Measures.margin).padding(.top, 17)
+            }
+        }
+        // Where the icon and the colour are chosen, from the icon or the menu.
+        .overlay(alignment: .topLeading) {
+            Color.clear.frame(width: Measures.margin * 2, height: 30).allowsHitTesting(false)
+                .popover(isPresented: $choosesLook, arrowEdge: .bottom) {
+                    EmblemPicker(
+                        title: draft.label,
+                        icon: Binding(get: { draft.icon }, set: { draft.setLook(icon: $0, color: draft.color) }),
+                        color: Binding(get: { draft.color }, set: { draft.setLook(icon: draft.icon, color: $0) }),
+                        kindSymbol: isDay ? "calendar" : nil
+                    )
+                }
+        }
         .padding(.bottom, card.folded ? 11 : 14)
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(RoundedRectangle(cornerRadius: Measures.cardRadius, style: .continuous).fill(card.folded ? Color.inkPaper : Color.inkCard))
@@ -67,6 +100,8 @@ struct CardView: View {
 
     private struct Source: Hashable {
         var path: String
+        /// What a link to it says; and what it is shown as called.
+        var name: String
         var title: String
         var emblem: Emblem
     }
@@ -75,55 +110,44 @@ struct CardView: View {
         var seen = Set<String>()
         backlinks = ((try? store.engine.backlinks(path: card.path)) ?? []).compactMap { link in
             guard link.source != card.path, seen.insert(link.source).inserted else { return nil }
+            // The river this card is in is no news: it is where one is.
+            if let here = river.name, GraphStore.riverName(link.source) == here { return nil }
             let page = (try? store.engine.page(path: link.source)) ?? nil
-            let isRiver = link.source.hasPrefix("rivers/")
-            let title = page?.title ?? String(link.source.split(separator: "/").last ?? "").replacingOccurrences(of: ".md", with: "")
-            return Source(path: link.source, title: title, emblem: store.emblem(path: link.source, title: title))
+            let name = page?.title ?? String(link.source.split(separator: "/").last ?? "").replacingOccurrences(of: ".md", with: "")
+            return Source(path: link.source, name: name, title: page?.label ?? name, emblem: store.emblem(path: link.source, title: name))
         }
         tags = (try? store.engine.tagsOf(path: card.path)) ?? []
     }
 
     // MARK: Parts
 
-    /// A row of the card: the mark in the gutter, then what it stands before.
-    private func row<Mark: View, Content: View>(alignment: VerticalAlignment = .firstTextBaseline, @ViewBuilder mark: () -> Mark, @ViewBuilder content: () -> Content) -> some View {
-        HStack(alignment: alignment, spacing: 0) {
-            mark().frame(width: Measures.margin + Measures.gutter, alignment: .trailing)
-            content()
-        }
+    /// A row of the card: set in from its edge by the margin, and no
+    /// more — the width is the words'.
+    private func row<Content: View>(@ViewBuilder content: () -> Content) -> some View {
+        content().padding(.leading, Measures.margin)
     }
 
-    /// The card's mark: a to-do's ring, which checks it off; else its icon, which opens its menu.
-    @ViewBuilder private var mark: some View {
+    /// What stands before the title, as its first character would: a
+    /// to-do's ring, which checks it off; or the note's icon, if it has
+    /// one — a day's calendar, a link's, one it was given — which, clicked,
+    /// is where it is chosen. A note with neither has nothing here.
+    @ViewBuilder private func lead(size: CGFloat) -> some View {
         switch draft.task {
         case .none:
-            // Its emblem — its icon, or a letter of its title, in its
-            // colour — which, clicked, is where those are chosen.
-            Button { choosesLook = true } label: {
-                EmblemView(emblem, size: 22, style: isDay && draft.icon == nil && draft.color == nil ? .plain : .tile, quiet: Color.inkSecondary)
-                    .opacity(draft.color != nil || isHovered ? 1 : 0.8)
-                    .frame(width: Measures.gutter + 4, height: 22)
-                    .contentShape(Rectangle())
+            if emblem.isShown {
+                Button { choosesLook = true } label: { EmblemView(emblem, size: size, style: .plain, quiet: Color.inkSecondary).contentShape(Rectangle()) }
+                    .buttonStyle(.plain)
+                    .disabled(!draft.exists)
+                    .alignmentGuide(.firstTextBaseline) { $0[.bottom] - size * 0.2 }
+                    .help("Choose an icon and a colour")
             }
-            .buttonStyle(.plain)
-            .disabled(!draft.exists)
-            .popover(isPresented: $choosesLook, arrowEdge: .bottom) {
-                EmblemPicker(
-                    title: draft.title,
-                    icon: Binding(get: { draft.icon }, set: { draft.setLook(icon: $0, color: draft.color) }),
-                    color: Binding(get: { draft.color }, set: { draft.setLook(icon: draft.icon, color: $0) }),
-                    kindSymbol: isDay ? "calendar" : nil
-                )
-            }
-            .help("Choose an icon and a colour")
         case .todo, .done:
             Button { withAnimation(.snappy(duration: 0.2)) { draft.setTask(draft.task == .done ? .todo : .done) } } label: {
                 Image(systemName: draft.task == .done ? "checkmark.circle.fill" : "circle")
-                    .font(.system(size: (TextSettings.size * 1.3).rounded()))
+                    .font(.system(size: size * 0.9))
                     .symbolRenderingMode(.palette)
                     .foregroundStyle(draft.task == .done ? AnyShapeStyle(.white) : AnyShapeStyle(Color.inkSecondary), Color.inkAccent)
                     .contentTransition(.symbolEffect(.replace))
-                    .frame(width: Measures.gutter + 4, height: 22)
                     .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
@@ -131,8 +155,28 @@ struct CardView: View {
         }
     }
 
+    /// What a note with no title has at the head of its first line, in
+    /// place of that line's bullet: its ring, if it is a to-do; else its
+    /// icon, if it has one. The editor draws it, as it draws the bullets.
+    private var editorLead: EditorLead? {
+        guard !showsHeader else { return nil }
+        switch draft.task {
+        case .todo: return EditorLead(symbol: "circle")
+        case .done: return EditorLead(symbol: "checkmark.circle.fill", isDone: true)
+        case .none: return emblem.symbol.map { EditorLead(symbol: $0, tint: emblem.color.map { PlatformColor($0.color) }) }
+        }
+    }
+
+    private func leadClicked() {
+        if draft.task == .none { choosesLook = true } else { withAnimation(.snappy(duration: 0.2)) { draft.setTask(draft.task == .done ? .todo : .done) } }
+    }
+
+    /// Whether the card has no title to show: a note never given one.
+    private var isUntitled: Bool { !isDay && draft.exists && draft.isUntitled }
+    private var showsHeader: Bool { !isUntitled || isRenaming }
+
     private var header: some View {
-        row(mark: { mark }) {
+        row {
             HStack(alignment: .firstTextBaseline, spacing: 10) {
                 if isRenaming {
                     TextField("Title", text: $newTitle)
@@ -143,15 +187,19 @@ struct CardView: View {
                         .onExitCommand { isRenaming = false }
                         .onChange(of: titleFocused) { _, focused in if !focused { finishRenaming() } }
                 } else {
-                    Text(emblem.caption(draft.title))
-                        .font(titleFont)
-                        .italic(!draft.exists)
-                        .strikethrough(draft.task == .done, color: Color.inkSecondary)
-                        .foregroundStyle(draft.task == .done ? Color.inkSecondary : Color.inkText)
-                        .lineLimit(1)
-                        .onTapGesture(count: 2) { if !isDay { startRenaming() } }
-                        .onTapGesture { fold() }
-                        .help("Click to fold, double-click to rename")
+                    // The icon is the title's first character: on its line, at its edge.
+                    HStack(alignment: .firstTextBaseline, spacing: TextSettings.titleSize * 0.3) {
+                        lead(size: TextSettings.titleSize)
+                        Text(emblem.caption(draft.title))
+                            .font(titleFont)
+                            .italic(!draft.exists)
+                            .strikethrough(draft.task == .done, color: Color.inkSecondary)
+                            .foregroundStyle(draft.task == .done ? Color.inkSecondary : Color.inkText)
+                            .lineLimit(1)
+                            .onTapGesture(count: 2) { if !isDay { startRenaming() } }
+                            .onTapGesture { fold() }
+                            .help("Click to fold, double-click to rename")
+                    }
                     if draft.isMarked("pinned") {
                         Image(systemName: "pin.fill").font(.caption).foregroundStyle(Color.inkAccent)
                     }
@@ -166,6 +214,8 @@ struct CardView: View {
     /// The strip of what is done to a card most.
     private var actions: some View {
         HStack(spacing: 1) {
+            // A note with no title has no title to click, to fold it.
+            if !showsHeader, !card.folded { CardButton("chevron.up", help: "Fold") { fold() } }
             if isDay {
                 CardButton("chevron.left", help: "The Day Before") { step(-1) }
                 CardButton("chevron.right", help: "The Day After") { step(1) }
@@ -195,10 +245,10 @@ struct CardView: View {
     }
 
     private var editor: some View {
-        row(mark: { Color.clear.frame(height: 1) }) {
+        row {
             ZStack(alignment: .topLeading) {
                 if draft.isBlank, !isWriting {
-                    Text(isDay ? "Nothing written on this day yet." : (draft.exists ? "Write here." : "No page has this title yet. Write here to make it."))
+                    Text(isDay ? "Nothing written on this day yet." : (draft.exists ? "Write here." : "No note has this title yet. Write here to make it."))
                         .font(.system(size: TextSettings.size, design: TextSettings.design))
                         .foregroundStyle(Color.inkFaint)
                         .padding(.top, 2)
@@ -209,13 +259,20 @@ struct CardView: View {
                 NoteEditorView(
                     editor: draft.editor, theme: Ink.editorTheme, isWriting: isWriting, height: $bodyHeight,
                     refresh: store.indexRevision,
-                    pageExists: { name in store.resolve(name)?.exists ?? false },
+                    pageExists: { name in store.leadsSomewhere(name) },
                     blockView: { block in
+                        // A line that is only a picture is shown as the picture.
+                        if block.info == EditorBlock.picture, let picture = EditorPicture(line: block.source) {
+                            return AnyView(PictureView(store: store, picture: picture, rewrite: block.rewrite, room: block.room))
+                        }
                         guard block.info == "query" else { return nil }
                         return AnyView(QueryView(store: store, source: block.source, this: draft.title) { page in
                             withAnimation(.snappy(duration: 0.28)) { store.open(page: page, after: card.id) }
                         })
                     },
+                    linkPreview: { link in LinkCard.shows(link, in: store) ? AnyView(LinkCard(store: store, link: link)) : nil },
+                    lead: editorLead, onLead: { leadClicked() },
+                    offers: { found in store.linkOffers(found.typed, this: card.path) },
                     onChange: { draft.changed() },
                     onFocus: { focused in
                         if focused {
@@ -228,15 +285,20 @@ struct CardView: View {
                     },
                     onFollow: { follow($0) }
                 )
-                .frame(height: bodyHeight)
+                // Its height is the text's own, asked of it as it is laid
+                // out — not a number that arrives a frame later and moves
+                // everything under it.
+                .fixedSize(horizontal: false, vertical: true)
                 .id(draft.mode)
+                // A to-do done is set back: there, and no longer asking.
+                .opacity(draft.task == .done ? 0.5 : 1)
             }
         }
     }
 
     /// What the page is tagged, and who links to it: a line of pills.
     private var foot: some View {
-        row(mark: { Color.clear.frame(height: 1) }) {
+        row {
             FlowLayout(spacing: 6) {
                 ForEach(tags, id: \.self) { tag in
                     FootPill(title: tag, emblem: Emblem(symbol: "number"), tint: Color.inkAccent) { store.open(name: tag, after: card.id, in: river) }
@@ -245,13 +307,13 @@ struct CardView: View {
                     Text(tags.isEmpty ? "Linked from" : "· linked from").font(.caption).foregroundStyle(Color.inkSecondary).padding(.vertical, 3)
                     ForEach(backlinks.prefix(6), id: \.self) { source in
                         FootPill(title: source.title, emblem: source.emblem, tint: Color.inkSecondary) {
-                            withAnimation(.snappy(duration: 0.28)) { store.river.open(Card(path: source.path, title: source.title), after: card.id) }
+                            withAnimation(.snappy(duration: 0.28)) { store.show(path: source.path, title: source.name, after: card.id, in: river) }
                         }
                     }
                     if backlinks.count > 6 {
                         Menu("and \(backlinks.count - 6) more") {
                             ForEach(backlinks.dropFirst(6), id: \.self) { source in
-                                Button(source.title) { store.river.open(Card(path: source.path, title: source.title), after: card.id) }
+                                Button(source.title) { store.show(path: source.path, title: source.name, after: card.id, in: river) }
                             }
                         }
                         .menuStyle(.button)
@@ -267,8 +329,9 @@ struct CardView: View {
     }
 
     private var conflict: some View {
-        row(mark: { Image(systemName: "exclamationmark.triangle").foregroundStyle(.orange).font(.callout) }) {
+        row {
             HStack(spacing: 8) {
+                Image(systemName: "exclamationmark.triangle").foregroundStyle(.orange).font(.callout)
                 Text("Two devices changed the same lines.").font(.callout).foregroundStyle(Color.inkSecondary)
                 Button("Keep This Device's") { draft.resolve(keeping: .ours) }
                 Button("Keep the Other's") { draft.resolve(keeping: .theirs) }
@@ -279,10 +342,26 @@ struct CardView: View {
     }
 
     private var peek: some View {
-        row(mark: { mark }) {
-            HStack(alignment: .firstTextBaseline, spacing: 8) {
-                (Text(emblem.caption(draft.title)).bold().foregroundStyle(draft.task == .done ? Color.inkSecondary : Color.inkText).strikethrough(draft.task == .done)
-                    + Text("  ") + Text(draft.summary).foregroundStyle(Color.inkSecondary))
+        row {
+            HStack(alignment: .firstTextBaseline, spacing: TextSettings.size * 0.35) {
+                lead(size: TextSettings.size * 1.1)
+                // A picture in it, small: often all there is to know it by.
+                let thumb = draft.firstPicture.flatMap { Pictures.image(at: $0.address, in: store) }
+                if let thumb {
+                    // As tall as two lines and a bit, and as wide as that makes it — within reason.
+                    let tall: CGFloat = 64
+                    let wide = min(max(tall * thumb.size.width / max(thumb.size.height, 1), 24), 200)
+                    Image(nsImage: thumb).resizable().aspectRatio(contentMode: .fill)
+                        .frame(width: wide, height: tall)
+                        .clipShape(RoundedRectangle(cornerRadius: 4, style: .continuous))
+                        .overlay(RoundedRectangle(cornerRadius: 4, style: .continuous).strokeBorder(Color.inkRule, lineWidth: 0.5))
+                        .alignmentGuide(.firstTextBaseline) { $0[VerticalAlignment.center] + TextSettings.size * 0.35 }
+                        .padding(.trailing, 6)
+                }
+                // Called by its title — or, never given one, by its first words;
+                // a note that is only a picture is called nothing, and shown by it.
+                let named = !(thumb != nil && draft.isUntitled && draft.label == "Untitled")
+                Text("\(Text(named ? emblem.caption(draft.label) : "").bold().foregroundStyle(draft.task == .done ? Color.inkSecondary : Color.inkText).strikethrough(draft.task == .done))\(named ? "  " : "")\(Text(draft.summary).foregroundStyle(Color.inkSecondary))")
                     .font(.system(size: TextSettings.size, design: TextSettings.design))
                     .lineLimit(2)
                     .frame(maxWidth: .infinity, alignment: .leading)
@@ -328,9 +407,16 @@ struct CardView: View {
             withAnimation(.snappy(duration: 0.28)) { river.cards.removeAll { $0.id != card.id } }
             store.rememberRivers()
         }
-        Button("Close", systemImage: "xmark") { close() }
+        if river.query != nil {
+            if river.isFound(card.id) {
+                Button("Keep at Top", systemImage: "pin.circle") { withAnimation(.snappy(duration: 0.28)) { river.hold(card.id) }; store.rememberRivers() }
+            } else {
+                Button("Release to Query", systemImage: "arrow.uturn.down.circle") { withAnimation(.snappy(duration: 0.28)) { river.close(card.id) }; store.rememberRivers() }
+            }
+        }
+        Button(river.isFound(card.id) ? "Remove from River" : "Close", systemImage: "xmark") { close() }
         if draft.exists {
-            Button("Delete Page", systemImage: "trash", role: .destructive) {
+            Button("Delete Note", systemImage: "trash", role: .destructive) {
                 draft.delete()
                 close()
             }
@@ -362,7 +448,7 @@ struct CardView: View {
 
     private func startRenaming() {
         if card.folded { river.toggleFold(card.id) }
-        newTitle = draft.title
+        newTitle = isUntitled ? "" : draft.title
         isRenaming = true
         titleFocused = true
     }
@@ -448,7 +534,7 @@ struct FootPill: View {
     var body: some View {
         Button(action: action) {
             HStack(spacing: 3) {
-                EmblemView(emblem, size: 12, style: .plain, quiet: tint)
+                if emblem.isShown { EmblemView(emblem, size: 12, style: .plain, quiet: tint) }
                 Text(emblem.caption(title)).font(.system(size: 12)).lineLimit(1)
             }
             .padding(.horizontal, 7)
@@ -458,6 +544,8 @@ struct FootPill: View {
             .contentShape(Capsule())
         }
         .buttonStyle(.plain)
+        // It leads somewhere, as a link in the text does: a hand.
+        .pointerStyle(.link)
         .onHover { isHovered = $0 }
     }
 }

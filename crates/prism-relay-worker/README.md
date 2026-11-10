@@ -46,6 +46,8 @@ This crate is a workspace of its own, because it builds only for wasm.
    ```
 
    Note the host it prints, for example `prism-relay.<account>.workers.dev`.
+   Ours is `prism-relay.prism-notes.workers.dev`, which is what the apps
+   are built to use (`apps/weft/iOS/GitHub.xcconfig`).
 
 2. **Webhook secret.** Make one with `openssl rand -hex 32`, then:
 

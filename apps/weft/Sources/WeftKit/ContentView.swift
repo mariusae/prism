@@ -27,6 +27,8 @@ public struct ContentView: View {
     @State private var seed = ""
     @State private var columns: NavigationSplitViewVisibility = .detailOnly
     @State private var searchFocus = 0
+    /// How wide the river's side of the window is: what the bar is fitted to.
+    @State private var detailWidth: CGFloat = 900
 
     public init(store: GraphStore, actions: WindowActions) {
         self.store = store
@@ -40,6 +42,7 @@ public struct ContentView: View {
         } detail: {
             RiverView(store: store, river: store.river, onQuickOpen: { show("") })
                 .id(store.river.id)
+                .onGeometryChange(for: CGFloat.self) { $0.size.width.rounded() } action: { detailWidth = $0 }
                 .overlay(alignment: .top) {
                     if showsQuickOpen {
                         ZStack(alignment: .top) {
@@ -51,7 +54,7 @@ public struct ContentView: View {
                 }
                 .animation(.easeOut(duration: 0.12), value: showsQuickOpen)
                 .toolbar {
-                    ToolbarItem(placement: .principal) { RiverBar(store: store, onFind: { show("") }) }
+                    ToolbarItem(placement: .principal) { RiverBar(store: store, room: min(max(detailWidth - 330, 220), 860), onFind: { show("") }) }
                     ToolbarItemGroup(placement: .primaryAction) {
                         if !store.conflicted.isEmpty {
                             Button {
@@ -63,12 +66,13 @@ public struct ContentView: View {
                             Label("Today", systemImage: "calendar")
                         }
                         .help("Today (⇧⌘D)")
-                        Button { newPage() } label: { Label("New Page", systemImage: "square.and.pencil") }
-                            .help("New Page (⌘N)")
+                        Button { newPage() } label: { Label("New Note", systemImage: "square.and.pencil") }
+                            .help("New Note (⌘N)")
                     }
                 }
         }
-        .navigationTitle(store.river.title)
+        .sheet(item: Binding(get: { store.queryAsk }, set: { store.queryAsk = $0 })) { ask in QueryRiverEditor(store: store, ask: ask) }
+        .navigationTitle(store.title(of: store.river))
         .toolbar(removing: .title)
         .foregroundStyle(Color.inkText)
         .tint(Color.inkAccent)
@@ -87,55 +91,92 @@ public struct ContentView: View {
     }
 
     private func newPage() {
-        let format = DateFormatter()
-        format.dateFormat = "yyyy-MM-dd HH.mm.ss"
-        withAnimation(.snappy(duration: 0.28)) { _ = store.newPage(title: "Untitled \(format.string(from: Date()))") }
+        withAnimation(.snappy(duration: 0.28)) { _ = store.newNote() }
     }
 }
 
 /// The bar's middle: the rivers open, the one shown standing as where
 /// you are — and, clicked, as where you go from.
+///
+/// A tab says its river's name. Only when there are too many to name —
+/// when a tab is shrunk as far as it goes — does a letter of the name
+/// stand for it instead. An icon a river was given always shows.
 struct RiverBar: View {
     let store: GraphStore
+    /// How wide the bar may be.
+    var room: CGFloat
     var onFind: () -> Void
     @State private var hovered: UUID?
     /// The river whose name, icon and colour are being chosen.
     @State private var styling: UUID?
 
+    private static let plus: CGFloat = 26, small: CGFloat = 36
+
+    /// How wide the tabs are: the one shown, the others, and whether the
+    /// others are shrunk to their letters.
+    private var widths: (current: CGFloat, other: CGFloat, shrunk: Bool) {
+        let count = store.rivers.count
+        guard count > 1 else { return (min(240, room - Self.plus), 0, false) }
+        let space = room - Self.plus - 8 - CGFloat(count - 1) * 2
+        let others = CGFloat(count - 1)
+        // Each with its name, as wide as there is room for…
+        let even = space / CGFloat(count)
+        if even >= 96 { return (min(even * 1.3, 220), min((space - min(even * 1.3, 220)) / others, 150), false) }
+        // …or the others as letters, and the one shown with its name.
+        return (max(min(space - others * Self.small, 220), Self.small), Self.small, true)
+    }
+
     var body: some View {
+        let widths = widths
         HStack(spacing: 2) {
             ForEach(Array(store.rivers.enumerated()), id: \.element.id) { index, river in
                 let current = index == store.currentRiver
+                // The one shown keeps its name while there is room to say any of it.
+                let shrunk = widths.shrunk && (!current || widths.current < 72)
+                let alone = store.rivers.count == 1 && !river.isStyled
                 HStack(spacing: 6) {
-                    // What stands for the river — and, clicked, where it is
-                    // named and given an icon. One river with nothing of its
-                    // own is simply the place to search from.
-                    if store.rivers.count > 1 || river.isStyled {
-                        Button { styling = river.id } label: { EmblemView(river.emblem, size: 18, quiet: Color.inkSecondary).contentShape(Rectangle()) }
-                            .buttonStyle(.plain)
-                            .help("Name this river, and choose its icon and colour")
-                    } else {
+                    if alone {
+                        // One river with nothing of its own is simply the place to search from.
                         Image(systemName: "magnifyingglass").font(.system(size: 11, weight: .semibold)).foregroundStyle(Color.inkSecondary)
-                    }
-                    Text(store.rivers.count > 1 || river.isStyled ? river.emblem.caption(river.title) : river.title)
-                        .font(.system(size: 12.5, weight: current ? .semibold : .regular))
-                        .foregroundStyle(current ? Color.inkText : Color.inkSecondary)
-                        .lineLimit(1)
-                    if store.rivers.count > 1, hovered == river.id || current {
-                        Button { withAnimation(.snappy(duration: 0.2)) { store.closeRiver(at: index) } } label: {
-                            Image(systemName: "xmark").font(.system(size: 8, weight: .bold)).foregroundStyle(Color.inkSecondary).frame(width: 16, height: 16).contentShape(Circle())
+                    } else if shrunk {
+                        EmblemView(Emblem(title: store.title(of: river), icon: river.icon, color: river.color), size: 20, quiet: Color.inkSecondary)
+                    } else if river.icon != nil || river.color != nil {
+                        // What it was given — and, clicked, where that is chosen.
+                        Button { styling = river.id } label: {
+                            EmblemView(Emblem(title: store.title(of: river), icon: river.icon, color: river.color, letter: false), size: 16, style: .plain, quiet: Color.inkSecondary).contentShape(Rectangle())
                         }
                         .buttonStyle(.plain)
-                        .opacity(hovered == river.id ? 1 : 0)
+                        .help("Name this river, and choose its icon and colour")
+                    }
+                    if !shrunk {
+                        Text(store.title(of: river))
+                            .font(.system(size: 12.5, weight: current ? .semibold : .regular))
+                            .foregroundStyle(current ? Color.inkText : Color.inkSecondary)
+                            .lineLimit(1)
                     }
                 }
-                .padding(.horizontal, 12)
+                .padding(.horizontal, shrunk ? 0 : 12)
                 // A width of its own, not one to be stretched: the bar's glass
                 // is fitted to what is in it, and must be told how much that is.
-                .frame(width: current ? (store.rivers.count > 1 ? 200 : 240) : 120, height: 28)
+                .frame(width: current ? widths.current : widths.other, height: 28)
                 // The bar's own glass is the pill. With one river nothing is
                 // drawn inside it; with several, the one shown is marked.
                 .background(Capsule().fill(Color.inkText.opacity(store.rivers.count > 1 && current ? 0.08 : (hovered == river.id ? 0.04 : 0))))
+                // Closing it is over its end while the pointer is on it:
+                // laid over, so that nothing in the tab moves to make room.
+                .overlay(alignment: .trailing) {
+                    if store.rivers.count > 1, hovered == river.id, !shrunk {
+                        Button { withAnimation(.snappy(duration: 0.2)) { store.closeRiver(at: index) } } label: {
+                            Image(systemName: "xmark").font(.system(size: 8, weight: .bold)).foregroundStyle(Color.inkSecondary)
+                                .frame(width: 18, height: 18)
+                                .background(Circle().fill(.regularMaterial))
+                                .contentShape(Circle())
+                        }
+                        .buttonStyle(.plain)
+                        .padding(.trailing, 5)
+                        .help("Close River")
+                    }
+                }
                 .contentShape(Capsule())
                 .onTapGesture {
                     if current { onFind() } else { withAnimation(.snappy(duration: 0.2)) { store.currentRiver = index } }
@@ -144,6 +185,7 @@ struct RiverBar: View {
                 .contextMenu {
                     Button(river.name == nil ? "Name and Save…" : "Rename…", systemImage: "character.cursor.ibeam") { styling = river.id }
                     Button("Icon and Colour…", systemImage: "paintpalette") { styling = river.id }
+                    Button(river.query == nil ? "Fill from a Query…" : "Edit River Query…", systemImage: "slider.horizontal.3") { store.queryAsk = .edit(river) }
                     if let name = river.name { Button("Delete Saved River", systemImage: "trash", role: .destructive) { store.deleteSaved(name) } }
                     Divider()
                     Button("Close River", systemImage: "xmark") { withAnimation(.snappy(duration: 0.2)) { store.closeRiver(at: index) } }
@@ -151,7 +193,7 @@ struct RiverBar: View {
                 .popover(isPresented: Binding(get: { styling == river.id }, set: { if !$0 { styling = nil } }), arrowEdge: .bottom) {
                     RiverLook(store: store, river: river)
                 }
-                .help(current ? "Find a page, or name a new one (⌘O) — or just start typing" : river.title)
+                .help(current ? "Find a note, or name a new one (⌘O) — or just start typing" : store.title(of: river))
             }
             Button { withAnimation(.snappy(duration: 0.2)) { store.newRiver() } } label: {
                 Image(systemName: "plus").font(.system(size: 10.5, weight: .semibold)).frame(width: 24, height: 24).contentShape(Rectangle())
@@ -165,6 +207,7 @@ struct RiverBar: View {
         .padding(.horizontal, 4)
         .fixedSize()
         .animation(.snappy(duration: 0.2), value: store.currentRiver)
+        .animation(.snappy(duration: 0.2), value: store.rivers.count)
     }
 }
 

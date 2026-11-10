@@ -28,9 +28,11 @@ public struct EmblemPicker: View {
     public var body: some View {
         VStack(alignment: .leading, spacing: 12) {
             // Colours: none, then each.
-            HStack(spacing: 7) {
-                swatch(nil)
-                ForEach(EmblemColor.allCases, id: \.self) { swatch($0) }
+            // Spread over the width there is, never wider than it: thirteen
+            // at a fixed gap would not fit, and would push everything aside.
+            HStack(spacing: 0) {
+                swatch(nil).frame(maxWidth: .infinity)
+                ForEach(EmblemColor.allCases, id: \.self) { swatch($0).frame(maxWidth: .infinity) }
             }
             HStack(spacing: 6) {
                 Image(systemName: "magnifyingglass").foregroundStyle(.secondary)
@@ -59,7 +61,7 @@ public struct EmblemPicker: View {
             .frame(height: 220)
         }
         .padding(14)
-        .frame(width: 8 * 32 + 7 * 6 + 32)
+        .frame(width: 8 * 32 + 7 * 6 + 4 + 28)
     }
 
     private func swatch(_ value: EmblemColor?) -> some View {

@@ -67,7 +67,7 @@ struct QuickOpen: View {
         VStack(spacing: 0) {
             HStack(spacing: 12) {
                 Image(systemName: "magnifyingglass").font(.system(size: 17, weight: .medium)).foregroundStyle(Color.inkSecondary)
-                TextField("Find a page, or name a new one", text: $typed)
+                TextField("Find a note, or name a new one", text: $typed)
                     .textFieldStyle(.plain)
                     .font(.system(size: 20))
                     .foregroundStyle(Color.inkText)
@@ -197,7 +197,7 @@ struct QuickOpen: View {
     // MARK: What it finds
 
     private func page(_ page: PageInfo, detail: String? = nil, snippet: String? = nil) -> Row {
-        Row(id: "page:\(page.path)\(snippet == nil ? "" : ":text")", symbol: symbol(forKind: page.kind), name: page.title, detail: detail ?? when(page), snippet: snippet, emblem: snippet == nil ? store.emblem(page) : nil) {
+        Row(id: "page:\(page.path)\(snippet == nil ? "" : ":text")", symbol: symbol(forKind: page.kind), name: page.label, detail: detail ?? when(page), snippet: snippet, emblem: snippet == nil ? store.emblem(page) : nil) {
             $0.open(page: page, after: $0.river.selected)
         }
     }
@@ -229,12 +229,12 @@ struct QuickOpen: View {
                 if !inbox.isEmpty { found.append(Section(id: "inbox", title: "Inbox", rows: inbox.map { page($0, detail: "Inbox") })) }
             case .tasks:
                 let pages = query("is: task\nsort: -modified").filter { ((try? store.engine.fields(path: $0.path)) ?? []).contains { $0.key == "task" && $0.values.first == "todo" } }
-                if !pages.isEmpty { found.append(Section(id: "todo", title: "To-Do Pages", rows: pages.map { page($0, detail: "To do") })) }
+                if !pages.isEmpty { found.append(Section(id: "todo", title: "To-Do Notes", rows: pages.map { page($0, detail: "To do") })) }
                 let tasks = (try? store.engine.openTasks()) ?? []
                 let rows = tasks.prefix(60).enumerated().map { index, task in
                     Row(id: "task:\(index)", symbol: "circle", name: inlinePlainText(text: task.text), detail: Self.pageName(task.path)) { store in
                         let title = ((try? store.engine.page(path: task.path)) ?? nil)?.title ?? task.path
-                        store.river.open(Card(path: task.path, title: title), after: store.river.selected)
+                        store.show(path: task.path, title: title, after: store.river.selected)
                         store.rememberRivers()
                     }
                 }
@@ -254,7 +254,7 @@ struct QuickOpen: View {
             top += pages.map { page($0) }
             let key = nameKey(name: name)
             if !pages.contains(where: { nameKey(name: $0.title) == key }), store.resolve(name)?.exists != true {
-                top.append(Row(id: "new", symbol: "plus", name: "New page “\(name)”", detail: "↩") { _ = $0.newPage(title: name) })
+                top.append(Row(id: "new", symbol: "plus", name: "New note “\(name)”", detail: "↩") { _ = $0.newPage(title: name) })
             }
             found.append(Section(id: "names", title: nil, rows: top))
             // The pages saying it, after the pages named it.
@@ -263,7 +263,7 @@ struct QuickOpen: View {
             if !hits.isEmpty {
                 found.append(Section(id: "text", title: "In Text", rows: hits.map { hit in
                     Row(id: "text:\(hit.path)", symbol: "text.magnifyingglass", name: hit.title, snippet: hit.snippet.replacingOccurrences(of: "\n", with: " ")) { store in
-                        store.river.open(Card(path: hit.path, title: hit.title), after: store.river.selected)
+                        store.show(path: hit.path, title: hit.title, after: store.river.selected)
                         store.rememberRivers()
                     }
                 }))

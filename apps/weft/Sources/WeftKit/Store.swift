@@ -1,6 +1,7 @@
 import Foundation
 import Observation
 import Prism
+import PrismEditor
 import PrismEmblem
 
 /// A graph, as the app holds it: the engine, and what of it is on screen.
@@ -23,6 +24,12 @@ public final class GraphStore {
     public private(set) var sync: SyncStatus = .idle
     /// The last thing a sync said, for the sidebar's foot.
     public private(set) var syncNote: String?
+    /// Whether the relay is being listened to: whether another device's
+    /// writing comes in as it is pushed, or at the next sync.
+    public enum RelayState: Equatable { case off, connecting, listening, waiting(String) }
+    public private(set) var relay: RelayState = .off
+    /// The last sync was turned away for want of a sign-in.
+    public private(set) var needsSignIn = false
     public private(set) var pageCount = 0
     public private(set) var conflicted: [PageInfo] = []
 
@@ -43,10 +50,15 @@ public final class GraphStore {
     /// The rivers saved in the graph, as the sidebar lists them.
     public private(set) var savedRivers: [SavedRiverInfo] = []
 
-    public init(root: URL, token: TokenProvider? = nil) throws {
+    /// How this app has the engine run.
+    public static var options: EngineOptions { EngineOptions(device: Host.deviceName, authorName: nil, authorEmail: nil, exclude: [], idleSeconds: nil, indexPath: nil) }
+
+    /// Opens the graph in a folder. With a `token`, it syncs as that
+    /// GitHub account; with a `relay` too, it listens there, and syncs
+    /// the moment another device pushes.
+    public init(root: URL, token: TokenProvider? = nil, relay host: String? = nil) throws {
         self.root = root
-        var options = EngineOptions(device: Host.deviceName, authorName: nil, authorEmail: nil, exclude: [], idleSeconds: nil, indexPath: nil)
-        options.device = Host.deviceName
+        let options = Self.options
         // A folder that is no repository yet becomes one: a graph can start anywhere.
         let isRepository = FileManager.default.fileExists(atPath: root.appendingPathComponent(".git").path)
         engine = isRepository ? try PrismEngine.open(root: root.path, options: options, token: token) : try PrismEngine.create(root: root.path, remoteUrl: nil, options: options, token: token)
@@ -57,6 +69,15 @@ public final class GraphStore {
         refreshCounts()
         restoreRivers()
         try? engine.watch()
+        // A graph kept on GitHub, signed in to: hear of each push to it.
+        if token != nil, let host, (try? engine.listen(relay: host)) != nil { relay = .connecting }
+    }
+
+    /// Lets go of the graph: before it is opened again, as another account.
+    public func close() {
+        saveAll()
+        engine.stopListening()
+        relay = .off
     }
 
     // MARK: - What the engine says
@@ -84,9 +105,15 @@ public final class GraphStore {
         case .syncFinished(let report):
             sync = engine.status()
             syncNote = report.summary
-        case .syncFailed(let message, _, _):
+            needsSignIn = false
+        case .syncFailed(let message, _, let needsSignIn):
             sync = engine.status()
             syncNote = message
+            self.needsSignIn = needsSignIn
+        case .relayConnected, .relayPush:
+            relay = .listening
+        case .relayDisconnected(let reason, _):
+            relay = .waiting(reason)
         default:
             break
         }
@@ -99,7 +126,14 @@ public final class GraphStore {
         colors = (try? engine.fieldValues(key: "color")) ?? colors
         savedRivers = engine.riverNames().map { name in
             let river = (try? engine.river(name: name)) ?? nil
-            return SavedRiverInfo(name: name, icon: river?.icon, color: river?.color, cards: river?.cards.count ?? 0)
+            var titles = (river?.cards.prefix(6).map(\.title)) ?? []
+            var count = river?.cards.count ?? 0
+            // A query river is shown by what it finds.
+            if let query = river?.query, let outcome = try? engine.runQuery(body: Self.limited(query, to: 6), this: nil) {
+                titles += outcome.pages.map(\.title).filter { !titles.contains($0) }
+                count = max(count, Int(outcome.total))
+            }
+            return SavedRiverInfo(name: name, icon: river?.icon, color: river?.color, cards: count, titles: Array(titles.prefix(6)), isQuery: river?.query != nil)
         }
     }
 
@@ -109,8 +143,79 @@ public final class GraphStore {
     /// letter of its title, in its colour. The rule is PrismEmblem's; all
     /// this adds is where a page's icon and colour are found.
     public func emblem(path: String, title: String) -> Emblem {
-        let kind: String? = path.hasPrefix("daily/") || path.hasPrefix("weekly/") ? "calendar" : (path.hasPrefix("rivers/") ? "square.stack" : nil)
-        return Emblem(title: title, icon: icons[path], color: colors[path], kindSymbol: kind)
+        // A river is shown by its own icon, or a letter of its name.
+        if let name = Self.riverName(path) { return savedRivers.first(where: { $0.name == name })?.emblem ?? Emblem(title: name) }
+        let kind: String? = path.hasPrefix("daily/") || path.hasPrefix("weekly/") ? "calendar" : nil
+        // A note is given no letter: with no icon of its own, it has none.
+        return Emblem(title: title, icon: icons[path], color: colors[path], kindSymbol: kind, letter: false)
+    }
+
+    /// What a note is shown as called: its title, or — never given one —
+    /// its first words, as the engine's index has them.
+    public func label(path: String, title: String) -> String {
+        if let open = drafts[path] { return open.label }
+        return ((try? engine.page(path: path)) ?? nil)?.label ?? title
+    }
+
+    /// The pages offered for a link being typed: those whose names match
+    /// what was typed, then those that say it, then a river or two — and,
+    /// when nothing is called just that, a new note of that name.
+    public func linkOffers(_ typed: String, this: String? = nil) -> [EditorOffer] {
+        let typed = typed.trimmingCharacters(in: .whitespaces)
+        func offer(_ page: PageInfo, detail: String? = nil, found: Bool = false) -> EditorOffer {
+            let symbol = found ? "text.magnifyingglass" : (emblem(page).symbol ?? "doc.text")
+            return EditorOffer(name: page.title, title: Self.shown(page), detail: detail, symbol: symbol)
+        }
+        // Nothing typed yet: what was written last.
+        guard !typed.isEmpty else {
+            return ((try? engine.runQuery(body: "sort: -modified\nlimit: 7", this: nil).pages) ?? []).filter { $0.path != this }.map { offer($0) }
+        }
+        var offers: [EditorOffer] = []
+        var seen = Set<String>()
+        if let this { seen.insert(this) }
+        for page in (try? engine.complete(typed: typed, limit: 6)) ?? [] where seen.insert(page.path).inserted { offers.append(offer(page)) }
+        for hit in (try? engine.search(typed: typed, limit: 8)) ?? [] where seen.insert(hit.path).inserted && offers.count < 7 {
+            guard let page = (try? engine.page(path: hit.path)) ?? nil else { continue }
+            offers.append(offer(page, detail: hit.snippet.replacingOccurrences(of: "\n", with: " "), found: true))
+        }
+        let key = nameKey(name: typed)
+        for river in savedRivers.filter({ nameKey(name: $0.name).contains(key) }).prefix(2) {
+            offers.append(EditorOffer(name: river.name, title: river.name, detail: "River", symbol: river.icon ?? "square.stack"))
+        }
+        if !leadsSomewhere(typed) { offers.append(EditorOffer(name: typed, title: "New note “\(typed)”", symbol: "plus")) }
+        return offers
+    }
+
+    /// What a page is shown as called in a list: a day by its date in full.
+    static func shown(_ page: PageInfo) -> String {
+        guard page.kind == "day" else { return page.label }
+        let read = DateFormatter()
+        read.locale = Locale(identifier: "en_US_POSIX")
+        read.dateFormat = "yyyy-MM-dd"
+        guard let day = read.date(from: page.title) else { return page.label }
+        return day.formatted(date: .complete, time: .omitted)
+    }
+
+    /// What a river is called on its tab: its name — or, having none,
+    /// what its first card is shown as called.
+    public func title(of river: River) -> String {
+        river.name ?? river.cards.first.map { label(path: $0.path, title: $0.title) } ?? "New River"
+    }
+
+    /// The river a file is, if it is one: `rivers/On Deck.md` is On Deck.
+    static func riverName(_ path: String) -> String? {
+        path.hasPrefix("rivers/") && path.hasSuffix(".md") ? String(path.dropFirst(7).dropLast(3)) : nil
+    }
+
+    /// The saved river a name leads to, when no note answers to it.
+    func riverNamed(_ name: String) -> String? {
+        let key = nameKey(name: name)
+        return savedRivers.first(where: { nameKey(name: $0.name) == key })?.name
+    }
+
+    /// Whether a link's name leads anywhere: to a note, or to a river.
+    public func leadsSomewhere(_ name: String) -> Bool {
+        resolve(name)?.exists == true || riverNamed(name) != nil
     }
 
     public func emblem(_ page: PageInfo) -> Emblem { emblem(path: page.path, title: page.title) }
@@ -160,8 +265,10 @@ public final class GraphStore {
 
     /// Opens the page a name leads to in the river, after a card if one is given.
     public func open(name: String, after card: Card.ID? = nil, in river: River? = nil) {
-        let river = river ?? self.river
         let target = resolve(name)
+        // A river's name leads to the river — never to the file it is kept in.
+        if target?.exists != true, let saved = riverNamed(name) { return openSaved(saved) }
+        let river = river ?? self.river
         let path = target?.path ?? engine.pathForTitle(title: name)
         let title = target.flatMap { $0.exists ? (try? engine.page(path: $0.path))??.title : nil } ?? name
         river.open(Card(path: path, title: title), after: card)
@@ -169,8 +276,33 @@ public final class GraphStore {
     }
 
     public func open(page: PageInfo, after card: Card.ID? = nil) {
-        river.open(Card(path: page.path, title: page.title), after: card)
+        show(path: page.path, title: page.title, after: card)
+    }
+
+    /// Shows what a path is: a note as a card in the river — and a river
+    /// as the river it is, never as the file it is kept in.
+    public func show(path: String, title: String, after card: Card.ID? = nil, in river: River? = nil) {
+        if let name = Self.riverName(path) { return openSaved(name) }
+        (river ?? self.river).open(Card(path: path, title: title), after: card)
         rememberRivers()
+    }
+
+    /// Makes a note with no title — it is called by its first words —
+    /// and opens it to be written in.
+    @discardableResult
+    public func newNote() -> Card? {
+        let format = DateFormatter()
+        format.locale = Locale(identifier: "en_US_POSIX")
+        format.dateFormat = "yyyy-MM-dd-HHmmss"
+        let tail = String((0..<4).map { _ in "abcdefghijklmnopqrstuvwxyz0123456789".randomElement() ?? "x" })
+        let name = "untitled-\(format.string(from: Date()))-\(tail)"
+        let path = "notes/\(name).md"
+        guard (try? engine.write(path: path, content: "")) != nil else { return nil }
+        let card = Card(path: path, title: name)
+        river.open(card, after: river.selected)
+        river.writing = card.id
+        rememberRivers()
+        return card
     }
 
     public func newRiver() {
@@ -192,11 +324,16 @@ public final class GraphStore {
         saved.folded = river.cards.filter(\.folded).map(\.title)
         saved.icon = river.icon
         saved.color = river.color
+        saved.query = river.query
+        if river.query != nil {
+            saved.hidden = river.hidden
+            saved.opened = river.opened.sorted()
+        }
         if (try? engine.saveRiver(name: name, river: saved)) == true { refreshSaved(name: name, river: river) }
     }
 
     private func refreshSaved(name: String, river: River) {
-        let info = SavedRiverInfo(name: name, icon: river.icon, color: river.color, cards: river.cards.count)
+        let info = SavedRiverInfo(name: name, icon: river.icon, color: river.color, cards: river.cards.count, titles: river.cards.prefix(6).map(\.title))
         if let index = savedRivers.firstIndex(where: { $0.name == name }) { savedRivers[index] = info } else {
             savedRivers.append(info)
             savedRivers.sort { $0.name.lowercased() < $1.name.lowercased() }
@@ -230,6 +367,9 @@ public final class GraphStore {
         river.name = name
         river.icon = saved.icon
         river.color = saved.color
+        river.query = saved.query
+        river.hidden = saved.hidden
+        river.opened = Set(saved.opened)
         river.cards = saved.cards.map { card in
             let target = resolve(card.title)
             var made = Card(path: target?.path ?? engine.pathForTitle(title: card.title), title: card.title)
@@ -243,6 +383,53 @@ public final class GraphStore {
         }
         rememberRivers()
     }
+
+    /// How many notes a query river shows when its query sets no limit.
+    static let foundLimit = 60
+
+    /// Runs a query river's query, and gives it what was found.
+    public func find(for river: River) {
+        guard let query = river.query else { return }
+        let outcome = try? engine.runQuery(body: Self.limited(query), this: nil)
+        river.take(found: (outcome?.pages ?? []).map { ($0.path, $0.title) }, total: Int(outcome?.total ?? 0))
+    }
+
+    static func limited(_ query: String, to limit: Int = foundLimit) -> String {
+        query.lowercased().contains("limit:") ? query : query + "\nlimit: \(limit)"
+    }
+
+    /// How many notes a query finds.
+    public func count(_ query: String) -> Int {
+        Int((try? engine.runQuery(body: query + "\nlimit: 1", this: nil))?.total ?? 0)
+    }
+
+    /// Makes a river of what a query finds, named and so saved, and shows it.
+    public func newQueryRiver(name: String, query: String, icon: String?, color: String?) {
+        let made = River()
+        made.name = name
+        made.query = query
+        made.icon = icon
+        made.color = color
+        if river.all.isEmpty, !river.isStyled, river.query == nil { rivers[currentRiver] = made } else {
+            rivers.append(made)
+            currentRiver = rivers.count - 1
+        }
+        rememberRivers()
+    }
+
+    /// What is asked of the query editor: a new river, or a river's own query.
+    public enum QueryAsk: Identifiable {
+        case new
+        case edit(River)
+        public var id: String {
+            switch self {
+            case .new: return "new"
+            case .edit(let river): return river.id.uuidString
+            }
+        }
+    }
+
+    public var queryAsk: QueryAsk?
 
     /// Takes a saved river out of the graph. A tab showing it stays, unsaved.
     public func deleteSaved(_ name: String) {
@@ -260,7 +447,7 @@ public final class GraphStore {
         rememberRivers()
     }
 
-    /// Makes a new page, and opens it to be written in.
+    /// Makes a new note of a title, and opens it to be written in.
     @discardableResult
     public func newPage(title: String) -> Card? {
         guard let path = try? engine.createNote(title: title) else { return nil }
@@ -324,6 +511,9 @@ public struct SavedRiverInfo: Hashable, Identifiable {
     public var icon: String?
     public var color: String?
     public var cards: Int
+    /// Its first few cards' titles: what a preview of it shows.
+    public var titles: [String] = []
+    public var isQuery = false
     public var id: String { name }
     public var emblem: Emblem { Emblem(title: name, icon: icon, color: color) }
 }
@@ -352,6 +542,20 @@ public final class River: Identifiable {
     public var icon: String?
     public var color: String?
     public var cards: [Card] = []
+    /// What it finds, for a query river: a query's body. Its cards are
+    /// then those held by hand (`cards`), and after them what the query
+    /// finds (`found`), each folded to a line until it is opened.
+    public var query: String?
+    /// Of what the query finds: the notes taken out of the river, and
+    /// those opened out of their line. By title.
+    public var hidden: [String] = []
+    public var opened: Set<String> = []
+    /// What the query found, as cards; and how many it found in all.
+    public private(set) var found: [Card] = []
+    public private(set) var foundTotal = 0
+    @ObservationIgnored private var foundIDs: [String: UUID] = [:]
+    /// Every card shown: those held, then those found.
+    public var all: [Card] { query == nil ? cards : cards + found }
     /// The card chosen: the one the keys go to.
     public var selected: Card.ID?
     /// The card with the caret in it.
@@ -367,9 +571,40 @@ public final class River: Identifiable {
         var cards: [Card]
         var icon: String?
         var color: String?
+        var query: String?
+        var hidden: [String]?
+        var opened: [String]?
     }
 
-    var kept: Kept { Kept(id: id, name: name, cards: cards, icon: icon, color: color) }
+    var kept: Kept { Kept(id: id, name: name, cards: cards, icon: icon, color: color, query: query, hidden: hidden, opened: Array(opened)) }
+
+    /// Takes what the query found: each a card, but for those held by
+    /// hand already and those taken out. A card keeps its identity from
+    /// one finding to the next, so that nothing jumps when the list is
+    /// found again.
+    func take(found pages: [(path: String, title: String)], total: Int) {
+        let held = Set(cards.map(\.path))
+        let out = Set(hidden)
+        found = pages.filter { !held.contains($0.path) && !out.contains($0.title) }.map { page in
+            var card = Card(path: page.path, title: page.title)
+            card.id = foundIDs[page.path] ?? card.id
+            foundIDs[page.path] = card.id
+            card.folded = !opened.contains(page.title)
+            return card
+        }
+        foundTotal = total
+    }
+
+    public func card(_ id: Card.ID) -> Card? { all.first { $0.id == id } }
+    public func isFound(_ id: Card.ID) -> Bool { found.contains { $0.id == id } }
+
+    /// Holds a found card by hand, at the head of the river: it stays
+    /// whatever the query comes to find.
+    public func hold(_ id: Card.ID) {
+        guard let index = found.firstIndex(where: { $0.id == id }) else { return }
+        let card = found.remove(at: index)
+        cards.append(card)
+    }
 
     /// What stands for it on its tab: its icon, or a letter of its name.
     public var emblem: Emblem { Emblem(title: title, icon: icon, color: color) }
@@ -382,16 +617,26 @@ public final class River: Identifiable {
         cards = kept.cards
         icon = kept.icon
         color = kept.color
+        query = kept.query
+        hidden = kept.hidden ?? []
+        opened = Set(kept.opened ?? [])
     }
 
     public var title: String {
-        name ?? cards.first?.title ?? "New River"
+        name ?? cards.first?.title ?? (query == nil ? "New River" : "Query")
     }
 
     /// Opens a card after another — or scrolls to it, if the page is open already.
     public func open(_ card: Card, after: Card.ID? = nil) {
         if let open = cards.first(where: { $0.path == card.path }) {
             reveal(open.id)
+            return
+        }
+        // Found by the query already: opened out of its line, where it stands.
+        if query != nil, let index = found.firstIndex(where: { $0.path == card.path }) {
+            opened.insert(found[index].title)
+            found[index].folded = false
+            reveal(found[index].id)
             return
         }
         if let after, let index = cards.firstIndex(where: { $0.id == after }) {
@@ -408,20 +653,35 @@ public final class River: Identifiable {
     }
 
     public func close(_ id: Card.ID) {
-        guard let index = cards.firstIndex(where: { $0.id == id }) else { return }
-        cards.remove(at: index)
+        let shown = all
+        guard let place = shown.firstIndex(where: { $0.id == id }) else { return }
+        if let index = cards.firstIndex(where: { $0.id == id }) {
+            cards.remove(at: index)
+        } else if let index = found.firstIndex(where: { $0.id == id }) {
+            // Taken out of what the query finds: kept out, until brought back.
+            hidden.append(found[index].title)
+            found.remove(at: index)
+        }
         if writing == id { writing = nil }
-        if selected == id { selected = cards.indices.contains(index) ? cards[index].id : cards.last?.id }
+        let left = all
+        if selected == id { selected = left.indices.contains(place) ? left[place].id : left.last?.id }
     }
 
     public func toggleFold(_ id: Card.ID) {
-        guard let index = cards.firstIndex(where: { $0.id == id }) else { return }
-        cards[index].folded.toggle()
-        if cards[index].folded, writing == id { writing = nil }
+        if let index = cards.firstIndex(where: { $0.id == id }) {
+            cards[index].folded.toggle()
+            if cards[index].folded, writing == id { writing = nil }
+        } else if let index = found.firstIndex(where: { $0.id == id }) {
+            found[index].folded.toggle()
+            if found[index].folded { opened.remove(found[index].title) } else { opened.insert(found[index].title) }
+            if found[index].folded, writing == id { writing = nil }
+        }
     }
 
     public func setAllFolded(_ folded: Bool) {
         for index in cards.indices { cards[index].folded = folded }
+        for index in found.indices { found[index].folded = folded }
+        opened = folded ? [] : Set(found.map(\.title))
         if folded { writing = nil }
     }
 
@@ -433,6 +693,7 @@ public final class River: Identifiable {
     }
 
     public func select(step: Int) {
+        let cards = all
         guard !cards.isEmpty else { return }
         let index = selected.flatMap { id in cards.firstIndex(where: { $0.id == id }) } ?? (step > 0 ? -1 : cards.count)
         let to = min(max(index + step, 0), cards.count - 1)
@@ -540,8 +801,35 @@ public final class PageDraft {
     /// The page's first words, for a card folded to its title.
     public var summary: String {
         _ = revision
-        let lines = editor.text().split(whereSeparator: { $0 == "\n" || $0 == "\u{2028}" }).prefix(3)
-        return lines.map { inlinePlainText(text: String($0)) }.joined(separator: "  ")
+        var lines = editor.text().split(whereSeparator: { $0 == "\n" || $0 == "\u{2028}" }).map { inlinePlainText(text: String($0)) }.filter { !$0.isEmpty }
+        // An untitled note is called by its first words: they are not said twice.
+        if isUntitled, !lines.isEmpty { lines.removeFirst() }
+        return lines.prefix(3).joined(separator: "  ")
+    }
+
+    /// The first picture in the note, if it has one on a line of its own:
+    /// what stands for it, small, when its card is folded.
+    public var firstPicture: EditorPicture? {
+        _ = revision
+        for line in editor.text().split(whereSeparator: { $0 == "\n" || $0 == "\u{2028}" }) where line.contains("![") {
+            // Past the marker a line of text has, which an outline's row has not.
+            let words = line.replacingOccurrences(of: #"^\s*([-*+]|\d+[.)])\s+(\[.\]\s+)?"#, with: "", options: .regularExpression)
+            if let picture = EditorPicture(line: words) { return picture }
+        }
+        return nil
+    }
+
+    /// Whether the note was never given a title: the engine's rule.
+    public var isUntitled: Bool {
+        _ = revision
+        return editor.isUntitled(path: path)
+    }
+
+    /// What the note is called where it is shown: its title, or — never
+    /// given one — its first words. The engine's rule.
+    public var label: String {
+        _ = revision
+        return editor.title() == nil && !isUntitled ? title : editor.label(path: path)
     }
 
     public var markdown: String { editor.markdown() }

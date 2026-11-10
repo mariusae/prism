@@ -20,7 +20,7 @@ public struct WeftMacApp: App {
         var opened: GraphStore?
         var failure: String?
         if let url = Self.rememberedGraph() {
-            do { opened = try GraphStore(root: url) } catch let error { failure = "\(error)" }
+            do { opened = try GraphStore(root: url, token: Account.shared.tokenProvider, relay: Setup.relayHost) } catch let error { failure = "\(error)" }
         }
         _store = State(initialValue: opened)
         _failure = State(initialValue: failure)
@@ -45,19 +45,27 @@ public struct WeftMacApp: App {
                 if let store {
                     ContentView(store: store, actions: actions)
                 } else {
-                    Welcome(failure: failure, open: choose)
+                    Welcome(failure: failure, open: choose, opened: { open($0) })
                 }
             }
             .frame(minWidth: 760, minHeight: 480)
+            .onReceive(NotificationCenter.default.publisher(for: .weftSignedIn)) { _ in reopen() }
             .onReceive(NotificationCenter.default.publisher(for: NSApplication.willResignActiveNotification)) { _ in store?.saveAll() }
             .onReceive(NotificationCenter.default.publisher(for: NSApplication.willTerminateNotification)) { _ in store?.saveAll() }
             .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in if Snapshot.path == nil { store?.engine.sync() } }
         }
         .defaultSize(width: 1240, height: 860)
         .commands {
+            CommandGroup(after: .toolbar) {
+                Button("Bigger Text") { TextSettings.size += 1 }.keyboardShortcut("+")
+                Button("Smaller Text") { TextSettings.size -= 1 }.keyboardShortcut("-")
+                Button("Actual Size") { TextSettings.size = TextSettings.defaultSize }.keyboardShortcut("0")
+                Divider()
+            }
             CommandGroup(replacing: .newItem) {
-                Button("New Page") { newPage() }.keyboardShortcut("n")
+                Button("New Note") { newPage() }.keyboardShortcut("n")
                 Button("New Tab") { store?.newRiver() }.keyboardShortcut("t")
+                Button("New Query River…") { store?.queryAsk = .new }.keyboardShortcut("t", modifiers: [.command, .option])
                 Button("Quick Open…") { actions.quickOpen += 1 }.keyboardShortcut("o")
                 Divider()
                 Button("Open Folder…") { choose() }.keyboardShortcut("o", modifiers: [.command, .shift])
@@ -65,6 +73,18 @@ public struct WeftMacApp: App {
                 Button("Close") { closeFront() }.keyboardShortcut("w")
                 Button("Close River") { closeTab() }.keyboardShortcut("w", modifiers: [.command, .option])
                 Button("Sync Now") { store?.syncNow() }.keyboardShortcut("r")
+                if Account.shared.isAvailable {
+                    Divider()
+                    if Account.shared.isSignedIn {
+                        Button("Sign Out of GitHub\(Account.shared.login.map { " (\($0))" } ?? "")") {
+                            Account.shared.signOut()
+                            reopen()
+                        }
+                        if let install = Account.shared.installURL { Button("Choose Repositories on GitHub…") { NSWorkspace.shared.open(install) } }
+                    } else {
+                        Button("Sign In to GitHub…") { Account.shared.signIn { reopen() } }
+                    }
+                }
             }
             CommandGroup(replacing: .sidebar) {
                 Button("Show or Hide the Sidebar") { actions.sidebar += 1 }.keyboardShortcut("s", modifiers: [.command, .control])
@@ -73,6 +93,7 @@ public struct WeftMacApp: App {
                 Button("Today") { today() }.keyboardShortcut("d", modifiers: [.command, .shift])
                 Button("Close All Cards") { closeAll() }.keyboardShortcut("w", modifiers: [.command, .shift])
                 Divider()
+                Button("Fold or Unfold Card") { toggleFold() }.keyboardShortcut(.return, modifiers: .control)
                 Button("Fold Card") { fold(true) }.keyboardShortcut(.upArrow, modifiers: [.command, .control])
                 Button("Unfold Card") { fold(false) }.keyboardShortcut(.downArrow, modifiers: [.command, .control])
                 Button("Fold All Cards") { store?.river.setAllFolded(true) }.keyboardShortcut(.upArrow, modifiers: [.command, .control, .option])
@@ -81,13 +102,15 @@ public struct WeftMacApp: App {
                 Button("Previous Card") { store?.river.select(step: -1) }.keyboardShortcut(.upArrow, modifiers: [.command, .option])
                 Button("Next Card") { store?.river.select(step: 1) }.keyboardShortcut(.downArrow, modifiers: [.command, .option])
                 Button("Write in Selected Card") { write() }.keyboardShortcut(.return, modifiers: [.command, .option])
-                Button("Delete Page") { deleteCard() }.keyboardShortcut(.delete, modifiers: [.command, .control])
+                Button("Delete Note") { deleteCard() }.keyboardShortcut(.delete, modifiers: .command)
             }
             CommandGroup(before: .windowList) {
                 Button("Show Previous Tab") { step(-1) }.keyboardShortcut("[", modifiers: [.command, .shift])
                 Button("Show Next Tab") { step(1) }.keyboardShortcut("]", modifiers: [.command, .shift])
             }
         }
+
+        Settings { SettingsView() }
     }
 
     private func choose() {
@@ -102,8 +125,9 @@ public struct WeftMacApp: App {
 
     private func open(_ url: URL) {
         do {
-            store?.saveAll()
-            let opened = try GraphStore(root: url)
+            store?.close()
+            store = nil
+            let opened = try GraphStore(root: url, token: Account.shared.tokenProvider, relay: Setup.relayHost)
             store = opened
             RiverKeys.install(store: opened, actions: actions)
             failure = nil
@@ -113,10 +137,13 @@ public struct WeftMacApp: App {
         }
     }
 
+    /// Opens the graph again: as the account just signed in to, or as none.
+    private func reopen() {
+        if let root = store?.root { open(root) }
+    }
+
     private func newPage() {
-        let format = DateFormatter()
-        format.dateFormat = "yyyy-MM-dd HH.mm.ss"
-        withAnimation(.snappy(duration: 0.28)) { _ = store?.newPage(title: "Untitled \(format.string(from: Date()))") }
+        withAnimation(.snappy(duration: 0.28)) { _ = store?.newNote() }
     }
 
     private func today() {
@@ -144,7 +171,7 @@ public struct WeftMacApp: App {
     }
 
     private func deleteCard() {
-        guard let store, let selected = store.river.selected, let card = store.river.cards.first(where: { $0.id == selected }) else { return }
+        guard let store, let selected = store.river.selected, let card = store.river.card(selected) else { return }
         store.draft(path: card.path, title: card.title).delete()
         withAnimation(.snappy(duration: 0.28)) { store.river.close(selected) }
         store.rememberRivers()
@@ -156,8 +183,16 @@ public struct WeftMacApp: App {
     }
 
     private func fold(_ folded: Bool) {
-        guard let river = store?.river, let selected = river.selected, let card = river.cards.first(where: { $0.id == selected }), card.folded != folded else { return }
+        guard let river = store?.river, let selected = river.selected, let card = river.card(selected), card.folded != folded else { return }
         withAnimation(.snappy(duration: 0.22)) { river.toggleFold(selected) }
+    }
+
+    /// Folds the card chosen — the one being written in, if one is — or unfolds it.
+    private func toggleFold() {
+        guard let store, let river = Optional(store.river), let chosen = river.writing ?? river.selected else { return }
+        river.selected = chosen
+        withAnimation(.snappy(duration: 0.22)) { river.toggleFold(chosen) }
+        store.rememberRivers()
     }
 
     private func write() {
@@ -189,8 +224,14 @@ enum RiverKeys {
 
     private static func handle(_ event: NSEvent) -> Bool {
         guard let store, let actions, let window = event.window, window.isKeyWindow, window.attachedSheet == nil else { return false }
-        // Keys typed into a field, or a card, are that field's.
-        if window.firstResponder is NSText { return false }
+        // Keys typed into a field, or a card, are that field's — ⌘⌫ too,
+        // which there takes the line back to its start, and is not left
+        // for the menu, where it deletes the note.
+        if let text = window.firstResponder as? NSText {
+            let isDelete = event.keyCode == 51 && event.modifierFlags.intersection([.command, .option, .control, .shift]) == .command
+            if isDelete { text.doCommand(by: #selector(NSResponder.deleteToBeginningOfLine(_:))) }
+            return isDelete
+        }
         let flags = event.modifierFlags.intersection([.command, .option, .control])
         let river = store.river
         if flags.isEmpty {
@@ -203,7 +244,7 @@ enum RiverKeys {
                 return true
             case .carriageReturn, .enter:
                 guard let selected = river.selected else { return false }
-                if river.cards.first(where: { $0.id == selected })?.folded == true { withAnimation(.snappy(duration: 0.22)) { river.toggleFold(selected) } }
+                if river.card(selected)?.folded == true { withAnimation(.snappy(duration: 0.22)) { river.toggleFold(selected) } }
                 river.writing = selected
                 return true
             default:
@@ -234,18 +275,173 @@ enum RiverKeys {
 struct Welcome: View {
     let failure: String?
     var open: () -> Void
+    /// Opens the graph cloned into a folder.
+    var opened: (URL) -> Void
+    private let account = Account.shared
+    @State private var repositories: [GitHubRepository]?
+    @State private var cloning: String?
+    @State private var progress: CloneProgress?
+    @State private var problem: String?
 
     var body: some View {
         VStack(spacing: 16) {
             Image(systemName: "square.stack.3d.up").font(.system(size: 44)).foregroundStyle(Color.inkAccent)
             Text("Weft").font(.system(size: 28, weight: .semibold))
             Text("A river of cards over your notes.").foregroundStyle(Color.inkSecondary)
-            Button("Use a Folder on This Mac…", action: open).controlSize(.large).keyboardShortcut(.defaultAction)
-            if let failure { Text(failure).font(.callout).foregroundStyle(.red).frame(maxWidth: 420) }
+            if account.isAvailable {
+                if account.isSignedIn { chooser } else {
+                    Button(account.isBusy ? "Signing In…" : "Sign In to GitHub…") { account.signIn { load() } }
+                        .controlSize(.large)
+                        .keyboardShortcut(.defaultAction)
+                        .disabled(account.isBusy)
+                    Text("Your notes are kept in a repository of yours, and synced through it.").font(.callout).foregroundStyle(Color.inkSecondary)
+                }
+                // Not while a graph is on its way down: one thing at a time.
+                if cloning == nil { Button("Use a Folder on This Mac…", action: open).buttonStyle(.link) }
+            } else {
+                Button("Use a Folder on This Mac…", action: open).controlSize(.large).keyboardShortcut(.defaultAction)
+            }
+            if let failure = problem ?? account.failure ?? failure { Text(failure).font(.callout).foregroundStyle(.red).frame(maxWidth: 420) }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(Color.inkPage)
         .foregroundStyle(Color.inkText)
+        .task { load() }
+        // Signed in from the menu, or out: the list follows.
+        .onChange(of: account.isSignedIn) { _, signedIn in if signedIn { load() } else { repositories = nil } }
+    }
+
+    /// Signed in: the repositories the GitHub App was let into, to choose the graph's from.
+    @ViewBuilder private var chooser: some View {
+        if let cloning {
+            VStack(spacing: 8) {
+                Text("Bringing down \(cloning)").font(.callout.weight(.medium))
+                // Until GitHub says how much there is, it is not known how far along this is.
+                if let progress {
+                    ProgressView(value: min(max(progress.fraction, 0), 1)).animation(.linear(duration: 0.15), value: progress.fraction)
+                } else {
+                    ProgressView().progressViewStyle(.linear)
+                }
+                Text(Self.says(progress)).font(.caption).monospacedDigit().foregroundStyle(Color.inkSecondary)
+            }
+            .frame(width: 300)
+        } else if let repositories {
+            if repositories.isEmpty {
+                Text("The GitHub App has not been let into any repository yet.").font(.callout).foregroundStyle(Color.inkSecondary)
+            } else {
+                Text("Choose the repository your notes are in.").font(.callout).foregroundStyle(Color.inkSecondary)
+                ScrollView {
+                    VStack(spacing: 2) {
+                        ForEach(repositories, id: \.fullName) { repository in
+                            Button { bringDown(repository) } label: {
+                                HStack(spacing: 8) {
+                                    Image(systemName: repository.isPrivate ? "lock" : "book.closed").foregroundStyle(Color.inkSecondary).frame(width: 18)
+                                    Text(repository.fullName)
+                                    Spacer()
+                                    if FileManager.default.fileExists(atPath: Self.folder(for: repository).appendingPathComponent(".git").path) {
+                                        Text("on this Mac").font(.caption).foregroundStyle(Color.inkSecondary)
+                                    }
+                                    Image(systemName: "chevron.right").font(.caption).foregroundStyle(Color.inkFaint)
+                                }
+                                .padding(.horizontal, 12)
+                                .frame(height: 34)
+                                .contentShape(Rectangle())
+                            }
+                            .buttonStyle(.plain)
+                        }
+                    }
+                    .padding(6)
+                }
+                .frame(width: 380)
+                .frame(maxHeight: 220)
+                .background(RoundedRectangle(cornerRadius: 12, style: .continuous).fill(Color.inkCard))
+                .overlay(RoundedRectangle(cornerRadius: 12, style: .continuous).strokeBorder(Color.inkRule))
+            }
+            HStack(spacing: 14) {
+                if let install = account.installURL { Button("Choose Repositories on GitHub…") { NSWorkspace.shared.open(install) }.buttonStyle(.link) }
+                Button("Refresh") { load() }.buttonStyle(.link)
+                Button("Sign Out") {
+                    account.signOut()
+                    self.repositories = nil
+                }
+                .buttonStyle(.link)
+            }
+            .font(.callout)
+        } else {
+            ProgressView().controlSize(.small)
+        }
+    }
+
+    /// A clone's progress, in words.
+    static func says(_ progress: CloneProgress?) -> String {
+        guard let progress else { return "Reaching GitHub…" }
+        switch progress.part {
+        case .receiving:
+            let size = ByteCountFormatter.string(fromByteCount: Int64(progress.bytes), countStyle: .file)
+            return "Receiving: \(progress.done.formatted()) of \(progress.total.formatted()) objects, \(size)"
+        case .resolving: return "Putting the history together…"
+        case .checkingOut:
+            return progress.done >= progress.total ? "Reading your notes…" : "Writing out \(progress.done.formatted()) of \(progress.total.formatted()) files"
+        }
+    }
+
+    private final class Watcher: CloneWatcher, @unchecked Sendable {
+        let heard: @MainActor (CloneProgress) -> Void
+        init(heard: @escaping @MainActor (CloneProgress) -> Void) { self.heard = heard }
+        func onProgress(progress: CloneProgress) {
+            Task { @MainActor in heard(progress) }
+        }
+    }
+
+    /// Where a repository's graph is kept on this Mac.
+    static func folder(for repository: GitHubRepository) -> URL {
+        let support = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
+        return support.appendingPathComponent("Weft/Graphs", isDirectory: true).appendingPathComponent(repository.fullName.replacingOccurrences(of: "/", with: "--"), isDirectory: true)
+    }
+
+    private func load() {
+        guard account.isSignedIn, let github = account.github else { return }
+        problem = nil
+        Task {
+            let found: Result<[GitHubRepository], Error> = await Task.detached { Result { try github.repositories() } }.value
+            switch found {
+            case .success(let repositories): self.repositories = repositories
+            case .failure(let error):
+                repositories = []
+                problem = "\(error)"
+            }
+        }
+    }
+
+    /// Clones the repository — or, if it is on this Mac already, opens it.
+    private func bringDown(_ repository: GitHubRepository) {
+        let folder = Self.folder(for: repository)
+        if FileManager.default.fileExists(atPath: folder.appendingPathComponent(".git").path) { return opened(folder) }
+        guard let token = account.tokenProvider else { return }
+        cloning = repository.fullName
+        progress = nil
+        problem = nil
+        let options = GraphStore.options
+        // Told on the cloning thread, shown on the main one — and never backwards.
+        let watcher = Watcher { now in if now.fraction >= (progress?.fraction ?? 0) { progress = now } }
+        Task {
+            let outcome: Result<Void, Error> = await Task.detached {
+                Result {
+                    try FileManager.default.createDirectory(at: folder.deletingLastPathComponent(), withIntermediateDirectories: true)
+                    // The engine that clones is let go; the store opens its own.
+                    _ = try PrismEngine.cloneRepository(url: repository.cloneUrl, root: folder.path, options: options, token: token, watcher: watcher)
+                }
+            }.value
+            cloning = nil
+            progress = nil
+            switch outcome {
+            case .success: opened(folder)
+            case .failure(let error):
+                problem = "\(error)"
+                // What came down of it is no graph: cleared, so that it can be tried again.
+                try? FileManager.default.removeItem(at: folder)
+            }
+        }
     }
 }
 #endif

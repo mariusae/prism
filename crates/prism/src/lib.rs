@@ -125,6 +125,9 @@ pub enum Error {
     Watch(String),
     #[error("the graph's remote is not a GitHub repository")]
     NotOnGitHub,
+    /// The relay was not reached, or turned the device away.
+    #[error("the sync relay: {0}")]
+    Relay(String),
     #[error("{context}: {source}")]
     Io {
         context: String,

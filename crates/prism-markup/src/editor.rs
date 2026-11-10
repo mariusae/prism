@@ -737,6 +737,9 @@ pub enum CompletionKind {
     Embed,
     /// `#typed`: a tag.
     Tag,
+    /// `@typed`: a page looked for, by its name or by what it says, to
+    /// link to. What is chosen is written as a link; the `@` goes.
+    Mention,
 }
 
 /// A name half-typed.
@@ -763,6 +766,19 @@ pub fn completion(body: &str, caret: usize) -> Option<Completion> {
             // A `]]` already after the caret is part of what is replaced.
             let end = caret + if body[caret..].starts_with("]]") { 2 } else { 0 };
             return Some(Completion { kind: if embed { CompletionKind::Embed } else { CompletionKind::Link }, typed: typed.to_owned(), range: start..end });
+        }
+    }
+    // A page looked for: `@` starting a word, then its words — spaces and
+    // all, for a name is often two — to the caret. Not in code.
+    if let Some(at) = before.rfind('@') {
+        let typed = &before[at + 1..];
+        let starts_word = before[..at].chars().next_back().is_none_or(|c| c.is_whitespace() || c == '(');
+        let is_words = typed.chars().count() <= 60
+            && !typed.starts_with(' ')
+            && !typed.contains("  ")
+            && typed.chars().all(|c| c.is_alphanumeric() || matches!(c, ' ' | '-' | '_' | '\'' | '’' | '.' | '/'));
+        if starts_word && is_words && before[..at].matches('`').count() % 2 == 0 {
+            return Some(Completion { kind: CompletionKind::Mention, typed: typed.to_owned(), range: line_start + at..caret });
         }
     }
     // A tag: `#` starting a word, then letters, to the caret.
@@ -798,6 +814,21 @@ mod tests {
         }
         result.insert(edit.selection.start, '|');
         Some(result)
+    }
+
+    #[test]
+    fn a_page_is_looked_for_after_an_at() {
+        let at = |text: &str| completion(text, text.len()).filter(|found| found.kind == CompletionKind::Mention).map(|found| (found.typed, found.range));
+        assert_eq!(at("see @"), Some((String::new(), 4..5)));
+        assert_eq!(at("see @acy watson"), Some(("acy watson".to_owned(), 4..15)));
+        assert_eq!(at("- (@Ada"), Some(("Ada".to_owned(), 3..7)));
+        // An address is no page looked for; nor is what is written in code, or after two spaces, or past a comma.
+        assert_eq!(at("mail ada@example"), None);
+        assert_eq!(at("`@decorator"), None);
+        assert_eq!(at("@ada  and"), None);
+        assert_eq!(at("@ada, and"), None);
+        // A link being written is a link being written.
+        assert_eq!(completion("@x [[Ad", 7).map(|found| found.kind), Some(CompletionKind::Link));
     }
 
     #[test]

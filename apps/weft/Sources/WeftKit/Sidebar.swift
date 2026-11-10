@@ -117,7 +117,7 @@ struct Sidebar: View {
     @ViewBuilder private var lensRows: some View {
         switch chosen {
         case .recent, .inbox, .wiki:
-            ForEach(pages, id: \.path) { page in titleRow(page.title, store.emblem(page)) { open(path: page.path, title: page.title) } }
+            ForEach(pages, id: \.path) { page in titleRow(page.label, store.emblem(page)) { open(path: page.path, title: page.title) } }
         case .rivers:
             ForEach(store.savedRivers) { saved in
                 titleRow(saved.name, saved.emblem, detail: "\(saved.cards)") { withAnimation(.snappy(duration: 0.2)) { store.openSaved(saved.name) } }
@@ -185,16 +185,30 @@ struct Sidebar: View {
 
     private func open(path: String, title: String?) {
         let title = title ?? ((try? store.engine.page(path: path)) ?? nil)?.title ?? path
-        withAnimation(.snappy(duration: 0.28)) { store.river.open(Card(path: path, title: title), after: store.river.selected) }
-        store.rememberRivers()
+        withAnimation(.snappy(duration: 0.28)) { store.show(path: path, title: title, after: store.river.selected) }
     }
 
     private var foot: some View {
         VStack(spacing: 0) {
             Divider().opacity(0.5)
             HStack {
-                Text("\(store.root.lastPathComponent) · \(store.pageCount) pages").font(.caption).foregroundStyle(Color.inkSecondary).lineLimit(1).truncationMode(.middle)
+                Text("\(store.root.lastPathComponent) · \(store.pageCount) notes").font(.caption).foregroundStyle(Color.inkSecondary).lineLimit(1).truncationMode(.middle)
                 Spacer()
+                if Account.shared.isAvailable, !Account.shared.isSignedIn || store.needsSignIn {
+                    Button(Account.shared.isBusy ? "Signing In…" : "Sign In") { Account.shared.signIn { NotificationCenter.default.post(name: .weftSignedIn, object: nil) } }
+                        .buttonStyle(.plain)
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(Color.inkAccent)
+                        .disabled(Account.shared.isBusy)
+                        .help(Account.shared.failure ?? "Sign in to GitHub, to sync this graph")
+                }
+                // Whether other devices' writing comes in as it is pushed.
+                switch store.relay {
+                case .off: EmptyView()
+                case .connecting: Circle().fill(Color.inkFaint).frame(width: 6, height: 6).help("Reaching the relay…")
+                case .listening: Circle().fill(.green.opacity(0.8)).frame(width: 6, height: 6).help("Live: other devices' changes come in as they are made")
+                case .waiting(let reason): Circle().fill(.orange.opacity(0.8)).frame(width: 6, height: 6).help("Not live just now (\(reason)); trying again. Changes still come in at each sync.")
+                }
                 Button { store.syncNow() } label: {
                     Image(systemName: "arrow.triangle.2.circlepath")
                         .rotationEffect(.degrees(store.isSyncing ? 360 : 0))
@@ -208,4 +222,9 @@ struct Sidebar: View {
             .padding(.vertical, 8)
         }
     }
+}
+
+extension Notification.Name {
+    /// The account was just signed in to: the graph is to be opened again as it.
+    static let weftSignedIn = Notification.Name("WeftSignedIn")
 }

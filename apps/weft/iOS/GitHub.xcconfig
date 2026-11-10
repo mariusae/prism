@@ -2,12 +2,12 @@
 // reflect-mac's iOS/GitHub.local.xcconfig, never committed. A
 // GitHub.local.xcconfig beside this file, if there is one, overrides them:
 //
-//     GITHUB_CLIENT_ID = Iv23li…
-//     GITHUB_CLIENT_SECRET = …
-//     GITHUB_APP_SLUG = the-app-name-in-its-url
-GITHUB_CLIENT_ID =
+//     GITHUB_CLIENT_ID =
 GITHUB_CLIENT_SECRET =
 GITHUB_APP_SLUG =
-SYNC_RELAY_HOST =
-#include? "../../reflect-mac/iOS/GitHub.local.xcconfig"
+#include? "../../../../reflect-mac/iOS/GitHub.local.xcconfig"
+// The sync relay: crates/prism-relay-worker, as deployed. No secret, so
+// it is said here; set after the include above, whose relay is the old
+// apps' own. A GitHub.local.xcconfig beside this file may name another.
+SYNC_RELAY_HOST = prism-relay.prism-notes.workers.dev
 #include? "GitHub.local.xcconfig"
