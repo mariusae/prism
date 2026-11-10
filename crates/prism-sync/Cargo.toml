@@ -1,0 +1,15 @@
+[package]
+name = "prism-sync"
+description = "A git sync engine: snapshot, commit, fetch, merge without ever stopping, push."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[dependencies]
+git2.workspace = true
+similar.workspace = true
+thiserror.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true

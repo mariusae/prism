@@ -1,0 +1,32 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/prism-markup",
+    "crates/prism-sync",
+    "crates/prism-index",
+    "crates/prism-github",
+    "crates/prism-relay",
+    "crates/prism",
+]
+# The Cloudflare binding builds for wasm32 only; see its README.
+exclude = ["crates/prism-relay-worker"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.82"
+license = "MIT"
+
+[workspace.dependencies]
+prism-markup = { path = "crates/prism-markup" }
+prism-sync = { path = "crates/prism-sync" }
+prism-index = { path = "crates/prism-index" }
+prism-github = { path = "crates/prism-github" }
+prism-relay = { path = "crates/prism-relay", default-features = false }
+git2 = { version = "0.20", default-features = false, features = ["https", "vendored-libgit2"] }
+rusqlite = { version = "0.32", features = ["bundled"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+thiserror = "2"
+similar = "2"
+tempfile = "3"

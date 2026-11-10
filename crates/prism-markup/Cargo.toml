@@ -1,0 +1,10 @@
+[package]
+name = "prism-markup"
+description = "Notes as data: frontmatter, a lossless block tree, inline spans, and the Markdown both are written in."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+# No dependencies, no I/O: this crate builds anywhere, wasm included.
+[dependencies]

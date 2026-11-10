@@ -1,0 +1,16 @@
+[package]
+name = "prism-index"
+description = "Indices over a graph, kept in step with a git tree by ingesting only what changed."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[dependencies]
+prism-markup.workspace = true
+prism-sync.workspace = true
+rusqlite.workspace = true
+thiserror.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true

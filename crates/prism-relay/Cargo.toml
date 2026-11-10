@@ -1,0 +1,21 @@
+[package]
+name = "prism-relay"
+description = "The sync relay: GitHub says a repository was pushed to; its devices are told at once."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[features]
+default = ["client"]
+# The device's side: a WebSocket listener that reconnects. Native only.
+client = ["dep:tungstenite"]
+
+[dependencies]
+prism-github.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+sha2 = "0.10"
+p256 = { version = "0.13", default-features = false, features = ["ecdsa", "pkcs8", "pem", "std"] }
+tungstenite = { version = "0.24", optional = true, features = ["rustls-tls-webpki-roots"] }

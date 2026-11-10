@@ -1,0 +1,19 @@
+[package]
+name = "prism-github"
+description = "GitHub for a sync engine: signing in, finding repositories, and reading webhooks. No I/O of its own."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[features]
+# A blocking `HttpClient` over ureq, for native apps.
+ureq = ["dep:ureq"]
+
+[dependencies]
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+hmac = "0.12"
+sha2 = "0.10"
+ureq = { version = "2", optional = true }

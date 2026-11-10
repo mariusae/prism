@@ -1,0 +1,30 @@
+# The sync relay: GitHub tells it of each push to a graph's repository; it
+# tells the devices that keep that graph — iPhones by a silent push, Macs
+# over a WebSocket they hold open — so each syncs at once.
+name = "prism-relay"
+main = "build/worker/shim.mjs"
+compatibility_date = "2026-09-01"
+
+[build]
+command = "cargo install -q worker-build && worker-build --release"
+
+# One hub per repository: its iPhones' push tokens, and the Macs listening.
+[[durable_objects.bindings]]
+name = "HUBS"
+class_name = "RepoHub"
+
+[[migrations]]
+tag = "v1"
+new_sqlite_classes = ["RepoHub"]
+
+[vars]
+# The apps an iPhone may register for: their bundle identifiers, the
+# topics APNs pushes to. Comma-separated.
+APNS_TOPICS = "org.mutable.prism,org.mutable.weft"
+
+# Secrets, set with `npx wrangler secret put <NAME>` (see README.md):
+#   GITHUB_WEBHOOK_SECRET  the GitHub App's webhook secret
+#   APNS_KEY               the .p8 key's contents, PEM and all
+#   APNS_KEY_ID            the key's ID
+#   APNS_TEAM_ID           the Apple Developer team's ID
+# Without the three APNS secrets the relay still tells listening Macs.

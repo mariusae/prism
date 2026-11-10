@@ -1,0 +1,25 @@
+[package]
+name = "prism"
+description = "The engine under Prism and Weft: a graph of notes kept in git, synced, indexed and watched."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[features]
+default = ["relay"]
+# Listening to a sync relay for pushes from other devices.
+relay = ["dep:prism-relay"]
+
+[dependencies]
+prism-markup.workspace = true
+prism-sync.workspace = true
+prism-index.workspace = true
+prism-github = { workspace = true, features = ["ureq"] }
+prism-relay = { workspace = true, features = ["client"], optional = true }
+thiserror.workspace = true
+unicode-normalization = "0.1"
+
+[dev-dependencies]
+tempfile.workspace = true
+tungstenite = "0.24"
