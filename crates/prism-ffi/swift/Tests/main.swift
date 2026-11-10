@@ -2,6 +2,9 @@
 // app does, end to end. Run by crates/prism-ffi/build-swift.sh.
 
 import Foundation
+#if canImport(Prism)
+import Prism
+#endif
 
 var checks = 0
 func expect(_ condition: @autoclosure () throws -> Bool, _ what: String, line: UInt = #line) {
@@ -34,11 +37,19 @@ let root = FileManager.default.temporaryDirectory.appendingPathComponent("prism-
 defer { try? FileManager.default.removeItem(at: root) }
 let graph = root.appendingPathComponent("graph").path
 let remote = root.appendingPathComponent("remote.git").path
-try FileManager.default.createDirectory(atPath: remote, withIntermediateDirectories: true)
-let git = Process()
-git.executableURL = URL(fileURLWithPath: "/usr/bin/git")
-git.arguments = ["init", "--bare", "-q", "--initial-branch=main", remote]
-try git.run(); git.waitUntilExit()
+try createBareRepository(path: remote, branch: "main")
+
+// --- A note open in an editor: the note is the engine's, the view only shows it
+
+let open = NoteEditor.open(source: "# Atlas\n\n- one\n- two\n", mode: .outline)
+expect(open.text() == "one\ntwo" && open.title() == "Atlas" && !open.layout().markersInText, "an outline shows a row a block, and only its words")
+_ = open.replace(start: 3, end: 3, replacement: "!")
+let indented = open.perform(selectionStart: 6, selectionEnd: 6, command: .indent)
+expect(indented != nil && open.markdown() == "# Atlas\n\n- one!\n  - two\n", "typing and Tab change the note's tree")
+_ = open.undo()
+expect(open.markdown() == "# Atlas\n\n- one!\n- two\n" && open.canRedo(), "undo puts structure back")
+open.setMode(mode: .text)
+expect(open.text() == "- one!\n- two\n" && open.layout().markersInText, "the same note as text is its Markdown")
 
 // --- A document, edited ------------------------------------------------------
 

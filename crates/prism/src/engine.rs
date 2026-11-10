@@ -162,6 +162,7 @@ pub struct Engine {
     shared: Arc<Shared>,
     stop: StopHandle,
     index_path: PathBuf,
+    local: crate::Local,
     auth: Auth,
     remote_url: Option<String>,
     threads: Vec<std::thread::JoinHandle<()>>,
@@ -203,6 +204,7 @@ impl Engine {
         let repo = Repository::open(root.as_ref())?;
         let index_path = config.index_path.clone().unwrap_or_else(|| repo.git_dir().join("prism").join("index.sqlite"));
         let indexer = Indexer::open(&index_path, prism_index::standard())?;
+        let local = crate::Local::open(index_path.with_file_name("local.sqlite"))?;
         let remote_url = repo.remote_url(&config.sync.remote);
         let stop = StopHandle::default();
         // The indexing thread's own handle; it leaves git's index to the sync.
@@ -241,6 +243,7 @@ impl Engine {
             shared,
             stop,
             index_path,
+            local,
             auth: config.auth,
             remote_url,
             threads,
@@ -512,6 +515,13 @@ impl Engine {
     /// must rewrite a private page's links too.
     fn everything(&self) -> Result<prism_index::rusqlite::Connection> {
         self.index_showing_private()
+    }
+
+    /// What this device alone keeps about the graph — which rivers are
+    /// open, how they are folded: never committed, never synced. See
+    /// [`Local`](crate::Local).
+    pub fn local(&self) -> &crate::Local {
+        &self.local
     }
 
     /// Where the graph's remote is.

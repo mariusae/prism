@@ -33,10 +33,14 @@
 //! [UniFFI]: https://mozilla.github.io/uniffi-rs/
 
 mod document;
+mod editing;
 mod engine;
+mod github;
 
 pub use document::*;
+pub use editing::*;
 pub use engine::*;
+pub use github::*;
 
 uniffi::setup_scaffolding!();
 
@@ -87,6 +91,13 @@ impl From<uniffi::UnexpectedUniFFICallbackError> for PrismError {
     fn from(error: uniffi::UnexpectedUniFFICallbackError) -> Self {
         PrismError::Failed(error.reason)
     }
+}
+
+/// Makes a bare repository — one with no working tree, to be pushed to:
+/// a remote on a disk, or a test's stand-in for GitHub.
+#[uniffi::export]
+pub fn create_bare_repository(path: String, branch: String) -> Result<(), PrismError> {
+    prism::sync::Repository::init_bare(&path, &branch).map_err(|error| PrismError::Failed(error.to_string()))
 }
 
 /// A title as a file's name: `Project Atlas` → `project-atlas`.

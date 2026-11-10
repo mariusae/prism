@@ -782,6 +782,24 @@ impl PrismEngine {
 
     // --- Rivers ------------------------------------------------------------
 
+    // --- This device's own ---------------------------------------------------
+
+    /// A value this device keeps about the graph, by name: which rivers
+    /// are open, how they are folded. Never committed, never synced.
+    pub fn local_value(&self, name: String) -> Result<Option<String>> {
+        Ok(self.engine.local().get(&name)?)
+    }
+
+    /// Keeps a value under a name; `nil` forgets it.
+    pub fn set_local_value(&self, name: String, value: Option<String>) -> Result<()> {
+        Ok(self.engine.local().set(&name, value.as_deref())?)
+    }
+
+    /// The names kept that start with a prefix, sorted.
+    pub fn local_names(&self, prefix: String) -> Result<Vec<String>> {
+        Ok(self.engine.local().names(&prefix)?)
+    }
+
     /// The graph's saved rivers, by name.
     pub fn river_names(&self) -> Vec<String> {
         self.engine.graph().river_names()

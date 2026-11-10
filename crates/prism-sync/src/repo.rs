@@ -749,8 +749,23 @@ impl Repository {
     pub fn fetch(&self, remote: &str, auth: &Auth) -> Result<()> {
         let mut options = git2::FetchOptions::new();
         options.remote_callbacks(auth.callbacks()).prune(git2::FetchPrune::On).download_tags(git2::AutotagOption::None);
-        let mut remote = self.git.find_remote(remote)?;
-        remote.fetch(&[] as &[&str], Some(&mut options), None).map_err(|e| auth.explain(e, Error::Fetch))
+        let (mut git_remote, elsewhere) = self.remote_as(remote, auth)?;
+        // Asked at another address, the remote has no refspecs of its own.
+        let refspec = format!("+refs/heads/*:refs/remotes/{remote}/*");
+        let refspecs: &[&str] = if elsewhere { &[&refspec] } else { &[] };
+        git_remote.fetch(refspecs, Some(&mut options), None).map_err(|e| auth.explain(e, Error::Fetch))
+    }
+
+    /// A remote, to fetch from or push to: the one configured — or, where
+    /// the way of proving who is asking needs another address
+    /// ([`https_for`](crate::auth::https_for)), that address, the
+    /// configuration left as it is. Says which.
+    fn remote_as(&self, name: &str, auth: &Auth) -> Result<(git2::Remote<'_>, bool)> {
+        let configured = self.git.find_remote(name)?;
+        match configured.url().and_then(|url| auth.address_for(url)) {
+            Some(address) => Ok((self.git.remote_anonymous(&address)?, true)),
+            None => Ok((configured, false)),
+        }
     }
 
     /// Pushes a branch to the same branch on a remote. Never forces: a
@@ -767,7 +782,7 @@ impl Repository {
         let mut options = git2::PushOptions::new();
         options.remote_callbacks(callbacks);
         let refspec = format!("refs/heads/{branch}:refs/heads/{branch}");
-        let mut git_remote = self.git.find_remote(remote)?;
+        let (mut git_remote, _) = self.remote_as(remote, auth)?;
         let result = git_remote.push(&[&refspec], Some(&mut options));
         drop(options);
         let is_behind = |message: &str| {

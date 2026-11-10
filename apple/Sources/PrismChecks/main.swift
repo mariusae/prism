@@ -1,0 +1,1 @@
+../../../crates/prism-ffi/swift/Tests/main.swift

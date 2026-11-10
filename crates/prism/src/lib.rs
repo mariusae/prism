@@ -78,11 +78,13 @@
 mod commit_message;
 mod engine;
 mod graph;
+mod local;
 mod note_merge;
 
 pub use commit_message::NoteDescriber;
 pub use engine::{Engine, EngineConfig, Event, Status, SyncFailure};
 pub use graph::{slug, Graph, Renamed, Saved};
+pub use local::Local;
 pub use note_merge::{merge_notes, NoteMergeDriver};
 
 /// Notes as data: frontmatter, the block tree, inline spans.

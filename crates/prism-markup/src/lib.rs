@@ -29,6 +29,10 @@
 //! - [`Frontmatter`] reads and edits the header.
 //! - [`table`] and [`query`] read the two block kinds with structure of
 //!   their own.
+//! - [`session`] is a note open for writing: what an editor holds. The
+//!   editor's text view shows a projection of the tree — as an outline, or
+//!   as Markdown — and every change in it is a change to the tree.
+//!   [`editor`] is the reading of lines and runs under it.
 //! - [`fields`] reads the typed fields a tag gives its pages, and
 //!   [`river`] a saved river's file.
 //!
@@ -76,6 +80,7 @@
 
 pub mod block;
 pub mod date;
+pub mod editor;
 pub mod fields;
 pub mod frontmatter;
 pub mod inline;
@@ -83,6 +88,7 @@ pub mod note;
 pub mod outline;
 pub mod query;
 pub mod river;
+pub mod session;
 pub mod table;
 
 pub use block::{Block, BlockKind, Callout, Code, Document, Item, Layout, LineEnding, Marker, Row, Task};
@@ -93,4 +99,5 @@ pub use inline::{Span, SpanKind, Style};
 pub use note::{name_key, ImageRef, LinkKind, Meta, Note, NoteKind, NoteLink, References, TaskRef, WebLink};
 pub use query::{Clause, Query};
 pub use river::River;
+pub use session::{Mode, Session};
 pub use table::Table;

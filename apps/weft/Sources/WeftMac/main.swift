@@ -1,0 +1,2 @@
+import WeftKit
+WeftMacApp.main()

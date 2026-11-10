@@ -1,0 +1,46 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>CFBundleURLTypes</key>
+	<array>
+		<dict>
+			<key>CFBundleURLName</key>
+			<string>com.mariusae.weft.river</string>
+			<key>CFBundleURLSchemes</key>
+			<array>
+				<string>weft</string>
+			</array>
+		</dict>
+	</array>
+	<key>GitHubAppSlug</key>
+	<string>$(GITHUB_APP_SLUG)</string>
+	<key>GitHubClientID</key>
+	<string>$(GITHUB_CLIENT_ID)</string>
+	<key>GitHubClientSecret</key>
+	<string>$(GITHUB_CLIENT_SECRET)</string>
+	<key>NSMicrophoneUsageDescription</key>
+	<string>To hear what you say while dictating into a card.</string>
+	<key>NSSpeechRecognitionUsageDescription</key>
+	<string>To write down what you say while dictating into a card.</string>
+	<key>SyncRelayHost</key>
+	<string>$(SYNC_RELAY_HOST)</string>
+	<key>UIBackgroundModes</key>
+	<array>
+		<string>remote-notification</string>
+	</array>
+	<key>UTExportedTypeDeclarations</key>
+	<array>
+		<dict>
+			<key>UTTypeConformsTo</key>
+			<array>
+				<string>public.data</string>
+			</array>
+			<key>UTTypeDescription</key>
+			<string>Weft Card</string>
+			<key>UTTypeIdentifier</key>
+			<string>com.mariusae.weft.card</string>
+		</dict>
+	</array>
+</dict>
+</plist>

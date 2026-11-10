@@ -61,7 +61,7 @@ pub mod schedule;
 pub mod sync;
 pub mod textmerge;
 
-pub use auth::{Auth, TokenSource};
+pub use auth::{https_for, Auth, TokenSource};
 pub use error::{Error, Result};
 pub use merge::{FileMerge, MergeDriver, TreeMerge};
 pub use repo::{Applied, Change, ChangeKind, CommitNode, CommitSummary, Entry, Identity, Oid, PushOutcome, Repository, Snapshot, SnapshotOptions};

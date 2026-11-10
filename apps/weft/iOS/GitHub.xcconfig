@@ -1,0 +1,13 @@
+// The GitHub App the phone signs in with: Prism's, whose details are kept in
+// reflect-mac's iOS/GitHub.local.xcconfig, never committed. A
+// GitHub.local.xcconfig beside this file, if there is one, overrides them:
+//
+//     GITHUB_CLIENT_ID = Iv23li…
+//     GITHUB_CLIENT_SECRET = …
+//     GITHUB_APP_SLUG = the-app-name-in-its-url
+GITHUB_CLIENT_ID =
+GITHUB_CLIENT_SECRET =
+GITHUB_APP_SLUG =
+SYNC_RELAY_HOST =
+#include? "../../reflect-mac/iOS/GitHub.local.xcconfig"
+#include? "GitHub.local.xcconfig"

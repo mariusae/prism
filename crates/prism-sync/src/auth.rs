@@ -29,6 +29,35 @@ impl<F: Fn() -> Result<String, String> + Send + Sync> TokenSource for F {
     }
 }
 
+/// The HTTPS address of a remote written for SSH: `git@github.com:o/r.git`
+/// and `ssh://git@github.com/o/r.git` are `https://github.com/o/r.git`.
+/// `None` for an address that is not SSH's.
+///
+/// A token is a thing given over HTTPS. A checkout made at a terminal
+/// commonly names its remote the SSH way, with the keys kept by an agent
+/// an app cannot reach — a phone has none at all. So where a token is
+/// what there is, such a remote is asked at the same host over HTTPS, and
+/// its configuration is left as it was.
+pub fn https_for(url: &str) -> Option<String> {
+    let (host, path) = match url.strip_prefix("ssh://") {
+        Some(rest) => {
+            let (authority, path) = rest.split_once('/')?;
+            let host = authority.rsplit_once('@').map_or(authority, |(_, host)| host);
+            (host.split_once(':').map_or(host, |(host, _port)| host), path)
+        }
+        None => {
+            // `user@host:path`, as scp writes it: no scheme, and no slash before the colon.
+            let (authority, path) = url.split_once(':')?;
+            let (_, host) = authority.split_once('@')?;
+            if authority.contains('/') || path.starts_with("//") {
+                return None;
+            }
+            (host, path)
+        }
+    };
+    (!host.is_empty() && !path.is_empty()).then(|| format!("https://{host}/{}", path.trim_start_matches('/')))
+}
+
 /// How a remote is told who is syncing.
 #[derive(Clone, Default)]
 pub enum Auth {
@@ -49,6 +78,15 @@ impl Auth {
     /// A source asked each time.
     pub fn source(source: impl TokenSource + 'static) -> Auth {
         Auth::Token(Arc::new(source))
+    }
+
+    /// The address to ask a remote at, when it is not the one it is
+    /// configured with: with a token, an SSH remote's HTTPS address.
+    pub(crate) fn address_for(&self, configured: &str) -> Option<String> {
+        match self {
+            Auth::Token(_) => https_for(configured),
+            Auth::Default => None,
+        }
     }
 
     /// The token a remote would be given now; `None` when there is none
@@ -91,5 +129,31 @@ impl Auth {
         } else {
             otherwise(message)
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn an_ssh_remote_has_an_https_address() {
+        assert_eq!(https_for("git@github.com:ada/notes.git").as_deref(), Some("https://github.com/ada/notes.git"));
+        assert_eq!(https_for("ssh://git@github.com/ada/notes.git").as_deref(), Some("https://github.com/ada/notes.git"));
+        assert_eq!(https_for("ssh://git@git.example.com:2222/team/graph").as_deref(), Some("https://git.example.com/team/graph"));
+        for other in [
+            "https://github.com/ada/notes.git",
+            "/Users/ada/remote.git",
+            "../remote.git",
+            "file:///tmp/remote.git",
+            "C:/remote",
+            "http://x/y",
+            "git@github.com:",
+        ] {
+            assert_eq!(https_for(other), None, "{other}");
+        }
+        // Only where a token is what there is.
+        assert_eq!(Auth::token("t").address_for("git@github.com:a/b.git").as_deref(), Some("https://github.com/a/b.git"));
+        assert_eq!(Auth::Default.address_for("git@github.com:a/b.git"), None);
     }
 }
