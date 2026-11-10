@@ -342,7 +342,7 @@ impl Syncer {
     /// Commits the working tree if it differs from HEAD. Says whether it did.
     fn commit_all(&self, report: &mut Report) -> Result<bool> {
         self.branch()?;
-        let options = SnapshotOptions { max_file_bytes: Some(self.config.max_file_bytes), exclude: self.config.exclude.clone() };
+        let options = SnapshotOptions { max_file_bytes: Some(self.config.max_file_bytes), exclude: self.config.exclude.clone(), leave_index: false };
         let snapshot = self.repo.snapshot(&options)?;
         report.skipped_large_files = snapshot.skipped;
         let head_tree = self.repo.head_tree()?;

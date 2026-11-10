@@ -94,26 +94,44 @@ pub struct TableCells {
 #[derive(Debug, Clone, PartialEq, Eq, uniffi::Record)]
 pub struct NoteMeta {
     pub title: String,
-    pub id: Option<String>,
     pub aliases: Vec<String>,
     /// Frontmatter's tags, then the body's inline ones, each once.
     pub tags: Vec<String>,
-    /// Seconds since the Unix epoch.
-    pub created: Option<i64>,
-    pub modified: Option<i64>,
     pub is_private: bool,
-    pub is_wiki: bool,
-    /// Every name the note answers to: title, aliases, a title's parts.
+    /// Every name the note answers to: its title, then its aliases.
     pub names: Vec<String>,
 }
 
-/// A link from the note to another page.
+/// How one note points at another.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, uniffi::Enum)]
+pub enum LinkKind {
+    /// `[[target]]`, or a name in the frontmatter.
+    Link,
+    /// `![[target]]`: the page shown in place.
+    Embed,
+    /// `#target`, or an item of the frontmatter's `tags`.
+    Tag,
+}
+
+impl From<prism::markup::LinkKind> for LinkKind {
+    fn from(kind: prism::markup::LinkKind) -> LinkKind {
+        match kind {
+            prism::markup::LinkKind::Link => LinkKind::Link,
+            prism::markup::LinkKind::Embed => LinkKind::Embed,
+            prism::markup::LinkKind::Tag => LinkKind::Tag,
+        }
+    }
+}
+
+/// The note pointing at another page: by link, embed or tag.
 #[derive(Debug, Clone, PartialEq, Eq, uniffi::Record)]
 pub struct LinkReference {
     pub target: String,
     pub label: Option<String>,
-    pub is_embed: bool,
-    /// The row it is in; empty for one in the frontmatter's `related`.
+    pub kind: LinkKind,
+    /// The frontmatter key it is written under; `nil` for one in the body.
+    pub field: Option<String>,
+    /// The row it is in; empty for one in the frontmatter.
     pub row: Vec<u32>,
 }
 
@@ -140,7 +158,6 @@ pub struct TaskReference {
 pub struct NoteReferences {
     pub links: Vec<LinkReference>,
     pub web_links: Vec<String>,
-    pub tags: Vec<String>,
     pub images: Vec<ImageReference>,
     pub tasks: Vec<TaskReference>,
 }
@@ -272,32 +289,25 @@ impl NoteDocument {
         self.lock().title(&path)
     }
 
-    /// Retitles the note where its title is written.
+    /// Retitles the note: its first heading, made if it has none.
     pub fn set_title(&self, title: String) {
         self.lock().set_title(&title);
     }
 
     pub fn meta(&self, path: String) -> NoteMeta {
         let meta = self.lock().meta(&path);
-        NoteMeta {
-            names: meta.names(),
-            title: meta.title,
-            id: meta.id,
-            aliases: meta.aliases,
-            tags: meta.tags,
-            created: meta.created.map(|t| t.0),
-            modified: meta.modified.map(|t| t.0),
-            is_private: meta.private,
-            is_wiki: meta.wiki,
-        }
+        NoteMeta { names: meta.names(), title: meta.title, aliases: meta.aliases, tags: meta.tags, is_private: meta.private }
     }
 
     pub fn references(&self) -> NoteReferences {
         let found = self.lock().references();
         NoteReferences {
-            links: found.links.into_iter().map(|l| LinkReference { target: l.target, label: l.label, is_embed: l.embed, row: from_path(l.block) }).collect(),
+            links: found
+                .links
+                .into_iter()
+                .map(|l| LinkReference { target: l.target, label: l.label, kind: l.kind.into(), field: l.field, row: from_path(l.block) })
+                .collect(),
             web_links: found.web_links.into_iter().map(|l| l.url).collect(),
-            tags: found.tags,
             images: found
                 .images
                 .into_iter()

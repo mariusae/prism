@@ -381,3 +381,214 @@ fn a_watched_graph_notices_what_is_written_around_the_engine() {
     std::thread::sleep(Duration::from_millis(600));
     assert!(events.try_iter().all(|event| !matches!(event, Event::SyncStarted(_))));
 }
+
+#[test]
+fn every_way_a_page_is_pointed_at_follows_its_names() {
+    let world = World::new();
+    let a = world.first("a", Schedule::default());
+    a.write("notes/person.md", "---\naliases:\n  - Human\n  - Somebody\n---\n# Person\n").unwrap();
+    a.write("notes/ada.md", "---\ntags: [Person]\n---\n# Ada\n\nA #person, a [[human]], [[Somebody|someone]].\n").unwrap();
+    a.write("notes/secret.md", "---\nprivate: true\nrelated:\n  - Person\n---\n# Secret\n").unwrap();
+    a.write("rivers/People.md", "---\nfolded:\n  - Person\n---\n- [[Person]]\n- [[Ada]]\n\n```query\ntag: Person\n```\n").unwrap();
+
+    // An alias changed: links written with it follow. One taken away: its links name the title.
+    let renamed = a.rename_alias("notes/person.md", "human", "Mortal").unwrap();
+    assert_eq!((renamed.old_title.as_str(), renamed.new_title.as_str()), ("human", "Mortal"));
+    assert_eq!(renamed.rewritten, ["notes/person.md", "notes/ada.md"]);
+    a.remove_alias("notes/person.md", "somebody").unwrap();
+    assert_eq!(a.graph().read("notes/person.md").unwrap().unwrap(), "---\naliases:\n  - Mortal\n---\n# Person\n");
+    assert!(a.graph().read("notes/ada.md").unwrap().unwrap().ends_with("A #person, a [[Mortal]], [[Person|someone]].\n"));
+    assert!(matches!(a.remove_alias("notes/person.md", "Nobody"), Err(prism::Error::NoSuchAlias(_))));
+    assert!(matches!(a.rename_alias("notes/person.md", "Mortal", "Ada"), Err(prism::Error::TitleTaken(_))));
+
+    // The title changed. Everything that pointed at it is one kind of
+    // thing, found one way: a link, a tag in a line, a tag and a relation
+    // in a frontmatter — a private page's too — a river's card, its
+    // folded list and its query.
+    let renamed = a.rename_note("notes/person.md", "People").unwrap();
+    assert_eq!(renamed.rewritten, ["notes/person.md", "notes/ada.md", "notes/secret.md", "rivers/People.md"]);
+    assert_eq!(a.graph().read("notes/ada.md").unwrap().unwrap(), "---\ntags: [People]\n---\n# Ada\n\nA #People, a [[Mortal]], [[People|someone]].\n");
+    assert_eq!(a.graph().read("notes/secret.md").unwrap().unwrap(), "---\nprivate: true\nrelated:\n  - People\n---\n# Secret\n");
+    assert_eq!(a.graph().read("rivers/People.md").unwrap().unwrap(), "---\nfolded:\n  - People\n---\n- [[People]]\n- [[Ada]]\n\n```query\ntag: People\n```\n");
+    a.settle();
+    let db = a.index().unwrap();
+    assert!(Links::unresolved(&db).unwrap().is_empty());
+    assert_eq!(a.query("tag: People", None).unwrap().pages.len(), 1);
+    // The river still reads as a river, and orders a query by its cards.
+    assert_eq!(a.graph().river("People").unwrap().unwrap().folded, ["People"]);
+    assert_eq!(a.query("listed in: rivers/People", None).unwrap().pages.iter().map(|p| p.title.as_str()).collect::<Vec<_>>(), ["People", "Ada"]);
+}
+
+#[test]
+fn a_graph_is_not_given_two_pages_of_one_name_and_says_when_it_has_them() {
+    let world = World::new();
+    let a = world.first("a", Schedule::default());
+    let atlas = a.create_note("Project Atlas").unwrap();
+    assert_eq!(a.graph().read(&atlas).unwrap().unwrap(), "# Project Atlas\n");
+    a.write(&atlas, "---\naliases: [Atlas]\n---\n# Project Atlas\n").unwrap();
+    // Asked again — by its title, however spelled, or by an alias — it is the page there is.
+    assert_eq!(a.create_note("project  ATLAS").unwrap(), atlas);
+    assert_eq!(a.create_note("atlas").unwrap(), atlas);
+    assert_eq!(a.graph().note_paths(), std::slice::from_ref(&atlas));
+    a.settle();
+    assert!(Catalog::duplicates(&a.index().unwrap()).unwrap().is_empty());
+
+    // Another device, or another app, may still make one. It is told of,
+    a.write("notes/zz-copy.md", "# Project Atlas\n").unwrap();
+    a.write("notes/log.md", "# Log\n\n[[Project Atlas]]\n").unwrap();
+    a.settle();
+    let db = a.index().unwrap();
+    assert_eq!(Catalog::duplicates(&db).unwrap(), [("Project Atlas".to_owned(), vec![atlas.clone(), "notes/zz-copy.md".to_owned()])]);
+    // and renaming the one links do not lead to takes no link with it.
+    let renamed = a.rename_note("notes/zz-copy.md", "Atlas, Copied").unwrap();
+    assert_eq!(renamed.rewritten, ["notes/zz-copy.md"]);
+    assert_eq!(a.graph().read("notes/log.md").unwrap().unwrap(), "# Log\n\n[[Project Atlas]]\n");
+    a.settle();
+    assert!(Catalog::duplicates(&a.index().unwrap()).unwrap().is_empty());
+}
+
+#[test]
+fn what_an_index_listed_is_found_again_after_the_page_changed() {
+    let world = World::new();
+    let a = world.first("a", Schedule::default());
+    a.write("notes/plan.md", "# Plan\n\n+ [ ] Book a room\n+ [ ] Call [[Ada]]\n").unwrap();
+    a.write("notes/ada.md", "# Ada\n").unwrap();
+    a.settle();
+    let db = a.index().unwrap();
+    let listed = Tasks::open(&db).unwrap();
+    let call = listed.iter().find(|task| task.text == "Call [[Ada]]").unwrap().clone();
+    // A backlink comes with the row it is in.
+    let backlinks = Links::backlinks(&db, &["Ada".into()]).unwrap();
+    assert_eq!((backlinks[0].block.as_slice(), backlinks[0].context.as_str()), (&[2][..], "Call [[Ada]]"));
+
+    // The page changes — lines above, by another hand — and the list on screen is now stale.
+    a.write("notes/plan.md", "# Plan\n\nSome thoughts first.\n\n+ [ ] Something new\n+ [ ] Book a room\n+ [ ] Call [[Ada]]\n").unwrap();
+    assert_eq!(a.set_task("notes/plan.md", &call.block, &call.text, true).unwrap(), Some(vec![4]));
+    assert!(a.graph().read("notes/plan.md").unwrap().unwrap().ends_with("+ [ ] Something new\n+ [ ] Book a room\n+ [x] Call [[Ada]]\n"));
+    assert_eq!(a.set_task("notes/plan.md", &[1], "A task since deleted", true).unwrap(), None);
+    a.settle();
+    assert_eq!(Tasks::counts(&a.index().unwrap()).unwrap(), (2, 1));
+}
+
+#[test]
+fn pages_are_dated_by_history_and_by_what_is_not_committed_yet() {
+    let world = World::new();
+    let a = world.first("a", Schedule::default());
+    let before = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_secs() as i64 - 2;
+    a.write("notes/one.md", "# One\n").unwrap();
+    a.settle();
+    // Not committed: its file's time.
+    let row = Catalog::get(&a.index().unwrap(), "notes/one.md").unwrap().unwrap();
+    assert!(row.modified.is_some_and(|at| at >= before) && row.created == row.modified, "{row:?}");
+    assert_eq!(prism::index::Times::unsaved(&a.index().unwrap()).unwrap().len(), 1);
+
+    a.sync_blocking(Mode::Full).unwrap();
+    // A first commit: the history is read apart, and waited for here.
+    a.settle();
+    let db = a.index().unwrap();
+    assert!(prism::index::Times::unsaved(&db).unwrap().is_empty());
+    let committed = prism::index::Times::committed(&db, "notes/one.md").unwrap().unwrap();
+    assert!(committed.0 >= before && committed.0 == committed.1);
+    assert_eq!(Catalog::get(&db, "notes/one.md").unwrap().unwrap().modified, Some(committed.1));
+
+    // Another device's page arrives dated when that device committed it.
+    let b = world.second("b");
+    b.settle();
+    assert_eq!(prism::index::Times::committed(&b.index().unwrap(), "notes/one.md").unwrap(), Some(committed));
+    // And the file was never touched to say so.
+    assert_eq!(b.graph().read("notes/one.md").unwrap().unwrap(), "# One\n");
+}
+
+#[test]
+fn a_river_saved_keeps_what_a_newer_app_wrote_in_it() {
+    let world = World::new();
+    let a = world.first("a", Schedule::default());
+    a.write("rivers/Work.md", "---\nlayout: board\nicon: tray\n---\n- [[One]]\n").unwrap();
+    // Read, changed and saved,
+    let mut river = a.graph().river("Work").unwrap().unwrap();
+    river.cards.push(prism::markup::river::Card::new("Two"));
+    assert!(a.save_river("Work", &river).unwrap());
+    assert_eq!(a.graph().read("rivers/Work.md").unwrap().unwrap(), "---\nlayout: board\nicon: tray\n---\n- [[One]]\n- [[Two]]\n");
+    // or made anew by an app that holds only what it shows.
+    let made = prism::markup::River { cards: vec![prism::markup::river::Card::new("Three")], ..Default::default() };
+    assert!(a.save_river("Work", &made).unwrap());
+    assert_eq!(a.graph().read("rivers/Work.md").unwrap().unwrap(), "---\nlayout: board\n---\n- [[Three]]\n");
+    // Saved as it is: nothing is written.
+    assert!(!a.save_river("Work", &a.graph().river("Work").unwrap().unwrap()).unwrap());
+}
+
+#[test]
+fn indexing_and_naming_do_not_wait_for_a_sync_that_is_on_the_network() {
+    // A remote that takes the call and says nothing for a while.
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let port = listener.local_addr().unwrap().port();
+    let slow = std::thread::spawn(move || {
+        let held: Vec<_> = listener.incoming().take(1).collect();
+        std::thread::sleep(Duration::from_millis(1500));
+        drop(held);
+    });
+    let root = tempfile::tempdir().unwrap();
+    Repository::init(root.path(), "main").unwrap().set_remote("origin", &format!("http://127.0.0.1:{port}/graph.git")).unwrap();
+    let a = Engine::start(root.path(), World::config("a", Schedule::default())).unwrap();
+    a.write("notes/one.md", "# One\n").unwrap();
+    a.settle();
+    let events = a.subscribe();
+    a.sync();
+    wait_for(&events, "the cycle to start", |event| matches!(event, Event::SyncStarted(_)).then_some(()));
+    std::thread::sleep(Duration::from_millis(200)); // committed; now waiting on the remote
+
+    // Meanwhile: written, indexed, named, renamed — none of it waits.
+    let started = std::time::Instant::now();
+    let two = a.create_note("Two").unwrap();
+    a.write("notes/three.md", "# Three\n\n[[Two]]\n").unwrap();
+    a.rename_note(&two, "Second").unwrap();
+    a.settle();
+    let db = a.index().unwrap();
+    assert_eq!(Catalog::resolve(&db, "Second").unwrap().unwrap().path(), two);
+    assert_eq!(a.graph().read("notes/three.md").unwrap().unwrap(), "# Three\n\n[[Second]]\n");
+    assert_eq!(a.create_note("second").unwrap(), two);
+    assert!(started.elapsed() < Duration::from_millis(900), "took {:?}", started.elapsed());
+    assert_eq!(a.status(), Status::Syncing, "and the sync is still out");
+
+    let outcome = wait_for(&events, "the cycle to end", |event| match event {
+        Event::SyncFinished(outcome) => Some(outcome.clone()),
+        _ => None,
+    });
+    assert!(outcome.is_err_and(|failure| failure.will_retry));
+    slow.join().unwrap();
+}
+
+#[test]
+fn what_the_engine_wrote_is_indexed_from_those_files_alone_and_comes_to_the_same() {
+    let world = World::new();
+    let a = world.first("a", Schedule::default());
+    a.settle();
+    let events = a.subscribe();
+    a.write("notes/one.md", "# One\n\n[[Two]]\n").unwrap();
+    a.write("notes/deep/two.md", "# Two\n").unwrap();
+    a.add_asset("Picture.PNG", b"PNG").unwrap();
+    a.write("notes/one.md", "# One\n\n[[Two]] ![](assets/picture.png)\n").unwrap();
+    a.delete("notes/deep/two.md").unwrap();
+    a.settle();
+    let indexed = events.try_iter().filter_map(|event| match event {
+        Event::IndexUpdated { tree, .. } => Some(tree),
+        _ => None,
+    });
+    let last = indexed.last().expect("the writes were indexed");
+    // Looking at every file finds the very tree the files written added up to.
+    assert_eq!(Repository::open(a.graph().root()).unwrap().snapshot(&Default::default()).unwrap().tree, last);
+    a.note_changed();
+    a.settle();
+    assert!(events.try_iter().all(|event| !matches!(event, Event::IndexUpdated { .. })), "nothing was missed");
+    let db = a.index().unwrap();
+    assert_eq!(Links::unresolved(&db).unwrap(), [("Two".to_owned(), 1)]);
+    assert_eq!(prism::index::Assets::used_in(&db, "assets/picture.png").unwrap().len(), 1);
+
+    // Written around the engine, by one who says what it wrote.
+    std::fs::write(a.graph().root().join("notes/aside.md"), "# Aside\n").unwrap();
+    a.paths_changed(&["notes/aside.md".to_owned()]);
+    a.settle();
+    assert!(Catalog::get(&a.index().unwrap(), "notes/aside.md").unwrap().is_some());
+    // And it is all committed as what it is.
+    assert_eq!(a.sync_blocking(Mode::Full).unwrap().committed.as_deref(), Some("Add 2 notes and 1 attachment"));
+}

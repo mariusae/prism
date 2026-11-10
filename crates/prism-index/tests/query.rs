@@ -16,8 +16,8 @@ fn graph() -> (tempfile::TempDir, Indexer) {
         "notes/person.md",
         "---\nfields:\n  - birthday (date)\n  - company (link)\n  - modified (date)\nlist:\n  - Grace Hopper\n  - \"[[Ada Lovelace]]\"\n---\n# Person\n",
     );
-    write("notes/ada.md", "---\ntags: [Person, Mathematician]\ncreated: 2026-01-01T00:00:00Z\nmodified: 2026-10-31T10:00:00Z\nbirthday: 1815-12-10\nwiki: true\npinned: 2\n---\n# Ada Lovelace\n\nWrote the first program for the [[Analytical Engine]].\n");
-    write("notes/grace.md", "---\ntags: [Person]\ncreated: 2026-02-01T00:00:00Z\nmodified: 2026-11-01T10:00:00Z\ninbox: true\npinned: true\n---\n# Grace Hopper\n\nInvented the compiler. Knew of [[Ada Lovelace]].\n");
+    write("notes/ada.md", "---\ntags: [Person, Mathematician]\nbirthday: 1815-12-10\nwiki: true\npinned: 2\n---\n# Ada Lovelace\n\nWrote the first program for the [[Analytical Engine]].\n");
+    write("notes/grace.md", "---\ntags: [Person]\ninbox: true\npinned: true\n---\n# Grace Hopper\n\nInvented the compiler. Knew of [[Ada Lovelace]].\n");
     write("notes/charles.md", "---\ntags: [Person, Archived]\ncompany: Analytical Engine\npinned: 1\n---\n# Charles Babbage\n\nDesigned the [[Analytical Engine]] and the difference engine.\n");
     write(
         "notes/engine.md",
@@ -27,8 +27,13 @@ fn graph() -> (tempfile::TempDir, Indexer) {
     write("daily/2026-10-31.md", "- Read about the [[the engine]] and the compiler\n");
     write("weekly/2026-W44.md", "- A week\n");
     write("notes/work-river-user.md", "# Uses a river\n\nSee [[rivers/Work]] and [[Nobody Yet]].\n");
+    write("rivers/Work.md", "- [[Charles Babbage]]\n- [[ada lovelace]]\n  - 2: a folded row\n");
     let mut indexer = Indexer::in_memory(prism_index::standard()).unwrap();
     indexer.update(&repo, repo.snapshot(&SnapshotOptions::default()).unwrap().tree).unwrap();
+    // When each was last written: nothing in the pages says.
+    indexer.set_unsaved(&[("notes/ada.md".into(), 100), ("notes/grace.md".into(), 200)]).unwrap();
+    // As an app's view is: private pages hidden.
+    prism_index::show_private(indexer.connection(), false).unwrap();
     (dir, indexer)
 }
 
@@ -48,8 +53,10 @@ fn conditions_narrow_and_every_one_must_hold() {
     assert_eq!(titles(&index, "text: compiler\nis: note"), ["Grace Hopper"]);
     assert_eq!(titles(&index, "has: birthday"), ["Ada Lovelace"]);
     assert_eq!(titles(&index, "has: pinned, company"), ["Charles Babbage"]);
-    assert_eq!(titles(&index, "wiki: yes"), ["Ada Lovelace"]);
-    assert_eq!(titles(&index, "wiki: no\ntag: Person"), ["Grace Hopper", "Charles Babbage"]);
+    assert_eq!(titles(&index, "is: wiki"), ["Ada Lovelace"]);
+    assert_eq!(titles(&index, "is not: wiki\ntag: Person"), ["Grace Hopper", "Charles Babbage"]);
+    // A tag is a link: the pages tagged Person point at the page Person.
+    assert_eq!(titles(&index, "links to: Person"), ["Ada Lovelace", "Charles Babbage", "Grace Hopper"]);
     assert!(titles(&index, "tag: Nobody").is_empty());
 }
 
@@ -64,9 +71,9 @@ fn links_are_followed_both_ways_by_any_name() {
     assert_eq!(titles(&index, "links to: Nobody Yet"), ["Uses a river"]);
     assert!(titles(&index, "linked from: Nobody Yet").is_empty());
     // `{this}` is the page the query is in.
-    let this = QueryOptions { this: Some("Ada Lovelace"), ..QueryOptions::default() };
+    let this = QueryOptions { this: Some("Ada Lovelace") };
     let found = run_text(index.connection(), "links to: {this}", &this).unwrap();
-    assert_eq!(found.pages.iter().map(|p| p.title.as_str()).collect::<Vec<_>>(), ["Analytical Engine", "Grace Hopper"]);
+    assert_eq!(found.pages.iter().map(|p| p.title.as_str()).collect::<Vec<_>>(), ["Analytical Engine", "Grace Hopper", "Person"], "Person lists her");
 }
 
 #[test]
@@ -76,9 +83,11 @@ fn kinds_and_flags() {
     assert_eq!(titles(&index, "is: week"), ["2026-W44"]);
     assert_eq!(titles(&index, "is: inbox"), ["Grace Hopper"]);
     assert_eq!(titles(&index, "is: template"), ["Analytical Engine"]);
-    assert_eq!(titles(&index, "is: wiki"), ["Ada Lovelace"]);
-    // Pinned: those given a place, by it; then those merely pinned.
+    assert_eq!(titles(&index, "is not: note"), ["2026-10-31", "2026-W44"]);
+    // A mark is any field that does not say no; sorted by, numbers come
+    // first: those given a place, by it, then those merely pinned.
     assert_eq!(titles(&index, "is: pinned\nsort: pinned"), ["Charles Babbage", "Ada Lovelace", "Grace Hopper"]);
+    assert_eq!(titles(&index, "tag: Person\nsort: -birthday"), ["Ada Lovelace", "Charles Babbage", "Grace Hopper"], "pages without the field, last");
 }
 
 #[test]
@@ -89,7 +98,10 @@ fn order_limit_and_how_to_show() {
     // Newest first; a page with no time, last either way.
     assert_eq!(titles(&index, "tag: Person\nsort: -modified"), ["Grace Hopper", "Ada Lovelace", "Charles Babbage"]);
     assert_eq!(titles(&index, "tag: Person\nsort: created"), ["Ada Lovelace", "Grace Hopper", "Charles Babbage"]);
+    // An order set by hand is a list of links: a page's `list`, a river's cards.
     assert_eq!(titles(&index, "listed in: Person"), ["Grace Hopper", "Ada Lovelace"]);
+    assert_eq!(titles(&index, "listed in: rivers/Work"), ["Charles Babbage", "Ada Lovelace"]);
+    assert_eq!(titles(&index, "listed in: rivers/Work\nsort: title"), ["Ada Lovelace", "Charles Babbage"]);
 
     let found = run_text(index.connection(), "tag: Person\nsort: title\nlimit: 2\nshow: table\nsome future: clause", &QueryOptions::default()).unwrap();
     assert_eq!((found.pages.len(), found.total, found.show), (2, 3, Show::Table));
@@ -104,8 +116,9 @@ fn order_limit_and_how_to_show() {
 fn private_pages_are_found_only_when_asked_for() {
     let (_dir, index) = graph();
     assert!(!titles(&index, "tag: Person").contains(&"Secret Person".to_owned()));
-    let all = QueryOptions { include_private: true, ..QueryOptions::default() };
-    assert_eq!(run_text(index.connection(), "tag: Person", &all).unwrap().total, 4);
+    // Asked for outright — of the connection, so of every question on it.
+    prism_index::show_private(index.connection(), true).unwrap();
+    assert_eq!(run_text(index.connection(), "tag: Person", &QueryOptions::default()).unwrap().total, 4);
 }
 
 #[test]
@@ -117,7 +130,56 @@ fn typed_fields_come_from_a_pages_tags() {
     assert!(Catalog::field_specs(db, "Mathematician").unwrap().is_empty(), "a tag with no page gives none");
     // A page's form: its tags' fields, without the page's own.
     let schema: Vec<String> = Catalog::schema(db, "notes/ada.md").unwrap().iter().map(|s| s.name.clone()).collect();
-    assert_eq!(schema, ["birthday", "company"]);
+    assert_eq!(schema, ["birthday", "company", "modified"]);
     // A link to a saved river is no page waiting to be written.
     assert_eq!(Links::unresolved(db).unwrap(), [("Nobody Yet".to_owned(), 1)]);
+}
+
+#[test]
+fn the_pages_changed_last_are_read_off_an_index() {
+    let (_dir, mut index) = graph();
+    prism_index::show_private(index.connection(), true).unwrap();
+    index
+        .set_unsaved(&[("notes/ada.md".into(), 100), ("notes/grace.md".into(), 200), ("notes/charles.md".into(), 300), ("notes/secret.md".into(), 400)])
+        .unwrap();
+    prism_index::show_private(index.connection(), false).unwrap();
+    let found = run_text(index.connection(), "sort: -modified\nlimit: 2", &QueryOptions::default()).unwrap();
+    assert_eq!(found.pages.iter().map(|p| p.title.as_str()).collect::<Vec<_>>(), ["Charles Babbage", "Grace Hopper"], "the private one is passed over");
+    assert_eq!(found.total, 8, "all there are, counted without being loaded");
+    // Past the dated, the undated follow, by title, either way.
+    let found = run_text(index.connection(), "is: note\nsort: modified\nlimit: 5", &QueryOptions::default()).unwrap();
+    assert_eq!(
+        found.pages.iter().map(|p| p.title.as_str()).collect::<Vec<_>>(),
+        ["Ada Lovelace", "Grace Hopper", "Charles Babbage", "Analytical Engine", "Person"]
+    );
+    assert_eq!(found.total, 6);
+    // What SQLite does for it: walks the index of when pages changed.
+    let plan = prism_index::query::plan(
+        index.connection(),
+        "SELECT notes.path FROM notes JOIN prism_dates AS dated ON dated.path = notes.path WHERE dated.modified IS NOT NULL ORDER BY dated.modified DESC, notes.title COLLATE NOCASE, notes.path LIMIT 10",
+    )
+    .unwrap();
+    assert!(plan.contains("prism_dates_modified"), "{plan}");
+    // And for a tag: the links' index, not every page.
+    let plan = prism_index::query::plan(
+        index.connection(),
+        "SELECT path FROM notes WHERE notes.path IN (SELECT source FROM links WHERE kind = 'tag' AND key = 'person')",
+    )
+    .unwrap();
+    assert!(plan.contains("links_key"), "{plan}");
+}
+
+#[test]
+fn a_query_asks_what_it_always_did() {
+    let (_dir, index) = graph();
+    // Words of a title are matched as names are: case and spacing aside, in any script.
+    assert_eq!(titles(&index, "title: ANALYT  engine"), ["Analytical Engine"]);
+    assert!(titles(&index, "text: (\"-)").is_empty() && titles(&index, "linked from: Nobody").is_empty() && titles(&index, "listed in: Nobody").is_empty());
+    // A limit of none at all, and one past the end.
+    assert_eq!(run_text(index.connection(), "tag: Person\nlimit: 0", &QueryOptions::default()).unwrap().total, 3);
+    let found = run_text(index.connection(), "tag: Person\nlimit: 10", &QueryOptions::default()).unwrap();
+    assert_eq!((found.pages.len(), found.total), (3, 3));
+    // Descending by a field: words before numbers, pages without it still last.
+    assert_eq!(titles(&index, "tag: Person\nsort: -pinned"), ["Grace Hopper", "Ada Lovelace", "Charles Babbage"]);
+    assert_eq!(titles(&index, "sort: -pinned\nlimit: 4"), ["Grace Hopper", "Ada Lovelace", "Charles Babbage", "2026-10-31"]);
 }

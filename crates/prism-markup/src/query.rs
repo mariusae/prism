@@ -35,11 +35,14 @@ pub enum Clause {
     ListedIn(String),
     /// `has: field, …` — pages with each field.
     Has(Vec<String>),
-    /// `wiki: yes` / `wiki: no`.
-    Wiki(bool),
-    /// `is: inbox`, `pinned`, `topic`, `template`, `wiki`, `day`, `week`, `note`.
+    /// `is: day`, `week` or `note` — the page's kind — or `is: pinned`,
+    /// `is: inbox`, any field: pages the field marks (it is there, and
+    /// does not say no).
     Is(String),
-    /// `sort: title`, or `sort: -modified` for the reverse.
+    /// `is not: …`: the pages `is:` would leave out.
+    IsNot(String),
+    /// `sort: title`, `created`, `modified`, or any field — by number
+    /// where its values are numbers; `sort: -modified` for the reverse.
     Sort { key: String, descending: bool },
     /// `limit: n`.
     Limit(usize),
@@ -90,12 +93,8 @@ fn parse_clause(line: &str) -> Clause {
         "linked from" => Clause::LinkedFrom(value.to_owned()),
         "listed in" => Clause::ListedIn(value.to_owned()),
         "has" => Clause::Has(list()),
-        "wiki" => match value.to_ascii_lowercase().as_str() {
-            "yes" | "true" => Clause::Wiki(true),
-            "no" | "false" => Clause::Wiki(false),
-            _ => unknown(),
-        },
         "is" => Clause::Is(value.to_ascii_lowercase()),
+        "is not" => Clause::IsNot(value.to_ascii_lowercase()),
         "sort" => match value.strip_prefix('-') {
             Some(key) => Clause::Sort { key: key.trim().to_owned(), descending: true },
             None => Clause::Sort { key: value.to_owned(), descending: false },
@@ -118,8 +117,8 @@ impl fmt::Display for Clause {
             Clause::LinkedFrom(v) => write!(f, "linked from: {v}"),
             Clause::ListedIn(v) => write!(f, "listed in: {v}"),
             Clause::Has(v) => write!(f, "has: {}", v.join(", ")),
-            Clause::Wiki(v) => write!(f, "wiki: {}", if *v { "yes" } else { "no" }),
             Clause::Is(v) => write!(f, "is: {v}"),
+            Clause::IsNot(v) => write!(f, "is not: {v}"),
             Clause::Sort { key, descending } => write!(f, "sort: {}{key}", if *descending { "-" } else { "" }),
             Clause::Limit(n) => write!(f, "limit: {n}"),
             Clause::Show(v) => write!(f, "show: {v}"),
@@ -148,7 +147,7 @@ mod tests {
 
     #[test]
     fn reads_every_clause_and_keeps_what_it_does_not_know() {
-        let body = "tag: Person\nnot tag: Archived\ntitle: ada\ntext: engine\nlinks to: {this}\nlinked from: Index\nlisted in: Reading\nhas: birthday, company\nwiki: yes\nis: Inbox\nsort: -modified\nlimit: 10\nshow: table\ncolumns: a, b\nfrobnicate: wildly\nno colon here\nlimit: many";
+        let body = "tag: Person\nnot tag: Archived\ntitle: ada\ntext: engine\nlinks to: {this}\nlinked from: Index\nlisted in: Reading\nhas: birthday, company\nis not: Wiki\nis: Inbox\nsort: -modified\nlimit: 10\nshow: table\ncolumns: a, b\nfrobnicate: wildly\nno colon here\nlimit: many";
         let query = Query::parse(body);
         assert_eq!(
             query.clauses,
@@ -161,7 +160,7 @@ mod tests {
                 Clause::LinkedFrom("Index".into()),
                 Clause::ListedIn("Reading".into()),
                 Clause::Has(vec!["birthday".into(), "company".into()]),
-                Clause::Wiki(true),
+                Clause::IsNot("wiki".into()),
                 Clause::Is("inbox".into()),
                 Clause::Sort { key: "modified".into(), descending: true },
                 Clause::Limit(10),
@@ -173,6 +172,6 @@ mod tests {
             ]
         );
         assert_eq!(query.limit(), Some(10));
-        assert_eq!(query.to_string(), body.replace("is: Inbox", "is: inbox"));
+        assert_eq!(query.to_string(), body.replace("is: Inbox", "is: inbox").replace("is not: Wiki", "is not: wiki"));
     }
 }

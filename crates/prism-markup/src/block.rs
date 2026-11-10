@@ -363,6 +363,36 @@ impl Document {
         rest.iter().try_fold(self.blocks.get_mut(*first)?, |block, index| block.children.get_mut(*index))
     }
 
+    /// Finds a block again after the document changed around it: the
+    /// block that `fits` at `hint`, or else the one that fits nearest to
+    /// where `hint` would be, in reading order — one as deep as `hint`
+    /// before any other.
+    ///
+    /// A block's path is its place, not its name — an index hands out
+    /// paths as they were in the tree it read, and a line added above
+    /// moves every one. Whoever holds such a path holds, with it,
+    /// something to know the block by (its text); this is how the two
+    /// find the block as it is now.
+    pub fn locate_where(&self, hint: &[usize], fits: impl Fn(&Block) -> bool) -> Option<Vec<usize>> {
+        if self.get(hint).is_some_and(&fits) {
+            return Some(hint.to_vec());
+        }
+        let rows = self.rows();
+        // Where the hint would stand among the rows as they are now.
+        let stand = rows.iter().filter(|row| row.path.as_slice() < hint).count();
+        rows.iter()
+            .enumerate()
+            .filter(|(_, row)| fits(row.block))
+            .min_by_key(|(at, row)| (row.path.len() != hint.len(), at.abs_diff(stand)))
+            .map(|(_, row)| row.path.clone())
+    }
+
+    /// Finds the block with this text: at `hint`, or nearest to it. See
+    /// [`locate_where`](Self::locate_where).
+    pub fn locate(&self, hint: &[usize], text: &str) -> Option<Vec<usize>> {
+        self.locate_where(hint, |block| block.text == text)
+    }
+
     /// The list a path's block is in: the document's own blocks for a path
     /// of one, else its parent's children.
     pub fn siblings_mut(&mut self, path: &[usize]) -> Option<&mut Vec<Block>> {

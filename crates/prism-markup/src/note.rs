@@ -8,7 +8,7 @@
 //! written in it.
 
 use crate::block::{Block, BlockKind, Document, Task};
-use crate::date::{Day, Timestamp, Week};
+use crate::date::{Day, Week};
 use crate::fields::FieldSpec;
 use crate::frontmatter::{Frontmatter, Value};
 use crate::inline::{self, SpanKind};
@@ -100,17 +100,42 @@ pub struct Note {
     pub body: Document,
 }
 
-/// A link from one note to another, by name.
+/// How one note points at another.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum LinkKind {
+    /// `[[target]]`, or a name in the frontmatter.
+    Link,
+    /// `![[target]]`: the page shown in place.
+    Embed,
+    /// `#target`, or an item of the frontmatter's `tags`.
+    Tag,
+}
+
+/// The frontmatter lists whose items are pages' names, written plainly
+/// or as `[[links]]`: `related`, and `list` — pages in an order set by
+/// hand. In any other field, only a value written `[[so]]` is a link.
+pub const NAME_LISTS: [&str; 2] = ["related", "list"];
+
+/// One note pointing at another, by name.
+///
+/// There is one such thing, however it is written. `[[Ada]]` in a line,
+/// `#person` in a line, `tags: [Person]`, `related: [Ada]` and
+/// `company: "[[Acme]]"` in the frontmatter are all links: each names a
+/// page, each is found from that page as a backlink, each is rewritten
+/// when that page is renamed. They differ in [`kind`](Self::kind) and in
+/// where they are written.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct NoteLink {
-    /// The name linked to, as written: a title, an alias, a date.
+    /// The name pointed at, as written: a title, an alias, a date — for
+    /// a tag, its name without the `#`.
     pub target: String,
     /// What the link shows, when not its target.
     pub label: Option<String>,
-    /// `![[target]]`: the page shown in place.
-    pub embed: bool,
-    /// Where the link is: the path of its block, or empty for one written
-    /// in the frontmatter's `related`.
+    pub kind: LinkKind,
+    /// The frontmatter key it is written under; `None` for one in the body.
+    pub field: Option<String>,
+    /// Where in the body it is: the path of its block. Empty for one in
+    /// the frontmatter.
     pub block: Vec<usize>,
 }
 
@@ -144,43 +169,37 @@ pub struct TaskRef {
 /// Everything a note's body refers to, gathered in one pass.
 #[derive(Debug, Clone, PartialEq, Default)]
 pub struct References {
-    /// `[[links]]` and `![[embeds]]`, in reading order, then `related`.
+    /// Every pointer at another note — links, embeds and tags — the
+    /// body's in reading order, then the frontmatter's.
     pub links: Vec<NoteLink>,
     pub web_links: Vec<WebLink>,
-    /// Inline `#tags`, without the `#`, as written, in reading order.
-    pub tags: Vec<String>,
     pub images: Vec<ImageRef>,
     pub tasks: Vec<TaskRef>,
 }
 
 /// What a note says about itself.
+///
+/// Little, on purpose. When it was made and changed is git's to say,
+/// not the note's; what marks it — pinned, in the inbox — is a field
+/// like any other, asked of the index.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct Meta {
     pub title: String,
-    /// The note's lasting identity: a ULID, which survives renames.
-    pub id: Option<String>,
     /// Other names the note answers to.
     pub aliases: Vec<String>,
     /// The frontmatter's tags, then the body's inline ones, each once,
-    /// compared without regard to case.
+    /// compared as names are.
     pub tags: Vec<String>,
-    pub created: Option<Timestamp>,
-    pub modified: Option<Timestamp>,
-    /// Never shown, or named in a commit.
+    /// Shown, searched, listed and named in a commit only where asked
+    /// for outright.
     pub private: bool,
-    /// Part of the wiki: canonical, kept up.
-    pub wiki: bool,
 }
 
 impl Meta {
-    /// Every name the note answers to: its title, its aliases, and each
-    /// part of a title written `Project // Topic`.
+    /// Every name the note answers to: its title, then its aliases.
     pub fn names(&self) -> Vec<String> {
         let mut names = vec![self.title.clone()];
         names.extend(self.aliases.iter().cloned());
-        if self.title.contains("//") {
-            names.extend(self.title.split("//").map(|part| part.trim().to_owned()).filter(|part| !part.is_empty()));
-        }
         let mut seen = std::collections::HashSet::new();
         names.retain(|name| !name.is_empty() && seen.insert(name_key(name)));
         names
@@ -218,21 +237,16 @@ impl Note {
         self.frontmatter.as_ref().is_some_and(|f| f.flag(key))
     }
 
-    /// The first `# Heading`, when the body opens with one: a note's
-    /// title, when its frontmatter gives none.
+    /// The first `# Heading`, when the body opens with one: a note's title.
     pub fn title_heading(&self) -> Option<&Block> {
         self.body.blocks.first().filter(|b| b.kind == BlockKind::Heading(1) && !b.text.trim().is_empty())
     }
 
-    /// The note's title: the frontmatter's `title`, else its first
-    /// `# Heading`, else what its file is called. A day's or a week's page
-    /// is always titled by its date.
+    /// The note's title: its first `# Heading`, else what its file is
+    /// called. A day's or a week's page is always titled by its date.
     pub fn title(&self, path: &str) -> String {
         if NoteKind::of(path).is_some_and(NoteKind::has_fixed_title) {
             return NoteKind::fallback_title(path);
-        }
-        if let Some(title) = self.field("title").map(str::trim).filter(|t| !t.is_empty()) {
-            return title.to_owned();
         }
         match self.title_heading() {
             Some(heading) => inline::plain_text(heading.text.trim_end_matches('#')),
@@ -243,40 +257,22 @@ impl Note {
     /// What the note says about itself, for a note kept at `path`.
     pub fn meta(&self, path: &str) -> Meta {
         let front = self.frontmatter.as_ref();
-        let mut tags: Vec<String> = front.map(|f| f.list("tags")).unwrap_or_default();
-        tags.iter_mut().for_each(|tag| *tag = tag.trim_start_matches('#').to_owned());
-        tags.extend(self.references().tags);
+        let mut tags: Vec<String> = Vec::new();
+        // The frontmatter's first, though they are gathered last.
+        let links = self.references().links;
+        let (in_front, in_body): (Vec<_>, Vec<_>) = links.into_iter().filter(|link| link.kind == LinkKind::Tag).partition(|link| link.field.is_some());
         let mut seen = std::collections::HashSet::new();
-        tags.retain(|tag| !tag.is_empty() && seen.insert(tag.to_lowercase()));
-        Meta {
-            title: self.title(path),
-            id: self.field("id").map(str::trim).filter(|id| !id.is_empty()).map(str::to_owned),
-            aliases: front.map(|f| f.list("aliases")).unwrap_or_default(),
-            tags,
-            created: self.field("created").and_then(Timestamp::parse),
-            modified: self.field("modified").and_then(Timestamp::parse),
-            private: self.flag("private"),
-            wiki: self.flag("wiki"),
+        for tag in in_front.into_iter().chain(in_body) {
+            if seen.insert(name_key(&tag.target)) {
+                tags.push(tag.target);
+            }
         }
+        Meta { title: self.title(path), aliases: front.map(|f| f.list("aliases")).unwrap_or_default(), tags, private: self.flag("private") }
     }
 
-    /// The names in the frontmatter's `related` list: plain, or written
-    /// as `[[links]]`.
-    pub fn related(&self) -> Vec<String> {
-        let items = self.frontmatter.as_ref().map(|f| f.list("related")).unwrap_or_default();
-        items
-            .iter()
-            .map(|item| {
-                let item = item.trim();
-                let inner = item.strip_prefix("[[").and_then(|i| i.strip_suffix("]]")).unwrap_or(item);
-                inner.split('|').next().unwrap_or(inner).trim().to_owned()
-            })
-            .filter(|name| !name.is_empty())
-            .collect()
-    }
-
-    /// Everything the note refers to: the notes it links to, web links,
-    /// inline tags, pictures and tasks. Code is never searched.
+    /// Everything the note refers to: the notes it points at — by link,
+    /// embed or tag, in its body or its frontmatter — web links, pictures
+    /// and tasks. Code is never searched.
     pub fn references(&self) -> References {
         let mut found = References::default();
         for row in self.body.rows() {
@@ -290,13 +286,19 @@ impl Note {
             let spans = inline::parse(&block.text);
             for span in inline::walk(&spans) {
                 match &span.kind {
-                    SpanKind::WikiLink { target, label, embed } => {
-                        found.links.push(NoteLink { target: target.clone(), label: label.clone(), embed: *embed, block: row.path.clone() })
-                    }
+                    SpanKind::WikiLink { target, label, embed } => found.links.push(NoteLink {
+                        target: target.clone(),
+                        label: label.clone(),
+                        kind: if *embed { LinkKind::Embed } else { LinkKind::Link },
+                        field: None,
+                        block: row.path.clone(),
+                    }),
                     SpanKind::Link { target, .. } => found.web_links.push(WebLink { url: target.clone(), block: row.path.clone() }),
                     SpanKind::Autolink { url } => found.web_links.push(WebLink { url: url.clone(), block: row.path.clone() }),
                     SpanKind::Url => found.web_links.push(WebLink { url: block.text[span.range.clone()].to_owned(), block: row.path.clone() }),
-                    SpanKind::Tag(name) => found.tags.push(name.clone()),
+                    SpanKind::Tag(name) => {
+                        found.links.push(NoteLink { target: name.clone(), label: None, kind: LinkKind::Tag, field: None, block: row.path.clone() })
+                    }
                     SpanKind::Image { source, alt, width, height } => {
                         found.images.push(ImageRef { source: source.clone(), alt: alt.clone(), width: *width, height: *height, block: row.path.clone() })
                     }
@@ -304,7 +306,34 @@ impl Note {
                 }
             }
         }
-        found.links.extend(self.related().into_iter().map(|target| NoteLink { target, label: None, embed: false, block: Vec::new() }));
+        for (key, value) in self.frontmatter.iter().flat_map(Frontmatter::iter) {
+            // What the page calls itself points nowhere.
+            if key == "aliases" {
+                continue;
+            }
+            for item in value.to_list() {
+                let item = item.trim();
+                let bracketed = item.strip_prefix("[[").and_then(|inner| inner.strip_suffix("]]"));
+                let (target, label, kind) = match (key, bracketed) {
+                    ("tags", _) => (item.trim_start_matches('#'), None, LinkKind::Tag),
+                    (_, Some(inner)) => {
+                        let (target, label) = inner.split_once('|').map_or((inner, None), |(target, label)| (target, Some(label)));
+                        (target, label, LinkKind::Link)
+                    }
+                    (key, None) if NAME_LISTS.contains(&key) => (item, None, LinkKind::Link),
+                    _ => continue,
+                };
+                if !target.trim().is_empty() {
+                    found.links.push(NoteLink {
+                        target: target.trim().to_owned(),
+                        label: label.map(|label| label.trim().to_owned()),
+                        kind,
+                        field: Some(key.to_owned()),
+                        block: Vec::new(),
+                    });
+                }
+            }
+        }
         found
     }
 
@@ -333,14 +362,11 @@ impl Note {
         self.frontmatter.as_ref().map(FieldSpec::of).unwrap_or_default()
     }
 
-    /// Retitles the note where its title is written: the frontmatter's
-    /// `title` when it has one, else its first `# Heading` — which is made
-    /// when there is neither.
+    /// Retitles the note: its first `# Heading`, which is made when the
+    /// note has none.
     pub fn set_title(&mut self, title: &str) {
         let title = title.trim();
-        if self.field("title").is_some_and(|t| !t.trim().is_empty()) {
-            self.frontmatter_mut().set("title", title);
-        } else if self.title_heading().is_some() {
+        if self.title_heading().is_some() {
             self.body.blocks[0].text = title.to_owned();
         } else {
             self.body.blocks.insert(0, Block::heading(1, title));
@@ -352,6 +378,8 @@ impl Note {
     ///
     /// - `[[from]]`, `[[from|shown]]` and `![[from]]` — in tables too,
     ///   their bars escaped — never inside code;
+    /// - `#from`, where `to` can be written as a tag (one word); a tag
+    ///   that cannot follow is left as it is;
     /// - the titles a query block asks for (`tag:`, `links to:`, …);
     /// - frontmatter: an item of any list, plain or as a `[[link]]`, and
     ///   a field holding just the title.
@@ -365,9 +393,14 @@ impl Note {
             for block in blocks {
                 if block.has_inline_content() {
                     let spans = inline::parse(&block.text);
+                    let as_tag = tag_writable(to);
                     let mut ranges: Vec<_> = inline::walk(&spans)
-                        .filter(|span| matches!(&span.kind, SpanKind::WikiLink { target, .. } if name_key(target) == key))
-                        .filter_map(|span| inline::wiki_target_range(&block.text, span))
+                        .filter_map(|span| match &span.kind {
+                            SpanKind::WikiLink { target, .. } if name_key(target) == key => inline::wiki_target_range(&block.text, span),
+                            // The name, after its `#`.
+                            SpanKind::Tag(name) if as_tag && name_key(name) == key => Some(span.range.start + 1..span.range.end),
+                            _ => None,
+                        })
                         .collect();
                     // Last first, so the ranges before stay where they are.
                     ranges.sort_by_key(|range| std::cmp::Reverse(range.start));
@@ -408,13 +441,13 @@ impl Note {
                             None => format!("[[{to}]]"),
                         })
                     }
-                    None => (name_key(trimmed) == key).then(|| to.to_owned()),
+                    None => (name_key(trimmed.trim_start_matches('#')) == key).then(|| to.to_owned()),
                 }
             };
             let entries: Vec<(String, Value)> = front.iter().map(|(k, v)| (k.to_owned(), v.clone())).collect();
             for (name, value) in entries {
                 // What the page calls itself is not a link to another.
-                if matches!(name.as_str(), "title" | "aliases" | "id" | "caption") {
+                if matches!(name.as_str(), "aliases" | "caption") {
                     continue;
                 }
                 let renamed = match &value {
@@ -436,6 +469,14 @@ impl Note {
         count
     }
 
+    /// Sets the checkbox of the task last seen at `hint` with this text,
+    /// wherever it is now ([`Document::locate_where`]). Answers where it
+    /// was found; `None` when the note has no such task any more.
+    pub fn set_task_like(&mut self, hint: &[usize], text: &str, done: bool) -> Option<Vec<usize>> {
+        let path = self.body.locate_where(hint, |block| block.task_state().is_some() && block.text == text)?;
+        self.set_task(&path, done).then_some(path)
+    }
+
     /// Sets a task's checkbox by its block's path.
     pub fn set_task(&mut self, path: &[usize], done: bool) -> bool {
         match self.body.get_mut(path).and_then(Block::item_mut) {
@@ -448,9 +489,17 @@ impl Note {
     }
 }
 
+/// Whether a name can be written as a `#tag`: whether `#name` reads back
+/// as that one tag.
+fn tag_writable(name: &str) -> bool {
+    let written = format!("#{name}");
+    matches!(inline::parse(&written).as_slice(), [span] if span.range == (0..written.len()) && matches!(&span.kind, SpanKind::Tag(tag) if tag == name))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::date::Timestamp;
 
     const ATLAS: &str = "---\nid: 01jbxk3t6y8q2zp4m9v7c5r0wd\naliases: [Atlas]\ntags: [Projects, \"#Work\"]\nwiki: true\nstatus: active\nmodified: 2026-10-31T10:41:12Z\nrelated:\n  - Ada Lovelace\n  - \"[[Grace Hopper|Grace]]\"\n---\n# Project Atlas\n\n- Kick-off with [[Ada Lovelace]] on [[2026-10-31]] #planning #projects\n  + [ ] Book a room\n  + [x] Send invites to <https://cal.example/atlas>\n- ![[Embedded Page]] and ![diagram](assets/atlas.png)<!-- {\"width\":425} -->\n\n```\n[[not a link]] #nottag\n```\n";
 
@@ -469,14 +518,15 @@ mod tests {
 
     #[test]
     fn titles_fall_back_in_order() {
-        let titled = Note::parse("---\ntitle: From Frontmatter\n---\n# From Heading\n");
-        assert_eq!(titled.title("notes/x.md"), "From Frontmatter");
         assert_eq!(Note::parse("# From **Heading**\n").title("notes/x.md"), "From Heading");
         assert_eq!(Note::parse("- no heading\n").title("notes/my-file.md"), "my-file");
         assert_eq!(Note::parse("").title("notes/01JBXK3T6Y8Q2ZP4M9V7C5R0WD.md"), "Untitled");
+        // A `title:` field is a field, and no title.
+        let fielded = Note::parse("---\ntitle: A Field\n---\n# From Heading\n");
+        assert_eq!(fielded.title("notes/x.md"), "From Heading");
         // A day is its date, whatever it says.
-        assert_eq!(titled.title("daily/2026-10-31.md"), "2026-10-31");
-        assert_eq!(titled.title("weekly/2026-W44.md"), "2026-W44");
+        assert_eq!(fielded.title("daily/2026-10-31.md"), "2026-10-31");
+        assert_eq!(fielded.title("weekly/2026-W44.md"), "2026-W44");
     }
 
     #[test]
@@ -484,38 +534,46 @@ mod tests {
         let note = Note::parse(ATLAS);
         let meta = note.meta("notes/project-atlas.md");
         assert_eq!(meta.title, "Project Atlas");
-        assert_eq!(meta.id.as_deref(), Some("01jbxk3t6y8q2zp4m9v7c5r0wd"));
         assert_eq!(meta.aliases, ["Atlas"]);
         // Frontmatter's first, then inline, each once whatever its case.
         assert_eq!(meta.tags, ["Projects", "Work", "planning"]);
-        assert!(meta.wiki && !meta.private);
-        assert_eq!(meta.modified, Timestamp::parse("2026-10-31T10:41:12Z"));
-        assert_eq!(meta.created, None);
+        assert!(!meta.private);
         assert_eq!(meta.names(), ["Project Atlas", "Atlas"]);
+        // Everything else is a field, read when asked for.
         assert_eq!(note.field("status"), Some("active"));
-    }
-
-    #[test]
-    fn a_title_in_parts_answers_to_each() {
-        let meta = Note::parse("# Project // Topic\n").meta("notes/x.md");
-        assert_eq!(meta.names(), ["Project // Topic", "Project", "Topic"]);
+        assert!(note.flag("wiki") && !note.flag("private") && !note.flag("pinned"));
+        assert_eq!(note.field("modified").and_then(Timestamp::parse), Timestamp::parse("2026-10-31T10:41:12Z"));
+        // One reading of yes and no.
+        let marked = Note::parse("---\npinned: 3\ninbox: no\ntopic: Maths\nempty:\nprivate: Y\n---\n");
+        assert!(marked.flag("pinned") && marked.flag("topic") && marked.flag("private"));
+        assert!(!marked.flag("inbox") && !marked.flag("empty") && !marked.flag("absent"));
     }
 
     #[test]
     fn references_are_gathered_outside_code() {
         let refs = Note::parse(ATLAS).references();
-        let targets: Vec<_> = refs.links.iter().map(|l| (l.target.as_str(), l.embed, l.block.as_slice())).collect();
+        let pointers: Vec<_> = refs.links.iter().map(|l| (l.target.as_str(), l.kind, l.field.as_deref(), l.block.as_slice())).collect();
+        use LinkKind::{Embed, Link, Tag};
         assert_eq!(
-            targets,
+            pointers,
             [
-                ("Ada Lovelace", false, &[1][..]),
-                ("2026-10-31", false, &[1]),
-                ("Embedded Page", true, &[2]),
-                ("Ada Lovelace", false, &[]),
-                ("Grace Hopper", false, &[]),
+                ("Ada Lovelace", Link, None, &[1][..]),
+                ("2026-10-31", Link, None, &[1]),
+                ("planning", Tag, None, &[1]),
+                ("projects", Tag, None, &[1]),
+                ("Embedded Page", Embed, None, &[2]),
+                // Then the frontmatter's: its tags, and the names in `related`.
+                ("Projects", Tag, Some("tags"), &[]),
+                ("Work", Tag, Some("tags"), &[]),
+                ("Ada Lovelace", Link, Some("related"), &[]),
+                ("Grace Hopper", Link, Some("related"), &[]),
             ]
         );
-        assert_eq!(refs.tags, ["planning", "projects"]);
+        assert_eq!(refs.links[8].label.as_deref(), Some("Grace"));
+        // In any other field, only what is written as a link is one.
+        let fielded = Note::parse("---\ncompany: \"[[Acme]]\"\nstatus: Acme\nlist:\n  - First\n  - \"[[Second]]\"\naliases: [Nobody]\n---\n").references();
+        let fields: Vec<_> = fielded.links.iter().map(|l| (l.target.as_str(), l.field.as_deref().unwrap())).collect();
+        assert_eq!(fields, [("Acme", "company"), ("First", "list"), ("Second", "list")]);
         assert_eq!(refs.web_links, [WebLink { url: "https://cal.example/atlas".into(), block: vec![1, 1] }]);
         assert_eq!(refs.images.len(), 1);
         assert_eq!((refs.images[0].source.as_str(), refs.images[0].width), ("assets/atlas.png", Some(425.0)));
@@ -539,8 +597,25 @@ mod tests {
     }
 
     #[test]
+    fn a_task_is_found_again_after_the_note_changed_around_it() {
+        let mut note = Note::parse("- intro\n+ [ ] Call Ada\n- middle\n  + [ ] Call Ada\n+ [ ] Book a room\n");
+        // As an index saw it: [1] and [2, 0] are "Call Ada", [3] "Book a room".
+        note.body.blocks.insert(0, Block::bullet("a line added above"));
+        assert_eq!(note.body.locate(&[3], "Book a room"), Some(vec![4]));
+        // Of two alike, the one nearest where it was.
+        assert_eq!(note.set_task_like(&[2, 0], "Call Ada", true), Some(vec![3, 0]));
+        assert_eq!(note.set_task_like(&[1], "Call Ada", true), Some(vec![2]));
+        // Where nothing moved, the path itself.
+        assert_eq!(note.set_task_like(&[4], "Book a room", true), Some(vec![4]));
+        assert_eq!(note.to_markdown(), "- a line added above\n- intro\n+ [x] Call Ada\n- middle\n  + [x] Call Ada\n+ [x] Book a room\n");
+        // Gone, or no task: nothing is touched.
+        assert_eq!(note.set_task_like(&[0], "No such task", true), None);
+        assert_eq!(note.set_task_like(&[1], "intro", true), None);
+    }
+
+    #[test]
     fn relinking_rewrites_every_way_a_page_is_named() {
-        let source = "---\ntitle: Ada Lovelace\ntags: [Person, Project Atlas]\nrelated:\n  - \"[[project atlas|the project]]\"\n  - Grace Hopper\ncompany: Project Atlas\ncaption: Project Atlas\n---\n# Heading\n\n- See [[Project Atlas]], [[project  atlas|it]] and ![[PROJECT ATLAS]]; not [[Project Atlas 2]] or `[[Project Atlas]]`\n\n| a |\n|---|\n| [[Project Atlas\\|x]] |\n\n```query\ntag: Project Atlas\ntitle: Project Atlas\nlinks to: project atlas\n```\n\n```\n[[Project Atlas]]\n```\n";
+        let source = "---\ntags: [Person, Project Atlas]\nrelated:\n  - \"[[project atlas|the project]]\"\n  - Grace Hopper\ncompany: Project Atlas\ncaption: Project Atlas\n---\n# Heading\n\n- See [[Project Atlas]], [[project  atlas|it]] and ![[PROJECT ATLAS]]; not [[Project Atlas 2]] or `[[Project Atlas]]`\n\n| a |\n|---|\n| [[Project Atlas\\|x]] |\n\n```query\ntag: Project Atlas\ntitle: Project Atlas\nlinks to: project atlas\n```\n\n```\n[[Project Atlas]]\n```\n";
         let mut note = Note::parse(source);
         assert_eq!(note.relink("Project Atlas", "Atlas Reborn"), 9);
         let expected = source
@@ -558,13 +633,21 @@ mod tests {
     }
 
     #[test]
+    fn tags_follow_a_rename_where_they_can_be_written() {
+        let source = "---\ntags: [person, \"#Other\"]\n---\n- Met #person and #Person/x at `#person`\n";
+        let mut note = Note::parse(source);
+        assert_eq!(note.relink("Person", "People"), 2);
+        assert_eq!(note.to_markdown(), "---\ntags: [People, \"#Other\"]\n---\n- Met #People and #Person/x at `#person`\n");
+        // A name of two words is no tag: the inline one is left, the frontmatter's follows.
+        assert_eq!(note.relink("People", "Two Words"), 1);
+        assert_eq!(note.to_markdown(), "---\ntags: [Two Words, \"#Other\"]\n---\n- Met #People and #Person/x at `#person`\n");
+    }
+
+    #[test]
     fn a_title_is_set_where_it_is_written() {
-        let mut titled = Note::parse("---\ntitle: Old\n---\n# Heading stays\n");
-        titled.set_title("New");
-        assert_eq!(titled.to_markdown(), "---\ntitle: New\n---\n# Heading stays\n");
-        let mut headed = Note::parse("---\nid: x\n---\n#  Old\n\ntext\n");
+        let mut headed = Note::parse("---\ntitle: a field\n---\n#  Old\n\ntext\n");
         headed.set_title(" New ");
-        assert_eq!(headed.to_markdown(), "---\nid: x\n---\n#  New\n\ntext\n");
+        assert_eq!(headed.to_markdown(), "---\ntitle: a field\n---\n#  New\n\ntext\n");
         let mut bare = Note::parse("- just a list\n");
         bare.set_title("New");
         assert_eq!(bare.to_markdown(), "# New\n- just a list\n");

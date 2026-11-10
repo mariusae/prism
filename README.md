@@ -7,8 +7,9 @@ The apps are views. Everything hard lives here, once, in Rust:
 
 - a **git sync engine** that never stops on a conflict and never loses
   what was written, with first-class support for GitHub;
-- **indices** — backlinks, search, tasks, the catalog of pages — kept in
-  step with a git tree by ingesting only what changed;
+- **indices** — backlinks, search, tasks, the catalog of pages, when each
+  was made and changed — kept in step with git by ingesting only what
+  changed;
 - the **note model**: frontmatter, a lossless block tree editors can
   restructure, inline spans, and the Markdown both are written in;
 - the **relay** that tells devices the moment another one pushes,
@@ -22,7 +23,7 @@ The apps are views. Everything hard lives here, once, in Rust:
 
 ```text
                         ┌──────────────── prism ────────────────┐
-                        │  Engine   one thread: index, sync,    │
+                        │  Engine   two threads: index, sync;   │
        an app  ───────▶ │           events                      │
                         │  Graph    notes as files              │
                         └───┬───────────┬───────────┬───────────┘
@@ -46,7 +47,7 @@ The apps are views. Everything hard lives here, once, in Rust:
 |---|---|---|
 | [`prism-markup`](crates/prism-markup) | A note as data: frontmatter, the block tree, inline spans, outline editing, Markdown in and out. No I/O, no dependencies. | — |
 | [`prism-sync`](crates/prism-sync) | The git engine: snapshot, commit, fetch, merge, push; three-way text merge; the schedule. Knows nothing of notes. | libgit2 |
-| [`prism-index`](crates/prism-index) | Incremental indices over git trees, and four of them: catalog, links, search, tasks. | markup, sync, SQLite |
+| [`prism-index`](crates/prism-index) | Incremental indices over git trees — catalog, links, search, tasks, assets — queries compiled to SQL over them, and pages' times read off git's history. | markup, sync, SQLite |
 | [`prism-github`](crates/prism-github) | Signing in, the API, webhooks — as request builders and response readers. No I/O. | — |
 | [`prism-relay`](crates/prism-relay) | The relay's decisions as pure functions; APNs; the device's listener. | github |
 | [`prism-relay-worker`](crates/prism-relay-worker) | The relay hosted on Cloudflare Workers. Plumbing only. | relay |
@@ -103,9 +104,17 @@ relay are written as functions from data to data — a request to send, a
 response to read, a decision. The same code runs in a native app and in a
 Worker, and all of it is tested natively.
 
-**One thread.** The engine does one thing at a time — index, or sync —
-in the order asked. No locks around the repository, no index between two
-trees. Apps read the indices on their own threads, through SQLite's WAL.
+**Two threads, and indexing never waits for the network.** One thread
+indexes, one syncs, each doing one thing at a time in the order asked.
+The indexing thread only reads the working tree and writes objects; the
+syncing thread alone commits and moves branches. No locks around the
+repository, no index between two trees. Apps read the indices on their
+own threads, through SQLite's WAL.
+
+**Everything costs what it touches.** A save hashes the file saved, not
+the graph. A query is one SQL statement over the indices, stopped at its
+limit. When pages were made and changed is read off git's history, a
+commit at a time.
 
 ## Using it
 
@@ -179,8 +188,11 @@ through the parser and the engine; they only read it (the second copies
 its notes into a temporary repository first).
 
 On the graph this was built against — 2,115 pages — a release build
-indexes everything from nothing in 1.2 s, commits it in 0.6 s, and has an
-edited note written, snapshotted and indexed in under 10 ms.
+indexes everything from nothing in 1.3 s, commits it in 0.8 s, and has an
+edited note written, snapshotted and indexed in 4 ms. A query for the ten
+pages changed last, a title completed as it is typed, a tag's pages and a
+page's backlinks each take well under a millisecond: every one is read
+off an index ([what each operation costs](docs/data-model.md#21-what-each-operation-costs)).
 
 ## Not here yet
 
@@ -189,6 +201,4 @@ edited note written, snapshotted and indexed in under 10 ms.
   built for iOS or packaged for Xcode.
 - **SSH remotes and shallow clones.** HTTPS with a token only, and always
   the whole history.
-- **Renaming a title's parts.** A rename relinks links to the page's
-  title; links to a part of a `Project // Topic` title are left.
 - **The apps.**

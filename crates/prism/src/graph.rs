@@ -25,12 +25,13 @@ pub struct Graph {
     root: PathBuf,
 }
 
-/// What [`Graph::rename_note`] did.
+/// What a rename did: [`Engine::rename_note`](crate::Engine::rename_note),
+/// or an alias changed.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Renamed {
     pub old_title: String,
     pub new_title: String,
-    /// Every file rewritten: the page itself, the pages that linked to
+    /// Every file rewritten: the page itself, the pages that pointed at
     /// it, the rivers that held it.
     pub rewritten: Vec<String>,
 }
@@ -200,15 +201,10 @@ impl Graph {
 
     // --- Renaming ----------------------------------------------------------
 
-    /// Renames a page: retitles it where its title is written, and makes
-    /// every page in `linking` — and every saved river — name the new
-    /// title where it named the old. The page's file stays where it is;
-    /// its `id` and its path are what do not change.
-    ///
-    /// `linking` is the pages that may link to it: its backlinks, from
-    /// the index ([`Engine::rename_note`](crate::Engine::rename_note)
-    /// finds them). A page listed that has no such link is left alone.
-    pub fn rename_note(&self, path: &str, new_title: &str, linking: &[String]) -> Result<Renamed> {
+    /// Retitles a page — its first heading — and nothing else: no other
+    /// page is touched. For a page whose old title led elsewhere — one of
+    /// two with the same title — so that no link was its own.
+    pub(crate) fn retitle(&self, path: &str, new_title: &str) -> Result<Renamed> {
         let new_title = new_title.trim();
         if NoteKind::of(path) != Some(NoteKind::Note) || new_title.is_empty() {
             return Err(Error::NotRenamable(path.to_owned()));
@@ -216,27 +212,97 @@ impl Graph {
         let mut note = self.note(path)?.ok_or_else(|| Error::NotRenamable(path.to_owned()))?;
         let old_title = note.title(path);
         let mut renamed = Renamed { old_title: old_title.clone(), new_title: new_title.to_owned(), rewritten: Vec::new() };
-        if old_title == new_title {
+        if old_title != new_title {
+            note.set_title(new_title);
+            self.save(path, &note)?;
+            renamed.rewritten.push(path.to_owned());
+        }
+        Ok(renamed)
+    }
+
+    /// Renames a page: retitles it, and makes every file in `linking`
+    /// name the new title where it named the old. The page's file stays
+    /// where it is.
+    ///
+    /// `linking` is the files that may point at it — pages and saved
+    /// rivers: its backlinks, which only the index knows. So this is the
+    /// engine's to call ([`Engine::rename_note`](crate::Engine::rename_note)).
+    pub(crate) fn rename_note(&self, path: &str, new_title: &str, linking: &[String]) -> Result<Renamed> {
+        let mut renamed = self.retitle(path, new_title)?;
+        if renamed.old_title == renamed.new_title {
             return Ok(renamed);
         }
-        note.set_title(new_title);
         // A page may link to itself.
-        note.relink(&old_title, new_title);
-        self.save(path, &note)?;
-        renamed.rewritten.push(path.to_owned());
-        for source in linking.iter().filter(|source| source.as_str() != path) {
-            let Some(mut linking_note) = self.note(source)? else { continue };
-            if linking_note.relink(&old_title, new_title) > 0 && self.save(source, &linking_note)? {
-                renamed.rewritten.push(source.clone());
-            }
-        }
-        for name in self.river_names() {
-            let Some(mut river) = self.river(&name)? else { continue };
-            if river.rename(&old_title, new_title) && self.save_river(&name, &river)? {
-                renamed.rewritten.push(river::path(&name));
+        let mut linking = linking.to_vec();
+        linking.push(path.to_owned());
+        for rewritten in self.relink(&renamed.old_title, &renamed.new_title, &linking)? {
+            if !renamed.rewritten.contains(&rewritten) {
+                renamed.rewritten.push(rewritten);
             }
         }
         Ok(renamed)
+    }
+
+    /// Makes every file in `linking` name `to` where it named `from`
+    /// ([`Note::relink`]). Returns the files rewritten. A saved river is
+    /// rewritten as a page is: its file is Markdown, its cards are links.
+    pub(crate) fn relink(&self, from: &str, to: &str, linking: &[String]) -> Result<Vec<String>> {
+        let mut rewritten = Vec::new();
+        for source in linking {
+            if rewritten.contains(source) {
+                continue;
+            }
+            let Some(mut note) = self.note(source)? else { continue };
+            if note.relink(from, to) > 0 && self.save(source, &note)? {
+                rewritten.push(source.clone());
+            }
+        }
+        Ok(rewritten)
+    }
+
+    /// Changes one of a page's aliases to another — or, with no `to`,
+    /// takes it away — in the page's own frontmatter, and nothing else.
+    /// Answers the name that now stands for the old one: the new alias,
+    /// or the page's title. `None`, and nothing written, when the page
+    /// has no such alias.
+    pub(crate) fn change_alias(&self, path: &str, from: &str, to: Option<&str>) -> Result<Option<String>> {
+        let Some(mut note) = self.note(path)? else { return Ok(None) };
+        let title = note.title(path);
+        let key = prism_markup::name_key(from);
+        let mut aliases = note.frontmatter.as_ref().map(|front| front.list("aliases")).unwrap_or_default();
+        let Some(at) = aliases.iter().position(|alias| prism_markup::name_key(alias) == key) else { return Ok(None) };
+        let to = to.map(str::trim).filter(|to| !to.is_empty());
+        // An alias the page already answers to some other way is not written twice.
+        let redundant = |to: &str| {
+            prism_markup::name_key(to) == prism_markup::name_key(&title)
+                || aliases.iter().enumerate().any(|(i, a)| i != at && prism_markup::name_key(a) == prism_markup::name_key(to))
+        };
+        match to {
+            Some(to) if !redundant(to) => aliases[at] = to.to_owned(),
+            _ => {
+                aliases.remove(at);
+            }
+        }
+        if aliases.is_empty() {
+            note.frontmatter_mut().remove("aliases");
+        } else {
+            note.frontmatter_mut().set("aliases", aliases);
+        }
+        self.save(path, &note)?;
+        Ok(Some(to.unwrap_or(&title).to_owned()))
+    }
+
+    /// Checks a task off, or opens it again: the task last seen at
+    /// `block` with this `text` — as an index listed it — wherever it is
+    /// in the page now. Answers where it was found; `None`, and nothing
+    /// written, when the page has no such task any more.
+    pub fn set_task(&self, path: &str, block: &[usize], text: &str, done: bool) -> Result<Option<Vec<usize>>> {
+        let Some(mut note) = self.note(path)? else { return Ok(None) };
+        let found = note.set_task_like(block, text, done);
+        if found.is_some() {
+            self.save(path, &note)?;
+        }
+        Ok(found)
     }
 
     // --- Rivers ------------------------------------------------------------
@@ -259,9 +325,16 @@ impl Graph {
         Ok(self.read(&river::path(name))?.map(|text| River::parse(&text)))
     }
 
-    /// Saves a river under a name. Says whether its file changed.
+    /// Saves a river under a name. Says whether its file changed. What
+    /// the file holds that a river does not read — a newer app's
+    /// frontmatter — is kept, whether or not this river was read from it.
     pub fn save_river(&self, name: &str, river: &River) -> Result<bool> {
-        self.write(&river::path(name), &river.to_markdown())
+        let path = river::path(name);
+        let content = match self.read(&path)? {
+            Some(existing) if !river.has_source() => river.clone().over(&existing).to_markdown(),
+            _ => river.to_markdown(),
+        };
+        self.write(&path, &content)
     }
 
     pub fn delete_river(&self, name: &str) -> Result<bool> {
@@ -292,11 +365,16 @@ impl Graph {
         (1..).map(candidate).find(|path| !self.root.join(path).exists()).unwrap_or_default()
     }
 
-    /// Makes a new note with a title: `notes/<slug>.md`, with a ULID `id`
-    /// and the title as its first heading. A day's or week's title makes
-    /// that page, which is named by its file and needs neither. Returns
-    /// the path; a page already there is left as it is.
-    pub fn create_note(&self, title: &str) -> Result<String> {
+    /// Makes a new note with a title: `notes/<slug>.md`, the title its
+    /// first heading. A day's or week's title makes that page, which is
+    /// named by its file. Returns the path; a page already there is left
+    /// as it is.
+    ///
+    /// A note whose file would be this title's, and whose title this is,
+    /// is that page: it is answered, not made again as `-2`. But only
+    /// the index knows every title and alias, so making a note is the
+    /// engine's to do ([`Engine::create_note`](crate::Engine::create_note)).
+    pub(crate) fn create_note(&self, title: &str) -> Result<String> {
         let path = self.path_for_title(title);
         if self.exists(&path) {
             return Ok(path);
@@ -304,7 +382,15 @@ impl Graph {
         let mut note = Note::default();
         note.body.final_newline = true;
         if NoteKind::of(&path) == Some(NoteKind::Note) {
-            note.frontmatter_mut().set("id", ulid());
+            let (slug, key) = (slug(title.trim()), prism_markup::name_key(title));
+            let taken = (1..)
+                .map(|attempt| if attempt == 1 { format!("notes/{slug}.md") } else { format!("notes/{slug}-{attempt}.md") })
+                .take_while(|candidate| *candidate != path);
+            for candidate in taken {
+                if self.note(&candidate)?.is_some_and(|note| prism_markup::name_key(&note.title(&candidate)) == key) {
+                    return Ok(candidate);
+                }
+            }
             note.body.blocks.push(Block::heading(1, title.trim()));
         } else {
             note.body.blocks.push(Block::bullet(""));
@@ -369,28 +455,6 @@ pub fn slug(title: &str) -> String {
     }
 }
 
-/// A new ULID, lowercase: 48 bits of the time, 80 of chance. A note's
-/// lasting identity.
-pub fn ulid() -> String {
-    use std::hash::{BuildHasher, Hasher};
-    const ALPHABET: &[u8; 32] = b"0123456789abcdefghjkmnpqrstvwxyz";
-    let mut millis = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_millis() as u64).unwrap_or(0);
-    let mut text = [b'0'; 26];
-    for slot in text[..10].iter_mut().rev() {
-        *slot = ALPHABET[(millis % 32) as usize];
-        millis /= 32;
-    }
-    // The standard library's hasher keys are the system's randomness.
-    let random = || std::collections::hash_map::RandomState::new().build_hasher().finish();
-    let (mut high, mut low) = (random(), random());
-    for (index, slot) in text[10..].iter_mut().enumerate() {
-        let source = if index < 8 { &mut high } else { &mut low };
-        *slot = ALPHABET[(*source % 32) as usize];
-        *source /= 32;
-    }
-    String::from_utf8_lossy(&text).into_owned()
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -412,16 +476,6 @@ mod tests {
         assert_eq!(slug("CON"), "con-note");
         assert_eq!(slug(&"long word ".repeat(20)).chars().count(), 59);
         assert!(!slug(&"ab ".repeat(40)).ends_with('-'));
-    }
-
-    #[test]
-    fn ulids_are_ulids_and_sort_by_time() {
-        let first = ulid();
-        assert!(prism_markup::note::is_ulid(&first), "{first}");
-        std::thread::sleep(std::time::Duration::from_millis(3));
-        let second = ulid();
-        assert!(second > first);
-        assert_ne!(ulid()[10..], ulid()[10..]);
     }
 
     #[test]
@@ -460,14 +514,13 @@ mod tests {
     }
 
     #[test]
-    fn new_notes_get_a_path_an_id_and_a_heading() {
+    fn new_notes_get_a_path_and_a_heading() {
         let (_dir, graph) = graph();
         let path = graph.create_note("Project Atlas").unwrap();
         assert_eq!(path, "notes/project-atlas.md");
-        let text = graph.read(&path).unwrap().unwrap();
-        let note = Note::parse(&text);
-        assert!(prism_markup::note::is_ulid(note.field("id").unwrap()));
-        assert_eq!(text, format!("---\nid: {}\n---\n# Project Atlas\n", note.field("id").unwrap()));
+        // Nothing but its title: no frontmatter is written that says nothing.
+        assert_eq!(graph.read(&path).unwrap().unwrap(), "# Project Atlas\n");
+        assert_eq!(graph.create_note("project  ATLAS").unwrap(), path, "the page of that title, where its file's name says so");
         // A page already there is left alone, and found again.
         assert_eq!(graph.create_note("2026-10-31").unwrap(), "daily/2026-10-31.md");
         assert_eq!(graph.read("daily/2026-10-31.md").unwrap().unwrap(), "- \n");
@@ -477,7 +530,7 @@ mod tests {
         assert_eq!(graph.create_note("2026-W44").unwrap(), "weekly/2026-W44.md");
         // A slug in use gets a number.
         assert_eq!(graph.path_for_title("project atlas!"), "notes/project-atlas-2.md");
-        graph.write("notes/project-atlas-2.md", "x").unwrap();
+        graph.write("notes/project-atlas-2.md", "# Another\n").unwrap();
         assert_eq!(graph.path_for_title("Project  Atlas"), "notes/project-atlas-3.md");
     }
 
@@ -504,7 +557,14 @@ mod tests {
         assert!(graph.save_river("Work", &river).unwrap());
         assert_eq!(graph.river_names(), ["Work"]);
 
-        let linking = vec!["notes/ada.md".to_owned(), "notes/other.md".to_owned(), "daily/2026-10-31.md".to_owned(), "notes/gone.md".to_owned()];
+        // What points at it — pages and rivers alike — as the index would say.
+        let linking = vec![
+            "notes/ada.md".to_owned(),
+            "notes/other.md".to_owned(),
+            "daily/2026-10-31.md".to_owned(),
+            "notes/gone.md".to_owned(),
+            "rivers/Work.md".to_owned(),
+        ];
         let renamed = graph.rename_note("notes/atlas.md", " Atlas Reborn ", &linking).unwrap();
         assert_eq!(renamed.old_title, "Project Atlas");
         assert_eq!(renamed.rewritten, ["notes/atlas.md", "notes/ada.md", "daily/2026-10-31.md", "rivers/Work.md"]);

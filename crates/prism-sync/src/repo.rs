@@ -91,6 +91,11 @@ pub struct SnapshotOptions {
     /// Paths (a file, or a directory with its `/`) never snapshotted, on
     /// top of what `.gitignore` leaves out.
     pub exclude: Vec<String>,
+    /// Leave git's own index file as it is. A snapshot ordinarily
+    /// refreshes the index's record of which files are unchanged, which
+    /// makes the next one quicker. One taken while another handle may be
+    /// committing must not: two writers of that file would contend.
+    pub leave_index: bool,
 }
 
 /// The working tree at a moment, as a git tree.
@@ -133,6 +138,22 @@ pub struct CommitSummary {
     /// Seconds since the Unix epoch.
     pub time: i64,
     pub message: String,
+}
+
+/// One path of a tree to set to a file — its content and mode — or to
+/// take out: the path as its parts, from the tree it is asked of.
+type Edit<'a> = (&'a [&'a str], Option<(Oid, u32)>);
+
+/// A commit as a walk of history meets it: when it was made, its tree,
+/// and the trees of its parents.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CommitNode {
+    pub id: Oid,
+    /// Seconds since the Unix epoch.
+    pub time: i64,
+    pub tree: Oid,
+    /// The parents' trees: none for a first commit, two for a merge.
+    pub parent_trees: Vec<Oid>,
 }
 
 impl Repository {
@@ -249,6 +270,25 @@ impl Repository {
         Ok(commits)
     }
 
+    /// The commits `head` leads to that `since` does not — all of them,
+    /// for `None` — oldest first, each after its parents. What something
+    /// that follows history ingests to catch up.
+    pub fn commits_since(&self, head: Oid, since: Option<Oid>) -> Result<Vec<CommitNode>> {
+        let mut walk = self.git.revwalk()?;
+        walk.set_sorting(git2::Sort::TOPOLOGICAL | git2::Sort::REVERSE)?;
+        walk.push(head)?;
+        if let Some(since) = since {
+            walk.hide(since)?;
+        }
+        let mut commits = Vec::new();
+        for id in walk {
+            let commit = self.git.find_commit(id?)?;
+            let parent_trees = commit.parents().map(|parent| parent.tree_id()).collect();
+            commits.push(CommitNode { id: commit.id(), time: commit.time().seconds(), tree: commit.tree_id(), parent_trees });
+        }
+        Ok(commits)
+    }
+
     /// How many commits `local` has that `other` lacks, and the reverse.
     pub fn ahead_behind(&self, local: Oid, other: Oid) -> Result<(usize, usize)> {
         Ok(self.git.graph_ahead_behind(local, other)?)
@@ -346,7 +386,7 @@ impl Repository {
             .exclude_submodules(true)
             .renames_head_to_index(false)
             .renames_index_to_workdir(false)
-            .update_index(true);
+            .update_index(!options.leave_index);
         let workdir = self.workdir().to_owned();
         let mut skipped = Vec::new();
         for entry in self.git.statuses(Some(&mut status))?.iter() {
@@ -380,6 +420,115 @@ impl Repository {
             }
         }
         Ok(Snapshot { tree: index.write_tree_to(&self.git)?, skipped })
+    }
+
+    /// The working tree as a git tree, for one who knows what changed:
+    /// `base` as the tree it was, with each of `paths` as it is now on
+    /// disk — written, changed, or gone.
+    ///
+    /// [`snapshot`](Self::snapshot) finds what changed by looking at
+    /// every file, which costs what the graph holds. Whoever wrote the
+    /// files knows which they were; this costs only them. Given every
+    /// path that changed since `base` was the working tree, the tree
+    /// answered is the one `snapshot` would answer. (Of the files left
+    /// out for their size, only those among `paths` are listed.)
+    ///
+    /// `None` when that cannot be promised from the paths alone — one is
+    /// a directory or a link, or is `.gitignore`, which changes what
+    /// every other path means: take a full [`snapshot`](Self::snapshot)
+    /// then. Nothing but the object store is written, not even git's
+    /// index, so this never contends with a commit under way.
+    pub fn snapshot_paths(&self, base: Oid, paths: &[String], options: &SnapshotOptions) -> Result<Option<Snapshot>> {
+        let workdir = self.workdir().to_owned();
+        let mut edits = Vec::new();
+        let mut skipped = Vec::new();
+        let mut seen = std::collections::HashSet::new();
+        for path in paths {
+            if !seen.insert(path) {
+                continue;
+            }
+            let parts: Vec<&str> = path.split('/').collect();
+            let rules = matches!(parts.last(), Some(&".gitignore") | Some(&".gitattributes") | Some(&".gitmodules"));
+            if rules || parts.iter().any(|part| part.is_empty() || *part == ".git" || *part == "." || *part == "..") {
+                return Ok(None);
+            }
+            if is_excluded(path, &options.exclude) {
+                continue;
+            }
+            let file = workdir.join(path);
+            let entry = match std::fs::symlink_metadata(&file) {
+                Ok(meta) if meta.is_file() => {
+                    // A file git ignores stays out — unless it is tracked all the same.
+                    if self.git.is_path_ignored(Path::new(path))? && self.entry(base, path)?.is_none() {
+                        continue;
+                    }
+                    if options.max_file_bytes.is_some_and(|max| meta.len() >= max) {
+                        skipped.push((path.clone(), meta.len()));
+                        continue;
+                    }
+                    Some((self.git.blob_path(&file)?, file_mode(&meta)))
+                }
+                Ok(_) => return Ok(None),
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => None,
+                // A path through a file: `a/b` where `a` is no directory.
+                Err(e) if e.raw_os_error() == Some(20) => None,
+                Err(e) => return Err(Error::io(format!("reading {path}"))(e)),
+            };
+            edits.push((parts, entry));
+        }
+        let edits: Vec<Edit<'_>> = edits.iter().map(|(parts, entry): &(Vec<&str>, _)| (parts.as_slice(), *entry)).collect();
+        let tree = match self.splice(Some(base), &edits)? {
+            Some(tree) => tree,
+            None => self.git.treebuilder(None)?.write()?,
+        };
+        Ok(Some(Snapshot { tree, skipped }))
+    }
+
+    /// A tree with some paths set to files, or taken out. Each directory
+    /// along those paths is rewritten once, however many of the paths
+    /// are in it, and no other is opened. `None` for a tree left with
+    /// nothing in it.
+    fn splice(&self, tree: Option<Oid>, edits: &[Edit<'_>]) -> Result<Option<Oid>> {
+        if edits.is_empty() {
+            return Ok(tree);
+        }
+        let existing = match tree {
+            Some(id) => Some(self.git.find_tree(id)?),
+            None => None,
+        };
+        let mut builder = self.git.treebuilder(existing.as_ref())?;
+        // What is under each name: the file itself, or paths further down.
+        let mut under: std::collections::BTreeMap<&str, Vec<Edit<'_>>> = std::collections::BTreeMap::new();
+        for (parts, entry) in edits {
+            if let Some((name, rest)) = parts.split_first() {
+                under.entry(name).or_default().push((rest, *entry));
+            }
+        }
+        for (name, edits) in under {
+            // The last word on the name itself, if any path ends at it.
+            let replacement = match edits.iter().rev().find(|(rest, _)| rest.is_empty()) {
+                Some((_, entry)) => entry.map(|(id, mode)| (id, mode as i32)),
+                None => {
+                    let child = builder.get(name)?.filter(|entry| entry.kind() == Some(ObjectType::Tree)).map(|entry| entry.id());
+                    // Taking files out of a directory that is not there changes nothing.
+                    if child.is_none() && edits.iter().all(|(_, entry)| entry.is_none()) {
+                        continue;
+                    }
+                    self.splice(child, &edits)?.map(|id| (id, 0o040000))
+                }
+            };
+            match replacement {
+                Some((id, mode)) => {
+                    builder.insert(name, id, mode)?;
+                }
+                None => {
+                    if builder.get(name)?.is_some() {
+                        builder.remove(name)?;
+                    }
+                }
+            }
+        }
+        Ok(if builder.is_empty() { None } else { Some(builder.write()?) })
     }
 
     /// Commits a tree on the branch checked out, with HEAD as its parent,

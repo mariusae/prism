@@ -34,6 +34,13 @@
 //! A river is not a page: nothing resolves to it as a title, and a link
 //! to one is written to its file — `[[rivers/Work]]` — so it reads
 //! plainly wherever the graph goes ([`name_of`], [`link`]).
+//!
+//! But its file is Markdown like any note's, and its cards are links
+//! like any other. So a river needs no renaming of its own: read as a
+//! [`Note`](crate::Note), [`Note::relink`](crate::Note::relink) rewrites
+//! a renamed page's card, its place in `folded`, `opened` and `hidden`,
+//! and its name in the river's query — the same lines, by the same rules,
+//! as in a page.
 
 use crate::frontmatter::Frontmatter;
 use crate::query::Query;
@@ -59,6 +66,11 @@ pub fn name_of(target: &str) -> Option<&str> {
 /// A link's target for a river: `Work` is `rivers/Work`.
 pub fn target(name: &str) -> String {
     format!("{RIVERS_DIR}/{name}")
+}
+
+/// Whether a graph-relative path is a saved river's file.
+pub fn is_river(path: &str) -> bool {
+    path.strip_suffix(".md").and_then(|stem| stem.strip_prefix("rivers/")).is_some_and(|name| !name.is_empty() && !name.contains('/'))
 }
 
 /// The link written for a river: `[[rivers/Work]]`.
@@ -99,7 +111,14 @@ impl Card {
 }
 
 /// A saved river, as its file has it.
-#[derive(Debug, Clone, PartialEq, Default)]
+///
+/// **A river read and written back unchanged gives the bytes it was read
+/// from**, whatever else the file holds. One that was changed is written
+/// anew, in the one way a river is written — keeping the frontmatter it
+/// was read with, so a key this reader does not know (a newer app's)
+/// outlives the change; lines of the body that are no card, row or query
+/// do not.
+#[derive(Debug, Clone, Default)]
 pub struct River {
     /// The cards held by hand, in order: those of a plain river, or those
     /// at the top of a query river.
@@ -119,6 +138,25 @@ pub struct River {
     pub color: Option<String>,
     /// Where it stands among the saved rivers, lower first.
     pub place: Option<f64>,
+    /// The file it was read from; `None` for a river made anew. What
+    /// [`to_markdown`](River::to_markdown) keeps faith with.
+    pub source: Option<String>,
+}
+
+impl PartialEq for River {
+    /// Two rivers are the same when they say the same, whatever files
+    /// they were read from.
+    fn eq(&self, other: &River) -> bool {
+        self.cards == other.cards
+            && self.query == other.query
+            && self.placed == other.placed
+            && self.folded == other.folded
+            && self.opened == other.opened
+            && self.hidden == other.hidden
+            && self.icon == other.icon
+            && self.color == other.color
+            && self.place == other.place
+    }
 }
 
 impl River {
@@ -179,17 +217,40 @@ impl River {
             }
         }
         river.query = query_lines.map(|lines| Query::parse(&lines.join("\n")));
+        river.source = Some(source.to_owned());
         river
+    }
+
+    /// Whether the river was read from a file, rather than made.
+    pub fn has_source(&self) -> bool {
+        self.source.is_some()
+    }
+
+    /// The river, as if it had been read from this file and then changed
+    /// to what it is: written back, it keeps what the file holds that a
+    /// river does not read. For a river made anew that is saved over one
+    /// already there.
+    pub fn over(mut self, file: &str) -> River {
+        self.source = Some(file.to_owned());
+        self
     }
 
     /// The river as its file.
     pub fn to_markdown(&self) -> String {
-        let mut front = Frontmatter::new();
+        // Unchanged since it was read: the file as it was.
+        if let Some(source) = &self.source {
+            if River::parse(source) == *self {
+                return source.clone();
+            }
+        }
+        let mut front = self.source.as_deref().and_then(|source| Frontmatter::split(source).0).unwrap_or_default();
         let held: Vec<String> = self.titles().filter(|title| self.folded.iter().any(|f| f == title)).map(str::to_owned).collect();
         // Each an item a line, whatever its length: one device folding a
         // card and another folding a different one then merge.
         let mut list = |key: &str, items: Vec<String>| {
-            if !items.is_empty() {
+            if items.is_empty() {
+                front.remove(key);
+            } else {
                 front.set_list_by_line(key, items);
             }
         };
@@ -198,14 +259,14 @@ impl River {
         opened.sort();
         list("opened", opened);
         list("hidden", self.hidden.clone());
-        if let Some(icon) = &self.icon {
-            front.set("icon", icon.as_str());
-        }
-        if let Some(color) = &self.color {
-            front.set("color", color.as_str());
-        }
-        if let Some(place) = self.place {
-            front.set("place", if place.fract() == 0.0 { format!("{place:.0}") } else { place.to_string() });
+        let place = self.place.map(|place| if place.fract() == 0.0 { format!("{place:.0}") } else { place.to_string() });
+        for (key, value) in [("icon", self.icon.clone()), ("color", self.color.clone()), ("place", place)] {
+            match value {
+                Some(value) => front.set(key, value),
+                None => {
+                    front.remove(key);
+                }
+            }
         }
         let mut text = if front.is_empty() { String::new() } else { front.to_string() };
         let card_lines = |text: &mut String, card: &Card| {
@@ -236,20 +297,6 @@ impl River {
     /// Every card held by hand, by title: at its top, then placed.
     pub fn titles(&self) -> impl Iterator<Item = &str> {
         self.cards.iter().chain(&self.placed).map(|card| card.title.as_str())
-    }
-
-    /// A page renamed: its card, and what is said of it, under the new
-    /// title. Says whether anything changed.
-    pub fn rename(&mut self, from: &str, to: &str) -> bool {
-        let mut changed = false;
-        let titles = self.cards.iter_mut().chain(&mut self.placed).map(|card| &mut card.title);
-        for title in titles.chain(&mut self.folded).chain(&mut self.opened).chain(&mut self.hidden) {
-            if title == from {
-                *title = to.to_owned();
-                changed = true;
-            }
-        }
-        changed
     }
 }
 
@@ -320,11 +367,31 @@ mod tests {
 
     #[test]
     fn folded_is_written_only_for_cards_it_holds_and_noise_is_passed_over() {
-        let mut river = River::parse("---\nfolded: [Gone, Alpha]\n---\nsome prose\n- [[Alpha]]\n  not a row\n  - x: not numbered\n- no link here\n- [[]]\n");
+        const NOISY: &str = "---\nfolded: [Gone, Alpha]\n---\nsome prose\n- [[Alpha]]\n  not a row\n  - x: not numbered\n- no link here\n- [[]]\n";
+        let mut river = River::parse(NOISY);
         assert_eq!(river.titles().collect::<Vec<_>>(), ["Alpha"]);
-        assert_eq!(river.to_markdown(), "---\nfolded:\n  - Alpha\n---\n- [[Alpha]]\n");
-        assert!(river.rename("Alpha", "Alef"));
-        assert!(!river.rename("Nobody", "Somebody"));
+        // Untouched, it is the file it was; made anew, it is written the one way.
+        assert_eq!(river.to_markdown(), NOISY);
+        let anew = River { cards: river.cards.clone(), folded: river.folded.clone(), ..River::default() };
+        assert_eq!(anew, river);
+        assert_eq!(anew.to_markdown(), "---\nfolded:\n  - Alpha\n---\n- [[Alpha]]\n");
+        river.cards[0].title = "Alef".into();
+        river.folded = vec!["Alef".into()];
         assert_eq!(river.to_markdown(), "---\nfolded:\n  - Alef\n---\n- [[Alef]]\n");
+    }
+
+    #[test]
+    fn a_river_changed_keeps_what_it_does_not_read() {
+        const NEWER: &str = "---\n# kept by hand\nlayout: board\nfolded: [Alpha]\nicon: tray\n---\n-   [[Alpha]]\n- [[Beta]]\n";
+        let mut river = River::parse(NEWER);
+        assert_eq!(river.to_markdown(), NEWER, "odd spacing and all");
+        river.cards.push(Card::new("Gamma"));
+        river.icon = None;
+        assert_eq!(river.to_markdown(), "---\n# kept by hand\nlayout: board\nfolded:\n  - Alpha\n---\n- [[Alpha]]\n- [[Beta]]\n- [[Gamma]]\n");
+        // A river made anew, saved over that file, keeps it too.
+        let made = River { cards: vec![Card::new("Only")], ..River::default() };
+        assert!(!made.has_source());
+        assert_eq!(made.clone().to_markdown(), "- [[Only]]\n");
+        assert_eq!(made.over(NEWER).to_markdown(), "---\n# kept by hand\nlayout: board\n---\n- [[Only]]\n");
     }
 }

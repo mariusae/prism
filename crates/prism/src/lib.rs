@@ -5,7 +5,7 @@
 //!
 //! ```text
 //!                         ┌──────────────── prism ────────────────┐
-//!                         │  Engine   one thread: index, sync,    │
+//!                         │  Engine   two threads: index, sync;   │
 //!        an app  ───────▶ │           events                      │
 //!                         │  Graph    notes as files              │
 //!                         └───┬───────────┬───────────┬───────────┘
@@ -82,7 +82,7 @@ mod note_merge;
 
 pub use commit_message::NoteDescriber;
 pub use engine::{Engine, EngineConfig, Event, Status, SyncFailure};
-pub use graph::{slug, ulid, Graph, Renamed, Saved};
+pub use graph::{slug, Graph, Renamed, Saved};
 pub use note_merge::{merge_notes, NoteMergeDriver};
 
 /// Notes as data: frontmatter, the block tree, inline spans.
@@ -117,6 +117,8 @@ pub enum Error {
     /// Another page already answers to the title.
     #[error("another page is already called {0:?}")]
     TitleTaken(String),
+    #[error("the page has no alias {0:?}")]
+    NoSuchAlias(String),
     #[error("watching the graph's folder: {0}")]
     Watch(String),
     #[error("the graph's remote is not a GitHub repository")]

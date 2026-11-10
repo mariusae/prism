@@ -1,12 +1,18 @@
-//! The catalog: every page, what it is called, and what it says of itself.
+//! The catalog: every page, what it is called, and what its fields say.
 
-use crate::{File, Index, Result};
+use crate::{column_exists, File, Index, Result};
 use prism_markup::{name_key, Day, FieldSpec, NoteKind, Week};
 use rusqlite::{params, Connection, OptionalExtension, Transaction};
 
-/// Every page of the graph: its title and names, its tags, its
-/// frontmatter fields. What a chooser searches, what a link resolves
-/// against, what a query's conditions are asked of.
+/// Every page of the graph: its title and names, and its frontmatter
+/// fields. What a chooser searches, what a link resolves against, what a
+/// query's conditions are asked of.
+///
+/// It keeps little of its own. A page's tags are links
+/// ([`Links`](crate::Links)); when it was made and changed is history's
+/// ([`Times`](crate::Times)); what marks it — pinned, in the inbox — is a
+/// field. Only `private` is singled out, because it decides what every
+/// other question may see.
 pub struct Catalog;
 
 /// A page, as the catalog lists it.
@@ -14,14 +20,19 @@ pub struct Catalog;
 pub struct NoteRow {
     pub path: String,
     pub title: String,
-    /// The page's lasting identity, when it has one.
-    pub id: Option<String>,
     /// `day`, `week` or `note`.
     pub kind: String,
     pub private: bool,
-    pub wiki: bool,
-    /// Seconds since the Unix epoch, as the page's frontmatter says.
+    /// Whether it holds a conflict two devices left for a person to
+    /// settle: a block between conflict markers.
+    pub conflicted: bool,
+    /// Whether nothing is written in it: how an untouched day looks.
+    pub blank: bool,
+    /// When the page was made, in seconds since the Unix epoch: the first
+    /// commit that has it, else — never committed — its file's time.
     pub created: Option<i64>,
+    /// When it was last changed: its file's time while it holds something
+    /// not yet committed, else the last commit that changed it.
     pub modified: Option<i64>,
 }
 
@@ -49,38 +60,49 @@ impl Index for Catalog {
     }
 
     fn version(&self) -> u32 {
-        1
+        3
     }
 
     fn create(&self, tx: &Transaction<'_>) -> Result<()> {
+        // Earlier versions' tables had other columns.
+        if column_exists(tx, "notes", "path")? && !column_exists(tx, "notes", "blank")? {
+            tx.execute_batch("DROP TABLE notes; DROP TABLE IF EXISTS note_tags; DROP TABLE IF EXISTS note_fields;")?;
+        }
         tx.execute_batch(
             "CREATE TABLE IF NOT EXISTS notes (
-                 path TEXT PRIMARY KEY, title TEXT NOT NULL, id TEXT, kind TEXT NOT NULL,
-                 private INTEGER NOT NULL, wiki INTEGER NOT NULL, created INTEGER, modified INTEGER
+                 path TEXT PRIMARY KEY, title TEXT NOT NULL, kind TEXT NOT NULL,
+                 private INTEGER NOT NULL, conflicted INTEGER NOT NULL, blank INTEGER NOT NULL
              ) WITHOUT ROWID;
-             CREATE INDEX IF NOT EXISTS notes_id ON notes (id);
-             -- Every name a page answers to. rank: 0 its title, 1 an alias, 2 a part of its title.
+             -- Pages in the order they are listed in.
+             CREATE INDEX IF NOT EXISTS notes_title ON notes (title COLLATE NOCASE, path);
+             CREATE INDEX IF NOT EXISTS notes_conflicted ON notes (path) WHERE conflicted;
+             -- Every name a page answers to. rank: 0 its title, 1 an alias.
              CREATE TABLE IF NOT EXISTS note_names (key TEXT NOT NULL, name TEXT NOT NULL, path TEXT NOT NULL, rank INTEGER NOT NULL);
              CREATE INDEX IF NOT EXISTS note_names_key ON note_names (key);
              CREATE INDEX IF NOT EXISTS note_names_path ON note_names (path);
-             CREATE TABLE IF NOT EXISTS note_tags (key TEXT NOT NULL, tag TEXT NOT NULL, path TEXT NOT NULL);
-             CREATE INDEX IF NOT EXISTS note_tags_key ON note_tags (key);
-             CREATE INDEX IF NOT EXISTS note_tags_path ON note_tags (path);
-             -- Frontmatter, a row a value: a list's items in order.
-             CREATE TABLE IF NOT EXISTS note_fields (path TEXT NOT NULL, key TEXT NOT NULL, position INTEGER NOT NULL, value TEXT NOT NULL);
-             CREATE INDEX IF NOT EXISTS note_fields_path ON note_fields (path);
+             -- Each name from each of its words on: 'ada lovelace' and 'lovelace'. What
+             -- is typed is looked up as a prefix of these. score: lower is a better find.
+             CREATE TABLE IF NOT EXISTS name_words (suffix TEXT NOT NULL, path TEXT NOT NULL, score INTEGER NOT NULL);
+             CREATE INDEX IF NOT EXISTS name_words_suffix ON name_words (suffix);
+             CREATE INDEX IF NOT EXISTS name_words_path ON name_words (path);
+             -- Frontmatter, a row a value: a list's items in order. number: the value
+             -- as a number, where it is one — what a sort by the field goes by first.
+             CREATE TABLE IF NOT EXISTS note_fields (path TEXT NOT NULL, key TEXT NOT NULL, position INTEGER NOT NULL, value TEXT NOT NULL, number REAL);
+             CREATE INDEX IF NOT EXISTS note_fields_path ON note_fields (path, key);
              CREATE INDEX IF NOT EXISTS note_fields_key ON note_fields (key, value);",
         )?;
+        // The catalog's rows read pages' times from these.
+        tx.execute_batch(crate::times::TABLES)?;
         Ok(())
     }
 
     fn clear(&self, tx: &Transaction<'_>) -> Result<()> {
-        tx.execute_batch("DELETE FROM notes; DELETE FROM note_names; DELETE FROM note_tags; DELETE FROM note_fields;")?;
+        tx.execute_batch("DELETE FROM notes; DELETE FROM note_names; DELETE FROM name_words; DELETE FROM note_fields;")?;
         Ok(())
     }
 
     fn remove(&self, tx: &Transaction<'_>, path: &str) -> Result<()> {
-        for table in ["notes", "note_names", "note_tags", "note_fields"] {
+        for table in ["notes", "note_names", "name_words", "note_fields"] {
             tx.execute(&format!("DELETE FROM {table} WHERE path = ?1"), [path])?;
         }
         Ok(())
@@ -94,30 +116,37 @@ impl Index for Catalog {
             NoteKind::Week(_) => "week",
             NoteKind::Note => "note",
         };
+        let conflicted = file.text().is_some_and(prism_sync::conflict::detect);
         tx.execute(
-            "INSERT INTO notes (path, title, id, kind, private, wiki, created, modified) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
-            params![file.path, meta.title, meta.id, kind, meta.private, meta.wiki, meta.created.map(|t| t.0), meta.modified.map(|t| t.0)],
+            "INSERT INTO notes (path, title, kind, private, conflicted, blank) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+            params![file.path, meta.title, kind, meta.private, conflicted, note.body.is_blank()],
         )?;
         let mut insert_name = tx.prepare_cached("INSERT INTO note_names (key, name, path, rank) VALUES (?1, ?2, ?3, ?4)")?;
-        for name in meta.names() {
-            let rank = if name == meta.title {
-                0
-            } else if meta.aliases.contains(&name) {
-                1
-            } else {
-                2
-            };
-            insert_name.execute(params![name_key(&name), name, file.path, rank])?;
-        }
-        let mut insert_tag = tx.prepare_cached("INSERT INTO note_tags (key, tag, path) VALUES (?1, ?2, ?3)")?;
-        for tag in &meta.tags {
-            insert_tag.execute(params![tag.to_lowercase(), tag, file.path])?;
+        let mut insert_word = tx.prepare_cached("INSERT INTO name_words (suffix, path, score) VALUES (?1, ?2, ?3)")?;
+        for (rank, name) in meta.names().into_iter().enumerate() {
+            let (key, rank) = (name_key(&name), rank.min(1) as i64);
+            insert_name.execute(params![key, name, file.path, rank])?;
+            // The name from each of its words on.
+            let mut from = 0;
+            loop {
+                insert_word.execute(params![&key[from..], file.path, rank * 2 + i64::from(from > 0)])?;
+                match key[from..].find(' ') {
+                    Some(space) => from += space + 1,
+                    None => break,
+                }
+            }
         }
         if let Some(frontmatter) = &note.frontmatter {
-            let mut insert_field = tx.prepare_cached("INSERT INTO note_fields (path, key, position, value) VALUES (?1, ?2, ?3, ?4)")?;
+            let mut insert_field = tx.prepare_cached("INSERT INTO note_fields (path, key, position, value, number) VALUES (?1, ?2, ?3, ?4, ?5)")?;
+            let mut known = std::collections::HashSet::new();
             for (key, value) in frontmatter.iter() {
+                // A key written twice is read as its first.
+                if !known.insert(key) {
+                    continue;
+                }
                 for (position, item) in value.to_list().iter().enumerate() {
-                    insert_field.execute(params![file.path, key, position as i64, item])?;
+                    let number = item.trim().parse::<f64>().ok().filter(|number| number.is_finite());
+                    insert_field.execute(params![file.path, key, position as i64, item, number])?;
                 }
             }
         }
@@ -125,47 +154,47 @@ impl Index for Catalog {
     }
 }
 
-fn row(row: &rusqlite::Row<'_>) -> rusqlite::Result<NoteRow> {
+pub(crate) fn row(row: &rusqlite::Row<'_>) -> rusqlite::Result<NoteRow> {
     Ok(NoteRow {
         path: row.get(0)?,
         title: row.get(1)?,
-        id: row.get(2)?,
-        kind: row.get(3)?,
-        private: row.get(4)?,
-        wiki: row.get(5)?,
+        kind: row.get(2)?,
+        private: row.get(3)?,
+        conflicted: row.get(4)?,
+        blank: row.get(5)?,
         created: row.get(6)?,
         modified: row.get(7)?,
     })
 }
 
-const COLUMNS: &str = "notes.path, notes.title, notes.id, notes.kind, notes.private, notes.wiki, notes.created, notes.modified";
+/// A page's row, with the times that apply to it.
+pub(crate) const COLUMNS: &str = "notes.path, notes.title, notes.kind, notes.private, notes.conflicted, notes.blank,
+     (SELECT created FROM prism_dates WHERE prism_dates.path = notes.path), (SELECT modified FROM prism_dates WHERE prism_dates.path = notes.path)";
+
+/// The pages this connection may see: see [`crate::show_private`].
+pub(crate) const SEEN: &str = "(notes.private = 0 OR (SELECT shows_private FROM temp.prism_scope))";
 
 impl Catalog {
     /// The page at a path.
     pub fn get(db: &Connection, path: &str) -> Result<Option<NoteRow>> {
-        Ok(db.query_row(&format!("SELECT {COLUMNS} FROM notes WHERE path = ?1"), [path], row).optional()?)
-    }
-
-    /// The page with a lasting id, wherever it has been moved to.
-    pub fn by_id(db: &Connection, id: &str) -> Result<Option<NoteRow>> {
-        Ok(db.query_row(&format!("SELECT {COLUMNS} FROM notes WHERE lower(id) = lower(?1)"), [id], row).optional()?)
+        Ok(db.query_row(&format!("SELECT {COLUMNS} FROM notes WHERE path = ?1 AND {SEEN}"), [path], row).optional()?)
     }
 
     /// Every page, by title.
     pub fn all(db: &Connection) -> Result<Vec<NoteRow>> {
-        let mut statement = db.prepare(&format!("SELECT {COLUMNS} FROM notes ORDER BY title COLLATE NOCASE, path"))?;
+        let mut statement = db.prepare(&format!("SELECT {COLUMNS} FROM notes WHERE {SEEN} ORDER BY title COLLATE NOCASE, path"))?;
         let rows = statement.query_map([], row)?.collect::<rusqlite::Result<_>>()?;
         Ok(rows)
     }
 
     pub fn count(db: &Connection) -> Result<usize> {
-        Ok(db.query_row("SELECT count(*) FROM notes", [], |r| r.get::<_, i64>(0))? as usize)
+        Ok(db.query_row(&format!("SELECT count(*) FROM notes WHERE {SEEN}"), [], |r| r.get::<_, i64>(0))? as usize)
     }
 
     /// What a link's name leads to, as links are resolved: a date first
     /// (a day's or a week's page, written yet or not), then a page by its
-    /// title, then by an alias, then by a part of its title — case aside.
-    /// `None`: a page waiting to be written.
+    /// title, then by an alias — case and spacing aside. `None`: a page
+    /// waiting to be written.
     pub fn resolve(db: &Connection, name: &str) -> Result<Option<Resolved>> {
         let trimmed = name.trim();
         let dated = Day::parse(trimmed).map(NoteKind::day_path).or_else(|| Week::parse(trimmed).map(NoteKind::week_path));
@@ -173,9 +202,41 @@ impl Catalog {
             let exists = Catalog::get(db, &path)?.is_some();
             return Ok(Some(if exists { Resolved::Note(path) } else { Resolved::Unwritten(path) }));
         }
-        let path: Option<String> =
-            db.query_row("SELECT path FROM note_names WHERE key = ?1 ORDER BY rank, path LIMIT 1", [name_key(trimmed)], |r| r.get(0)).optional()?;
-        Ok(path.map(Resolved::Note))
+        Ok(Catalog::answering(db, trimmed)?.into_iter().next().map(|(path, _)| Resolved::Note(path)))
+    }
+
+    /// Every page that answers to a name, each with how — `0` by its
+    /// title, `1` by an alias — the one a link leads to first. More than
+    /// one is a clash: see [`duplicates`](Self::duplicates).
+    pub fn answering(db: &Connection, name: &str) -> Result<Vec<(String, u8)>> {
+        let mut statement = db.prepare(&format!(
+            "SELECT note_names.path, min(rank) AS how FROM note_names JOIN notes ON notes.path = note_names.path
+             WHERE key = ?1 AND {SEEN} GROUP BY note_names.path ORDER BY how, note_names.path"
+        ))?;
+        let pages = statement.query_map([name_key(name)], |r| Ok((r.get(0)?, r.get(1)?)))?.collect::<rusqlite::Result<_>>()?;
+        Ok(pages)
+    }
+
+    /// The names more than one page claims, each with the pages claiming
+    /// it — the one links lead to first. Nothing stops two devices, or
+    /// another app, from making two pages of one name; this is how an app
+    /// finds them, to offer to merge or rename.
+    pub fn duplicates(db: &Connection) -> Result<Vec<(String, Vec<String>)>> {
+        let mut statement = db.prepare(&format!(
+            "SELECT key, name, note_names.path, min(rank) AS how FROM note_names JOIN notes ON notes.path = note_names.path
+             WHERE {SEEN} AND key IN (SELECT key FROM note_names GROUP BY key HAVING count(DISTINCT path) > 1)
+             GROUP BY key, note_names.path ORDER BY key, how, note_names.path"
+        ))?;
+        let rows = statement.query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?, r.get::<_, String>(2)?)))?;
+        let mut clashes: Vec<(String, String, Vec<String>)> = Vec::new();
+        for row in rows {
+            let (key, name, path) = row?;
+            match clashes.last_mut() {
+                Some((last, _, paths)) if *last == key => paths.push(path),
+                _ => clashes.push((key, name, vec![path])),
+            }
+        }
+        Ok(clashes.into_iter().filter(|(_, _, paths)| paths.len() > 1).map(|(_, name, paths)| (name, paths)).collect())
     }
 
     /// Every name a page answers to: its title first.
@@ -186,40 +247,62 @@ impl Catalog {
     }
 
     /// Pages whose title or alias starts with, or has a word starting
-    /// with, what was typed: a chooser's first answer. Titles first.
+    /// with, what was typed: a chooser's first answer. Titles first, and
+    /// a name's start before a word inside it. Looked up in an index of
+    /// names' words, so it costs what it finds, not what there is.
     pub fn complete(db: &Connection, typed: &str, limit: usize) -> Result<Vec<NoteRow>> {
-        let key = name_key(typed).replace('\\', "\\\\").replace('%', "\\%").replace('_', "\\_");
+        let key = name_key(typed);
         let mut statement = db.prepare(&format!(
             "SELECT {COLUMNS} FROM notes JOIN (
-                 SELECT path, min(rank * 2 + (key NOT LIKE ?1 ESCAPE '\\')) AS score FROM note_names
-                 WHERE key LIKE ?1 ESCAPE '\\' OR key LIKE ?2 ESCAPE '\\' GROUP BY path
+                 SELECT path, min(score) AS score FROM name_words WHERE suffix >= ?1 AND suffix < ?2 GROUP BY path
              ) AS found ON found.path = notes.path
-             ORDER BY found.score, notes.title COLLATE NOCASE LIMIT ?3"
+             WHERE {SEEN} ORDER BY found.score, notes.title COLLATE NOCASE LIMIT ?3"
         ))?;
-        let rows = statement.query_map(params![format!("{key}%"), format!("% {key}%"), limit as i64], row)?.collect::<rusqlite::Result<_>>()?;
+        let rows = statement.query_map(params![key, format!("{key}{}", char::MAX), limit as i64], row)?.collect::<rusqlite::Result<_>>()?;
         Ok(rows)
     }
 
-    /// The pages with a tag, case aside, by title.
+    /// The pages left holding a conflict for a person to settle.
+    pub fn conflicted(db: &Connection) -> Result<Vec<NoteRow>> {
+        let mut statement =
+            db.prepare(&format!("SELECT {COLUMNS} FROM notes INDEXED BY notes_conflicted WHERE conflicted AND {SEEN} ORDER BY title COLLATE NOCASE, path"))?;
+        let rows = statement.query_map([], row)?.collect::<rusqlite::Result<_>>()?;
+        Ok(rows)
+    }
+
+    /// The pages with a tag — in their text or their `tags` — by title.
+    /// A tag is a link ([`Links`](crate::Links), which this asks).
     pub fn tagged(db: &Connection, tag: &str) -> Result<Vec<NoteRow>> {
         let mut statement = db.prepare(&format!(
-            "SELECT {COLUMNS} FROM notes JOIN note_tags ON note_tags.path = notes.path WHERE note_tags.key = ?1 ORDER BY notes.title COLLATE NOCASE, notes.path"
+            "SELECT {COLUMNS} FROM notes WHERE {SEEN} AND path IN (SELECT source FROM links WHERE kind = 'tag' AND key = ?1)
+             ORDER BY notes.title COLLATE NOCASE, notes.path"
         ))?;
-        let rows = statement.query_map([tag.trim_start_matches('#').to_lowercase()], row)?.collect::<rusqlite::Result<_>>()?;
+        let rows = statement.query_map([name_key(tag.trim().trim_start_matches('#'))], row)?.collect::<rusqlite::Result<_>>()?;
         Ok(rows)
     }
 
     /// Every tag, with how many pages have it, most used first.
     pub fn tags(db: &Connection) -> Result<Vec<(String, usize)>> {
-        let mut statement = db.prepare("SELECT min(tag), count(DISTINCT path) AS uses FROM note_tags GROUP BY key ORDER BY uses DESC, key")?;
+        let seen = crate::seen("links.source");
+        let mut statement = db.prepare(&format!(
+            "SELECT min(target), count(DISTINCT source) AS uses FROM links WHERE kind = 'tag' AND {seen} GROUP BY key ORDER BY uses DESC, key"
+        ))?;
         let tags = statement.query_map([], |r| Ok((r.get(0)?, r.get::<_, i64>(1)? as usize)))?.collect::<rusqlite::Result<_>>()?;
         Ok(tags)
     }
 
-    /// A page's tags, as written.
+    /// A page's tags, as written: its frontmatter's, then its text's,
+    /// each once.
     pub fn tags_of(db: &Connection, path: &str) -> Result<Vec<String>> {
-        let mut statement = db.prepare("SELECT tag FROM note_tags WHERE path = ?1 ORDER BY rowid")?;
-        let tags = statement.query_map([path], |r| r.get(0))?.collect::<rusqlite::Result<_>>()?;
+        let mut statement = db.prepare("SELECT target, key FROM links WHERE source = ?1 AND kind = 'tag' ORDER BY field = '', rowid")?;
+        let mut seen = std::collections::HashSet::new();
+        let mut tags = Vec::new();
+        for pair in statement.query_map([path], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)))? {
+            let (tag, key) = pair?;
+            if seen.insert(key) {
+                tags.push(tag);
+            }
+        }
         Ok(tags)
     }
 
@@ -249,7 +332,7 @@ impl Catalog {
     /// The fields a page's tags give it, in the order of its tags, each
     /// once: the form an app shows for the page.
     pub fn schema(db: &Connection, path: &str) -> Result<Vec<FieldSpec>> {
-        const OWN: [&str; 5] = ["title", "id", "tags", "created", "modified"];
+        const OWN: [&str; 3] = ["tags", "aliases", "private"];
         let mut schema: Vec<FieldSpec> = Vec::new();
         for tag in Catalog::tags_of(db, path)? {
             for spec in Catalog::field_specs(db, &tag)? {
@@ -265,8 +348,7 @@ impl Catalog {
     /// one is asked for.
     pub fn with_field(db: &Connection, key: &str, value: Option<&str>) -> Result<Vec<NoteRow>> {
         let mut statement = db.prepare(&format!(
-            "SELECT DISTINCT {COLUMNS} FROM notes JOIN note_fields ON note_fields.path = notes.path
-             WHERE note_fields.key = ?1 AND (?2 IS NULL OR note_fields.value = ?2 COLLATE NOCASE)
+            "SELECT {COLUMNS} FROM notes WHERE {SEEN} AND path IN (SELECT path FROM note_fields WHERE key = ?1 AND (?2 IS NULL OR value = ?2 COLLATE NOCASE))
              ORDER BY notes.title COLLATE NOCASE, notes.path"
         ))?;
         let rows = statement.query_map(params![key, value], row)?.collect::<rusqlite::Result<_>>()?;

@@ -67,14 +67,57 @@ fn a_real_graph_is_indexed_and_committed() {
     println!("one note edited: written and indexed in {incremental:.2?}");
 
     let started = Instant::now();
+    let report = engine.sync_blocking(Mode::Full).unwrap();
+    println!("that edit committed ({}), and the tree indexed after, in {:.2?}", report.committed.unwrap_or_default(), started.elapsed());
+
+    let started = Instant::now();
     engine.note_changed();
     engine.settle();
-    println!("nothing changed: checked in {:.2?}", started.elapsed());
+    println!("told something changed, not what: every file looked at in {:.2?}", started.elapsed());
 
     let started = Instant::now();
     let hits = Search::search(&db, "the", 20).unwrap().len();
     let all = Catalog::all(&db).unwrap().len();
     println!("a search ({hits} hits) and a full listing ({all}) in {:.2?}", started.elapsed());
+
+    // What an app asks as it draws: each timed alone, on a warm connection.
+    let timed = |what: &str, ask: &dyn Fn() -> usize| {
+        ask();
+        let started = Instant::now();
+        let found = ask();
+        println!("  {what}: {found} in {:.2?}", started.elapsed());
+    };
+    let db = &db;
+    let query = |body: &'static str| move || prism::index::query::run_text(db, body, &Default::default()).unwrap().pages.len();
+    timed("the 10 pages changed last", &query("sort: -modified\nlimit: 10"));
+    timed("the first 20 pages by title", &query("limit: 20"));
+    timed("pages tagged #book", &query("tag: book"));
+    timed("pages tagged #book, the 10 changed last", &query("tag: book\nsort: -modified\nlimit: 10"));
+    timed("pages marked inbox", &query("is: inbox"));
+    timed("days that are not blank, newest 30", &query("is: day\nis not: blank\nsort: -title\nlimit: 30"));
+    timed("pages whose text says \"meeting\"", &query("text: meeting\nlimit: 20"));
+    timed("completing \"pro\"", &|| Catalog::complete(db, "pro", 10).unwrap().len());
+    timed("backlinks of today's most linked name", &|| Links::backlinks(db, &["link".into()]).unwrap().len());
+    timed("pages in conflict", &|| Catalog::conflicted(db).unwrap().len());
     assert_eq!(pages, notes);
     assert!(incremental < built, "an edit should cost less than a rebuild");
+}
+
+/// How long a real history takes to read for pages' times. The graph is
+/// cloned — which only reads it — and the clone is what is walked.
+#[test]
+fn a_real_history_dates_its_pages() {
+    let Some(source) = std::env::var_os("PRISM_GRAPH") else { return };
+    let dir = tempfile::tempdir().unwrap();
+    let cloned = std::process::Command::new("git").args(["clone", "-q", "--no-checkout"]).arg(&source).arg(dir.path()).status().unwrap();
+    assert!(cloned.success());
+    let repo = Repository::open(dir.path()).unwrap();
+    let mut indexer = prism::index::Indexer::in_memory(prism::index::standard()).unwrap();
+    let started = Instant::now();
+    let commits = indexer.update_times(&repo, repo.head()).unwrap();
+    let dated: i64 = indexer.connection().query_row("SELECT count(*) FROM prism_times", [], |r| r.get(0)).unwrap();
+    println!("{commits} commits read in {:.2?}; {dated} pages dated", started.elapsed());
+    let started = Instant::now();
+    assert_eq!(indexer.update_times(&repo, repo.head()).unwrap(), 0);
+    println!("asked again: {:.2?}", started.elapsed());
 }

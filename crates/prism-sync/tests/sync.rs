@@ -598,3 +598,70 @@ fn opening_what_is_not_a_working_tree_fails_plainly() {
     assert!(Repository::open(Path::new("/nonexistent")).is_err());
     assert!(Repository::clone("/nonexistent/remote.git", world.root.join("x"), &Auth::Default).is_err());
 }
+
+#[test]
+fn a_snapshot_of_the_paths_that_changed_is_the_snapshot_of_everything() {
+    let dir = tempfile::tempdir().unwrap();
+    let dir = dir.path();
+    let repo = Repository::init(dir, "main").unwrap();
+    let write = |path: &str, content: &[u8]| {
+        std::fs::create_dir_all(dir.join(path).parent().unwrap()).unwrap();
+        std::fs::write(dir.join(path), content).unwrap();
+    };
+    let options = SnapshotOptions { max_file_bytes: Some(1000), exclude: vec!["scratch/".into()], leave_index: false };
+    let full = || repo.snapshot(&options).unwrap();
+    let paths = |paths: &[&str]| paths.iter().map(|path| (*path).to_owned()).collect::<Vec<_>>();
+    // From a tree, with the paths written since: the same tree as looking at every file.
+    let step = |base: prism_sync::Oid, changed: &[&str]| {
+        let quick = repo.snapshot_paths(base, &paths(changed), &options).unwrap().expect("these paths can be told from alone");
+        assert_eq!(quick.tree, full().tree, "after {changed:?}");
+        quick.tree
+    };
+
+    // Before any commit, from the empty tree.
+    write(".gitignore", b"*.tmp\nbuild/\n");
+    write("notes/a.md", b"# A\n");
+    write("notes/b.md", b"# B\n");
+    write("daily/2026-10-31.md", b"- day\n");
+    let empty = repo.snapshot_paths(full().tree, &[], &options).unwrap().unwrap().tree;
+    assert_eq!(empty, full().tree, "nothing changed: the tree it was");
+    let mut tree = full().tree;
+    repo.commit(tree, "first", &prism_sync::Identity::new("t", "t@example.com")).unwrap();
+
+    write("notes/a.md", b"# A\n\nmore\n");
+    tree = step(tree, &["notes/a.md"]);
+    write("notes/deep/er/c.md", b"# C\n");
+    write("assets/x.png", b"PNG");
+    tree = step(tree, &["notes/deep/er/c.md", "assets/x.png", "notes/deep/er/c.md"]);
+    // Deleted; and the last file of a folder, which takes the folder with it.
+    std::fs::remove_file(dir.join("notes/b.md")).unwrap();
+    std::fs::remove_file(dir.join("notes/deep/er/c.md")).unwrap();
+    tree = step(tree, &["notes/b.md", "notes/deep/er/c.md", "notes/never/was.md"]);
+    // Ignored, excluded and too large: left out, as a snapshot leaves them — the large one said so.
+    write("notes/draft.tmp", b"x");
+    write("build/out.md", b"x");
+    write("scratch/s.md", b"x");
+    write("assets/video.mov", &[0u8; 2000]);
+    tree = step(tree, &["notes/draft.tmp", "build/out.md", "scratch/s.md", "assets/video.mov"]);
+    assert_eq!(full().skipped, [("assets/video.mov".to_owned(), 2000)]);
+    let quick = repo.snapshot_paths(tree, &paths(&["assets/video.mov"]), &options).unwrap().unwrap();
+    assert_eq!(quick.skipped, full().skipped, "of the paths given, those left out are said");
+    // A file written back as it was: the tree it was.
+    write("notes/a.md", b"# A\n");
+    write("notes/a.md", b"# A\n\nmore\n");
+    assert_eq!(step(tree, &["notes/a.md"]), tree);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(dir.join("notes/a.md"), std::fs::Permissions::from_mode(0o755)).unwrap();
+        tree = step(tree, &["notes/a.md"]);
+    }
+
+    // What cannot be told from the paths alone is said to be so.
+    write(".gitignore", b"*.md\n");
+    assert!(repo.snapshot_paths(tree, &paths(&[".gitignore"]), &options).unwrap().is_none());
+    assert!(repo.snapshot_paths(tree, &paths(&["notes"]), &options).unwrap().is_none(), "a directory");
+    assert!(repo.snapshot_paths(tree, &paths(&[".git/config"]), &options).unwrap().is_none());
+    // Nothing was moved or staged along the way.
+    assert_eq!(repo.recent_commits("HEAD", 5).unwrap().len(), 1);
+}

@@ -131,11 +131,7 @@ impl FieldKind {
             FieldKind::Date => Day::parse(unbracket(text)).map(FieldValue::Date),
             FieldKind::Link => Some(unbracket(text)).filter(|t| !t.is_empty()).map(|t| FieldValue::Link(t.to_owned())),
             FieldKind::Url => (text.starts_with("http://") || text.starts_with("https://")).then(|| FieldValue::Url(text.to_owned())),
-            FieldKind::Flag => match text.to_lowercase().as_str() {
-                "yes" | "true" | "on" | "1" | "y" => Some(FieldValue::Flag(true)),
-                "no" | "false" | "off" | "0" | "n" => Some(FieldValue::Flag(false)),
-                _ => None,
-            },
+            FieldKind::Flag => crate::frontmatter::truth(text).map(FieldValue::Flag),
             FieldKind::Choice(options) => options.iter().find(|option| option.eq_ignore_ascii_case(text)).map(|option| FieldValue::Choice(option.clone())),
         }
     }

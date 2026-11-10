@@ -102,6 +102,45 @@ let renamed = try engine.renameNote(path: atlas, newTitle: "Atlas Reborn")
 expect(renamed.rewritten == [atlas, "notes/ada.md"], "a rename rewrites the page and its backlinks")
 expect(try engine.read(path: "notes/ada.md")!.hasSuffix("Works on [[Atlas Reborn]].\n"), "the link names the new title")
 
+// What an index listed is found again after the page changed.
+engine.settle()
+let listed = try engine.openTasks()[0]
+let page = try engine.read(path: atlas)!
+expect(try engine.write(path: atlas, content: page.replacingOccurrences(of: "+ [ ] Book", with: "- a line added above\n+ [ ] Book")), "the page changes under a list of tasks")
+expect(try engine.setTask(path: atlas, row: listed.row, text: listed.text, done: true) != nil, "a task is found by its text")
+expect(try engine.read(path: atlas)!.contains("+ [x] Book a room"), "and checked off")
+engine.settle()
+expect(try engine.backlinks(path: atlas).first?.context == "Works on [[Atlas Reborn]].", "a backlink comes with its row's text")
+
+// Aliases relink; a name is not given to two pages.
+expect(try engine.write(path: "notes/ada.md", content: "---\ntags: [Person]\naliases: [Countess]\nbirthday: 1815-12-10\n---\n# Ada Lovelace\n\nWorks on [[Atlas Reborn]].\n"), "an alias")
+expect(try engine.write(path: "notes/log.md", content: "# Log\n\n[[countess]] called.\n"), "a link by alias")
+let realiased = try engine.renameAlias(path: "notes/ada.md", alias: "Countess", newAlias: "AAL")
+expect(realiased.rewritten == ["notes/ada.md", "notes/log.md"], "an alias renamed rewrites its links")
+expect(try engine.read(path: "notes/log.md")! == "# Log\n\n[[AAL]] called.\n", "the link names the new alias")
+expect(try engine.createNote(title: "aal") == "notes/ada.md", "a new note of a name already taken is the page there is")
+engine.settle()
+expect(try engine.duplicateNames().isEmpty, "no name is claimed twice")
+expect(try engine.page(path: atlas)?.modified != nil, "a page is dated without saying so itself")
+
+// A private page is seen only where it is asked for; a tag is a link.
+expect(try engine.write(path: "notes/secret.md", content: "---\nprivate: true\n---\n# Secret\n\nA #person, about [[Ada Lovelace]].\n"), "a private page")
+engine.settle()
+expect(try engine.page(path: "notes/secret.md") == nil && engine.search(typed: "secret", limit: 5).isEmpty, "hidden from listings and search")
+expect(try !engine.backlinks(path: "notes/ada.md").contains { $0.source == "notes/secret.md" }, "and from backlinks")
+try engine.setShowsPrivate(show: true)
+expect(try engine.page(path: "notes/secret.md")?.isPrivate == true, "shown when asked for")
+expect(try engine.backlinks(path: "notes/person.md").contains { $0.source == "notes/secret.md" && $0.kind == .tag }, "a tag is a backlink of the tag's page")
+try engine.setShowsPrivate(show: false)
+
+// What is derived without reading a note: conflicts, blank pages, where a picture is shown.
+let picture = try engine.addAsset(name: "Diagram.PNG", content: Data([0x50, 0x4E, 0x47]))
+expect(try engine.write(path: "notes/clash.md", content: "# Clash\n\n![](\(picture))\n\n<<<<<<< this device\n- mine\n=======\n- yours\n>>>>>>> other device\n"), "a page left in conflict")
+engine.settle()
+expect(try engine.conflictedPages().map(\.path) == ["notes/clash.md"], "conflicts are listed")
+expect(try engine.pagesShowing(asset: picture) == ["notes/clash.md"] && engine.unusedAssets().isEmpty, "an asset knows where it is shown")
+expect(try engine.runQuery(body: "sort: -modified\nlimit: 1", this: nil).pages.count == 1, "the page changed last")
+
 // A river.
 let river = SavedRiver(cards: [RiverCard(title: "Atlas Reborn", foldedRows: [RiverFoldedRow(index: 2, text: "Book a room")], placeRank: nil, placeKey: nil)],
                        query: nil, placed: [], folded: ["Atlas Reborn"], opened: [], hidden: [], icon: "tray", color: nil, place: nil)

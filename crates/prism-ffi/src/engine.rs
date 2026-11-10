@@ -140,11 +140,15 @@ pub struct RenameResult {
 pub struct PageInfo {
     pub path: String,
     pub title: String,
-    pub id: Option<String>,
     /// `day`, `week` or `note`.
     pub kind: String,
     pub is_private: bool,
-    pub is_wiki: bool,
+    /// Whether it holds a conflict left for a person to settle.
+    pub is_conflicted: bool,
+    /// Whether nothing is written in it.
+    pub is_blank: bool,
+    /// When it was made and last changed, in seconds since the Unix
+    /// epoch: read off git's history, not written in the page.
     pub created: Option<i64>,
     pub modified: Option<i64>,
 }
@@ -164,9 +168,22 @@ pub struct PageLink {
     pub source: String,
     /// The name it links to, as written.
     pub target: String,
-    pub is_embed: bool,
+    /// Link, embed or tag: a page's backlinks are all three.
+    pub kind: crate::document::LinkKind,
+    /// The frontmatter key it is written under; `nil` for one in the body.
+    pub field: Option<String>,
     /// The row it is in; empty for one in the frontmatter's `related`.
     pub row: Vec<u32>,
+    /// That row's text, as Markdown: the link's surroundings.
+    pub context: String,
+}
+
+/// A name more than one page claims as its title or an alias.
+#[derive(Debug, Clone, PartialEq, Eq, uniffi::Record)]
+pub struct NameClash {
+    pub name: String,
+    /// The pages claiming it; links lead to the first.
+    pub paths: Vec<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, uniffi::Record)]
@@ -280,17 +297,24 @@ fn page(row: NoteRow) -> PageInfo {
     PageInfo {
         path: row.path,
         title: row.title,
-        id: row.id,
         kind: row.kind,
         is_private: row.private,
-        is_wiki: row.wiki,
+        is_conflicted: row.conflicted,
+        is_blank: row.blank,
         created: row.created,
         modified: row.modified,
     }
 }
 
 fn link(link: prism::index::Backlink) -> PageLink {
-    PageLink { source: link.source, target: link.target, is_embed: link.embed, row: link.block.into_iter().map(|i| i as u32).collect() }
+    PageLink {
+        source: link.source,
+        target: link.target,
+        kind: link.kind.into(),
+        field: link.field,
+        row: link.block.into_iter().map(|i| i as u32).collect(),
+        context: link.context,
+    }
 }
 
 fn task(task: prism::index::TaskRow) -> TaskInfo {
@@ -499,10 +523,40 @@ impl PrismEngine {
         Ok(RenameResult { old_title: renamed.old_title, new_title: renamed.new_title, rewritten: renamed.rewritten })
     }
 
-    /// Something in the graph's folder changed, by another hand: index
-    /// it now, and sync it once writing pauses.
+    /// Changes one of a page's aliases, and rewrites every link written
+    /// with the old one. The result's titles are the alias before and after.
+    pub fn rename_alias(&self, path: String, alias: String, new_alias: String) -> Result<RenameResult> {
+        let renamed = self.engine.rename_alias(&path, &alias, &new_alias)?;
+        Ok(RenameResult { old_title: renamed.old_title, new_title: renamed.new_title, rewritten: renamed.rewritten })
+    }
+
+    /// Takes one of a page's aliases away; links written with it are
+    /// rewritten with the page's title.
+    pub fn remove_alias(&self, path: String, alias: String) -> Result<RenameResult> {
+        let renamed = self.engine.remove_alias(&path, &alias)?;
+        Ok(RenameResult { old_title: renamed.old_title, new_title: renamed.new_title, rewritten: renamed.rewritten })
+    }
+
+    /// Checks a task off, or opens it again, as `open_tasks` listed it:
+    /// by its page, row and text. It is found by its text where the page
+    /// has changed since. Answers the row it was found at; `nil` when
+    /// the page has no such task any more.
+    pub fn set_task(&self, path: String, row: Vec<u32>, text: String, done: bool) -> Result<Option<Vec<u32>>> {
+        let row: Vec<usize> = row.into_iter().map(|i| i as usize).collect();
+        Ok(self.engine.set_task(&path, &row, &text, done)?.map(|found| found.into_iter().map(|i| i as u32).collect()))
+    }
+
+    /// Something in the graph's folder changed, by another hand, and
+    /// nobody knows what: every file is looked at. Prefer
+    /// `paths_changed` where the paths are known.
     pub fn note_changed(&self) {
         self.engine.note_changed();
+    }
+
+    /// These files changed, by another hand: index them now, and sync
+    /// them once writing pauses. Paths are the graph's: `notes/atlas.md`.
+    pub fn paths_changed(&self, paths: Vec<String>) {
+        self.engine.paths_changed(&paths);
     }
 
     /// Where a graph-relative path is on disk: for showing a picture.
@@ -583,9 +637,15 @@ impl PrismEngine {
         Ok(Catalog::get(&self.db(), &path)?.map(page))
     }
 
-    /// The page with a lasting id, wherever it is now.
-    pub fn page_with_id(&self, id: String) -> Result<Option<PageInfo>> {
-        Ok(Catalog::by_id(&self.db(), &id)?.map(page))
+    /// Whether this engine's questions see private pages: listings,
+    /// search, backlinks, tasks and queries alike. They do not, until
+    /// asked to.
+    pub fn set_shows_private(&self, show: bool) -> Result<()> {
+        Ok(prism::index::show_private(&self.db(), show)?)
+    }
+
+    pub fn shows_private(&self) -> Result<bool> {
+        Ok(prism::index::shows_private(&self.db())?)
     }
 
     /// Every page, by title.
@@ -669,6 +729,28 @@ impl PrismEngine {
             .collect())
     }
 
+    /// The pages left holding a conflict for a person to settle.
+    pub fn conflicted_pages(&self) -> Result<Vec<PageInfo>> {
+        Ok(Catalog::conflicted(&self.db())?.into_iter().map(page).collect())
+    }
+
+    /// The pages showing an asset (`assets/cat.png`).
+    pub fn pages_showing(&self, asset: String) -> Result<Vec<String>> {
+        let mut pages: Vec<String> = prism::index::Assets::used_in(&self.db(), &asset)?.into_iter().map(|used| used.path).collect();
+        pages.dedup();
+        Ok(pages)
+    }
+
+    /// The files in `assets/` that no page shows.
+    pub fn unused_assets(&self) -> Result<Vec<String>> {
+        Ok(prism::index::Assets::unused(&self.db())?)
+    }
+
+    /// The names more than one page claims as title or alias.
+    pub fn duplicate_names(&self) -> Result<Vec<NameClash>> {
+        Ok(Catalog::duplicates(&self.db())?.into_iter().map(|(name, paths)| NameClash { name, paths }).collect())
+    }
+
     pub fn open_tasks(&self) -> Result<Vec<TaskInfo>> {
         Ok(Tasks::open(&self.db())?.into_iter().map(task).collect())
     }
@@ -681,7 +763,7 @@ impl PrismEngine {
     /// query is in, for `{this}`.
     pub fn run_query(&self, body: String, this: Option<String>) -> Result<QueryOutcome> {
         use prism::index::Show;
-        let options = prism::index::QueryOptions { this: this.as_deref(), include_private: false };
+        let options = prism::index::QueryOptions { this: this.as_deref() };
         let found = prism::index::query::run_text(&self.db(), &body, &options)?;
         Ok(QueryOutcome {
             total: found.total as u32,
@@ -721,6 +803,8 @@ impl PrismEngine {
 
     /// Saves a river under a name. Says whether its file changed.
     pub fn save_river(&self, name: String, river: SavedRiver) -> Result<bool> {
+        // Made anew from what the app holds; saved over the file there
+        // is, it keeps what that file has and a river does not read.
         let river = River {
             cards: river.cards.into_iter().map(to_card).collect(),
             query: river.query.map(|body| prism::markup::Query::parse(&body)),
@@ -731,6 +815,7 @@ impl PrismEngine {
             icon: river.icon,
             color: river.color,
             place: river.place,
+            source: None,
         };
         Ok(self.engine.save_river(&name, &river)?)
     }

@@ -54,22 +54,33 @@
 //! transactions, rebuilds — and hands each file over read and, for a
 //! note, parsed once however many indices want it ([`File`]).
 //!
+//! # Times
+//!
+//! When a page was made and last changed is read off git's history, not
+//! written in the page: see [`Times`], kept by [`Indexer::update_times`]
+//! with a cursor of its own — a commit, where the others' are trees.
+//!
 //! Storage is SQLite: one database, many indices, each with tables of its
 //! own, all moved together atomically. Keep the database outside the
 //! working tree (inside `.git/` is a good place): it is derived, and
 //! every device builds its own.
 
+mod assets;
 mod catalog;
 mod links;
 pub mod query;
 mod search;
 mod tasks;
+mod times;
 
+pub use assets::{AssetUse, Assets};
 pub use catalog::{Catalog, NoteRow, Resolved};
 pub use links::{Backlink, Links};
+pub use prism_markup::LinkKind;
 pub use query::{QueryOptions, QueryResult, Show};
 pub use search::{Hit, Search};
 pub use tasks::{TaskRow, Tasks};
+pub use times::{History, Times};
 
 use prism_markup::{Note, NoteKind};
 use prism_sync::{Oid, Repository};
@@ -94,6 +105,43 @@ pub enum Error {
 }
 
 pub type Result<T, E = Error> = std::result::Result<T, E>;
+
+// --- What a connection may see ---------------------------------------------
+
+/// Says whether this connection's questions see private pages.
+///
+/// **A private page is seen only where it is asked for outright.** Every
+/// question in this crate — the catalog's listings and name lookups,
+/// backlinks, search, tasks, queries — leaves out pages marked
+/// `private`, and what is written in them, unless the connection asking
+/// was told to show them. The choice is the connection's, so it is made
+/// once, where a view is set up, and cannot be forgotten at one call
+/// among many.
+///
+/// [`Indexer::reader`] hides them; [`Indexer::reader_showing_private`]
+/// and the indexer's own connection show them.
+pub fn show_private(db: &Connection, show: bool) -> Result<()> {
+    db.execute_batch("CREATE TEMP TABLE IF NOT EXISTS prism_scope (shows_private INTEGER NOT NULL); DELETE FROM temp.prism_scope;")?;
+    db.execute("INSERT INTO temp.prism_scope (shows_private) VALUES (?1)", [show])?;
+    Ok(())
+}
+
+/// Whether this connection's questions see private pages.
+pub fn shows_private(db: &Connection) -> Result<bool> {
+    Ok(db.query_row("SELECT shows_private FROM temp.prism_scope", [], |r| r.get(0))?)
+}
+
+/// SQL for "this connection may see the file at `column`": it shows
+/// private pages, or the file is no private page.
+pub(crate) fn seen(column: &str) -> String {
+    format!("((SELECT shows_private FROM temp.prism_scope) OR NOT EXISTS (SELECT 1 FROM notes AS hidden WHERE hidden.path = {column} AND hidden.private))")
+}
+
+/// Whether a table is there with a column: how an index tells a table an
+/// earlier version of it left.
+pub(crate) fn column_exists(tx: &Transaction<'_>, table: &str, column: &str) -> Result<bool> {
+    Ok(tx.prepare("SELECT 1 FROM pragma_table_info(?1) WHERE name = ?2")?.exists([table, column])?)
+}
 
 /// One file of the tree being indexed, read at most once and — when it is
 /// a note — parsed at most once, however many indices look at it.
@@ -166,9 +214,9 @@ pub trait Index: Send {
     fn put(&self, tx: &Transaction<'_>, file: &File<'_>) -> Result<()>;
 }
 
-/// The four indices this crate provides.
+/// The indices this crate provides.
 pub fn standard() -> Vec<Box<dyn Index>> {
-    vec![Box::new(Catalog), Box::new(Links), Box::new(Search), Box::new(Tasks)]
+    vec![Box::new(Catalog), Box::new(Links), Box::new(Search), Box::new(Tasks), Box::new(Assets)]
 }
 
 /// What an [`Indexer::update`] did.
@@ -217,10 +265,13 @@ impl Indexer {
     fn with_connection(mut connection: Connection, indices: Vec<Box<dyn Index>>) -> Result<Indexer> {
         let tx = connection.transaction()?;
         tx.execute_batch("CREATE TABLE IF NOT EXISTS prism_cursors (name TEXT PRIMARY KEY, version INTEGER NOT NULL, tree TEXT) WITHOUT ROWID;")?;
+        tx.execute_batch(times::TABLES)?;
         for index in &indices {
             index.create(&tx)?;
         }
         tx.commit()?;
+        // The indexer's own connection sees everything.
+        show_private(&connection, true)?;
         Ok(Indexer { connection, indices })
     }
 
@@ -230,10 +281,19 @@ impl Indexer {
     }
 
     /// Another connection to a database on disk, for reading from another
-    /// thread while this one updates.
+    /// thread while this one updates. Private pages are hidden from it:
+    /// see [`show_private`].
     pub fn reader(path: impl AsRef<Path>) -> Result<Connection> {
         let connection = Connection::open_with_flags(path, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY | rusqlite::OpenFlags::SQLITE_OPEN_NO_MUTEX)?;
         connection.busy_timeout(std::time::Duration::from_secs(5))?;
+        show_private(&connection, false)?;
+        Ok(connection)
+    }
+
+    /// As [`reader`](Self::reader), for a view that shows private pages.
+    pub fn reader_showing_private(path: impl AsRef<Path>) -> Result<Connection> {
+        let connection = Indexer::reader(path)?;
+        show_private(&connection, true)?;
         Ok(connection)
     }
 

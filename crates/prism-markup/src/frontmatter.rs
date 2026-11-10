@@ -151,9 +151,11 @@ impl Frontmatter {
         self.get(key).map(Value::to_list).unwrap_or_default()
     }
 
-    /// Whether a key says yes: `true`, `yes`, `on` or `1`, case aside.
+    /// Whether a key marks the note: it is there, with a value that
+    /// does not say no ([`is_set`]). `private: true`, `pinned: 3` and
+    /// `topic: Maths` all mark; `inbox: no` and a bare `inbox:` do not.
     pub fn flag(&self, key: &str) -> bool {
-        self.text(key).is_some_and(is_truthy)
+        self.get(key).is_some_and(|value| value.to_list().first().is_some_and(|first| is_set(first)))
     }
 
     pub fn contains(&self, key: &str) -> bool {
@@ -227,9 +229,22 @@ impl fmt::Display for Frontmatter {
     }
 }
 
-/// Whether a flag's text says yes, as YAML's booleans do.
-pub fn is_truthy(text: &str) -> bool {
-    matches!(text.trim().to_ascii_lowercase().as_str(), "true" | "yes" | "on" | "1")
+/// What a text says, read as yes or no: `true`, `yes`, `on`, `1`, `y` —
+/// `false`, `no`, `off`, `0`, `n` — case aside. `None` for anything
+/// else. The one reading of yes and no there is.
+pub fn truth(text: &str) -> Option<bool> {
+    match text.trim().to_ascii_lowercase().as_str() {
+        "true" | "yes" | "on" | "1" | "y" => Some(true),
+        "false" | "no" | "off" | "0" | "n" => Some(false),
+        _ => None,
+    }
+}
+
+/// Whether a field's value marks its note: anything but nothing, and
+/// anything but no. What `is: pinned` asks, whether the page says
+/// `pinned: true` or `pinned: 3`.
+pub fn is_set(text: &str) -> bool {
+    !text.trim().is_empty() && truth(text) != Some(false)
 }
 
 /// Walks a text's lines, giving each without its ending, and the ending.

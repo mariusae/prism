@@ -95,12 +95,6 @@ pub fn slug(title: String) -> String {
     prism::slug(&title)
 }
 
-/// A new ULID: a note's lasting identity.
-#[uniffi::export]
-pub fn new_ulid() -> String {
-    prism::ulid()
-}
-
 /// The key two names are compared by: case and spacing aside.
 #[uniffi::export]
 pub fn name_key(name: String) -> String {

@@ -1,7 +1,7 @@
 //! Indices against a real repository: built, updated incrementally as
 //! files change, and checked against a rebuild from nothing.
 
-use prism_index::{rusqlite, Backlink, Catalog, File, Index, Indexer, Links, Resolved, Search, Tasks};
+use prism_index::{rusqlite, Assets, Backlink, Catalog, File, Index, Indexer, LinkKind, Links, Resolved, Search, Tasks};
 use prism_sync::{Config, Identity, Mode, Oid, Repository, SnapshotOptions, Syncer};
 use std::path::Path;
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -52,11 +52,13 @@ fn sources(links: &[Backlink]) -> Vec<&str> {
 fn dump(db: &rusqlite::Connection) -> Vec<String> {
     let mut rows = Vec::new();
     for (table, columns) in [
-        ("notes", "path, title, id, kind, private, wiki, created, modified"),
+        ("notes", "path, title, kind, private, conflicted, blank"),
         ("note_names", "key, name, path, rank"),
-        ("note_tags", "key, tag, path"),
-        ("note_fields", "path, key, position, value"),
-        ("links", "source, key, target, embed, block"),
+        ("name_words", "suffix, path, score"),
+        ("note_fields", "path, key, position, value, number"),
+        ("asset_files", "path"),
+        ("asset_uses", "asset, path, block"),
+        ("links", "source, key, target, kind, field, block, context"),
         ("search", "path, title, body"),
         ("tasks", "path, block, text, done"),
     ] {
@@ -81,14 +83,13 @@ fn the_catalog_knows_every_page_and_resolves_names() {
     let graph = Graph::new();
     let mut indexer = Indexer::in_memory(prism_index::standard()).unwrap();
     let update = indexer.update(&graph.repo, graph.snapshot()).unwrap();
-    assert_eq!(update.rebuilt, ["catalog", "links", "search", "tasks"]);
-    assert_eq!(update.changed.len(), 5, "only pages are ingested: {:?}", update.changed);
+    assert_eq!(update.rebuilt, ["catalog", "links", "search", "tasks", "assets"]);
+    assert_eq!(update.changed.len(), 6, "pages and the one asset are ingested, the README is not: {:?}", update.changed);
     let db = indexer.connection();
 
     assert_eq!(Catalog::count(db).unwrap(), 5);
     let atlas = Catalog::get(db, "notes/project-atlas.md").unwrap().unwrap();
-    assert_eq!((atlas.title.as_str(), atlas.kind.as_str(), atlas.id.as_deref()), ("Project Atlas", "note", Some("01jbxk3t6y8q2zp4m9v7c5r0wd")));
-    assert_eq!(Catalog::by_id(db, "01JBXK3T6Y8Q2ZP4M9V7C5R0WD").unwrap().unwrap().path, "notes/project-atlas.md");
+    assert_eq!((atlas.title.as_str(), atlas.kind.as_str()), ("Project Atlas", "note"));
     assert!(Catalog::get(db, "notes/grace-hopper.md").unwrap().unwrap().private);
     assert_eq!(Catalog::get(db, "daily/2026-10-31.md").unwrap().unwrap().kind, "day");
     assert!(Catalog::get(db, "README.md").unwrap().is_none());
@@ -135,13 +136,22 @@ fn backlinks_follow_every_name_a_page_answers_to() {
     assert_eq!(sources(&to_ada), ["daily/2026-10-31.md", "notes/project-atlas.md"]);
     // A relation in the frontmatter is a link with no block.
     let to_grace = Links::backlinks(db, &["Grace Hopper".into()]).unwrap();
-    assert_eq!((sources(&to_grace), to_grace[0].block.len()), (vec!["notes/project-atlas.md"], 0));
+    assert_eq!((sources(&to_grace), to_grace[0].block.len(), to_grace[0].field.as_deref()), (vec!["notes/project-atlas.md"], 0, Some("related")));
+    // A tag is a link too: the pages tagged Person point at Person,
+    // whether or not it has been written.
+    let to_person = Links::backlinks(db, &["person".into()]).unwrap();
+    assert_eq!(sources(&to_person), ["notes/ada-lovelace.md", "notes/grace-hopper.md"]);
+    assert!(to_person.iter().all(|link| link.kind == LinkKind::Tag));
     // A day is linked to by its date.
     assert_eq!(sources(&Links::backlinks(db, &["2026-10-31".into()]).unwrap()), ["notes/project-atlas.md"]);
     assert!(Links::backlinks(db, &[]).unwrap().is_empty());
 
     let outgoing = Links::outgoing(db, "notes/ada-lovelace.md").unwrap();
-    assert_eq!(outgoing.iter().map(|l| (l.target.as_str(), l.embed)).collect::<Vec<_>>(), [("atlas", false), ("Analytical Engine", true)]);
+    assert_eq!(
+        outgoing.iter().map(|l| (l.target.as_str(), l.kind)).collect::<Vec<_>>(),
+        [("atlas", LinkKind::Link), ("Analytical Engine", LinkKind::Embed), ("Person", LinkKind::Tag)]
+    );
+    // A tag wants no page written for it.
     assert_eq!(Links::unresolved(db).unwrap(), [("Analytical Engine".to_owned(), 1)]);
 }
 
@@ -203,7 +213,7 @@ fn an_update_ingests_only_what_changed() {
     graph.delete("daily/2026-11-01.md");
     graph.write("assets/another.png", b"PNG\0");
     let update = indexer.update(&graph.repo, graph.snapshot()).unwrap();
-    assert_eq!(update.changed, ["daily/2026-11-01.md", "notes/ada-lovelace.md", "notes/analytical-engine.md"]);
+    assert_eq!(update.changed, ["assets/another.png", "daily/2026-11-01.md", "notes/ada-lovelace.md", "notes/analytical-engine.md"]);
     assert!(update.rebuilt.is_empty());
 
     let db = indexer.connection();
@@ -218,7 +228,7 @@ fn an_update_ingests_only_what_changed() {
 
     // Going back to the first tree is an update like any other.
     let back = indexer.update(&graph.repo, first).unwrap();
-    assert_eq!(back.changed.len(), 3);
+    assert_eq!(back.changed.len(), 4);
     assert_eq!(Links::unresolved(indexer.connection()).unwrap().len(), 1);
 }
 
@@ -351,7 +361,7 @@ fn an_index_survives_reopening_and_rebuilds_when_its_version_changes() {
         assert_eq!(counting.counts(), (1, 0, 1));
         // Another thread can read meanwhile.
         let reader = Indexer::reader(&database).unwrap();
-        assert_eq!(Catalog::count(&reader).unwrap(), 5);
+        assert_eq!(Catalog::count(&reader).unwrap(), 4, "all but the private one");
     }
     {
         // A new version of one index: only that one is rebuilt.
@@ -434,4 +444,172 @@ fn indices_follow_commits_and_merges_from_other_devices() {
 
 fn git2_init_bare(path: &Path) {
     Repository::init_bare(path, "main").unwrap();
+}
+
+#[test]
+fn a_links_table_from_before_it_kept_context_is_replaced() {
+    let graph = Graph::new();
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("index.sqlite");
+    {
+        // As version 1 left it.
+        let db = rusqlite::Connection::open(&path).unwrap();
+        db.execute_batch(
+            "CREATE TABLE prism_cursors (name TEXT PRIMARY KEY, version INTEGER NOT NULL, tree TEXT) WITHOUT ROWID;
+             CREATE TABLE links (source TEXT NOT NULL, key TEXT NOT NULL, target TEXT NOT NULL, embed INTEGER NOT NULL, block TEXT NOT NULL);
+             INSERT INTO links VALUES ('notes/gone.md', 'x', 'X', 0, '0');",
+        )
+        .unwrap();
+        db.execute("INSERT INTO prism_cursors VALUES ('links', 1, ?1)", [graph.snapshot().to_string()]).unwrap();
+    }
+    let mut indexer = Indexer::open(&path, prism_index::standard()).unwrap();
+    let update = indexer.update(&graph.repo, graph.snapshot()).unwrap();
+    assert!(update.rebuilt.contains(&"links"));
+    let links = Links::backlinks(indexer.connection(), &["Ada Lovelace".into()]).unwrap();
+    assert_eq!(sources(&links), ["daily/2026-10-31.md", "notes/project-atlas.md"]);
+    assert_eq!(links[0].context, "Met [[Ada Lovelace]] about [[Project Atlas]]");
+    // One in `related` is in no row.
+    let related = Links::backlinks(indexer.connection(), &["Grace Hopper".into()]).unwrap();
+    assert_eq!((related[0].block.as_slice(), related[0].context.as_str()), (&[][..], ""));
+}
+
+#[test]
+fn a_private_page_is_seen_only_where_it_is_asked_for() {
+    let graph = Graph::new();
+    graph.write(
+        "notes/secret.md",
+        "---\nprivate: true\ntags: [Person]\n---\n# Secret\n\n- [[Ada Lovelace]] knows [[Nobody Written]]\n+ [ ] A hidden task about compilers\n",
+    );
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("index.sqlite");
+    let mut indexer = Indexer::open(&path, prism_index::standard()).unwrap();
+    indexer.update(&graph.repo, graph.snapshot()).unwrap();
+
+    // A reader: every question, of every index, leaves the private pages out.
+    let db = Indexer::reader(&path).unwrap();
+    assert!(!prism_index::shows_private(&db).unwrap());
+    let titles = |rows: Vec<prism_index::NoteRow>| rows.into_iter().map(|r| r.title).collect::<Vec<_>>();
+    assert_eq!(Catalog::count(&db).unwrap(), 4);
+    assert_eq!(Catalog::get(&db, "notes/secret.md").unwrap(), None);
+    assert_eq!(Catalog::resolve(&db, "Grace Hopper").unwrap(), None);
+    assert!(Catalog::complete(&db, "sec", 5).unwrap().is_empty());
+    assert_eq!(titles(Catalog::tagged(&db, "person").unwrap()), ["Ada Lovelace"]);
+    assert_eq!(Catalog::tags(&db).unwrap()[0], ("Person".to_owned(), 1));
+    assert_eq!(titles(Catalog::with_field(&db, "private", None).unwrap()), Vec::<String>::new());
+    assert_eq!(sources(&Links::backlinks(&db, &["Ada Lovelace".into()]).unwrap()), ["daily/2026-10-31.md", "notes/project-atlas.md"]);
+    assert!(Links::outgoing(&db, "notes/secret.md").unwrap().is_empty());
+    assert_eq!(Links::unresolved(&db).unwrap(), [("Analytical Engine".to_owned(), 1)], "nor does it say what a private page wants written");
+    assert!(Search::search(&db, "compiler", 10).unwrap().is_empty());
+    assert_eq!(Tasks::counts(&db).unwrap(), (3, 1));
+    assert!(Tasks::in_note(&db, "notes/secret.md").unwrap().is_empty());
+    assert_eq!(prism_index::query::run_text(&db, "tag: Person", &Default::default()).unwrap().total, 1);
+
+    // One that shows them: the same questions, all of it.
+    let db = Indexer::reader_showing_private(&path).unwrap();
+    assert_eq!(Catalog::count(&db).unwrap(), 6);
+    assert!(Catalog::get(&db, "notes/secret.md").unwrap().unwrap().private);
+    assert_eq!(titles(Catalog::tagged(&db, "person").unwrap()), ["Ada Lovelace", "Grace Hopper", "Secret"]);
+    assert_eq!(sources(&Links::backlinks(&db, &["Ada Lovelace".into()]).unwrap()).len(), 3);
+    assert_eq!(Links::unresolved(&db).unwrap().len(), 2);
+    assert_eq!(Search::search(&db, "compiler", 10).unwrap().len(), 2);
+    assert_eq!(Tasks::counts(&db).unwrap(), (4, 1));
+    assert_eq!(prism_index::query::run_text(&db, "tag: Person", &Default::default()).unwrap().total, 3);
+    // And a view may change its mind.
+    prism_index::show_private(&db, false).unwrap();
+    assert_eq!(Catalog::count(&db).unwrap(), 4);
+}
+
+#[test]
+fn a_river_is_a_source_of_links_and_no_page() {
+    let graph = Graph::new();
+    graph.write("rivers/Work.md", "---\nfolded:\n  - Ada Lovelace\n---\n- [[Ada Lovelace]]\n- [[project atlas]]\n\n```query\ntag: Person\n```\n");
+    let mut indexer = Indexer::in_memory(prism_index::standard()).unwrap();
+    let update = indexer.update(&graph.repo, graph.snapshot()).unwrap();
+    assert!(update.changed.contains(&"rivers/Work.md".to_owned()));
+    let db = indexer.connection();
+    // Its cards are links: the pages it holds find it among their backlinks,
+    assert!(sources(&Links::backlinks(db, &["Ada Lovelace".into()]).unwrap()).contains(&"rivers/Work.md"));
+    assert_eq!(Links::linked_pages(db, "rivers/Work.md", Some("")).unwrap(), ["notes/ada-lovelace.md", "notes/project-atlas.md"]);
+    // but it is not in the catalog, the search or the tasks.
+    assert_eq!(Catalog::count(db).unwrap(), 5);
+    assert_eq!(Catalog::get(db, "rivers/Work.md").unwrap(), None);
+    assert!(Search::search(db, "Lovelace", 10).unwrap().iter().all(|hit| hit.path != "rivers/Work.md"));
+}
+
+#[test]
+fn what_is_typed_is_found_in_an_index_of_names_words() {
+    let graph = Graph::new();
+    graph.write("notes/lovelace-medal.md", "---\naliases: [The Ada Prize]\n---\n# Lovelace Medal\n");
+    let mut indexer = Indexer::in_memory(prism_index::standard()).unwrap();
+    indexer.update(&graph.repo, graph.snapshot()).unwrap();
+    let db = indexer.connection();
+    let titles = |typed: &str| Catalog::complete(db, typed, 10).unwrap().into_iter().map(|r| r.title).collect::<Vec<_>>();
+    // A title's start, then a word inside a title, then an alias.
+    assert_eq!(titles("love"), ["Lovelace Medal", "Ada Lovelace"]);
+    assert_eq!(titles("ada"), ["Ada Lovelace", "Lovelace Medal"]);
+    assert_eq!(titles("ada  LOVE"), ["Ada Lovelace"]);
+    assert_eq!(titles("ada prize"), ["Lovelace Medal"]);
+    assert_eq!(titles("the ada"), ["Lovelace Medal"]);
+    assert!(titles("ovelace").is_empty(), "words are found from their start");
+    assert!(titles("%").is_empty() && titles("_").is_empty(), "nothing typed is a pattern");
+    assert_eq!(Catalog::complete(db, "", 3).unwrap().len(), 3);
+    // It is a range of an index, not a scan of the names.
+    let plan = prism_index::query::plan(db, "SELECT path FROM name_words WHERE suffix >= 'love' AND suffix < 'lovf'").unwrap();
+    assert!(plan.contains("name_words_suffix"), "{plan}");
+}
+
+#[test]
+fn assets_know_where_they_are_shown() {
+    let graph = Graph::new();
+    graph.write("assets/unused.pdf", b"%PDF");
+    graph.write(
+        "notes/ada-lovelace.md",
+        "# Ada Lovelace\n\n![a diagram](assets/diagram.png)<!-- {\"width\":300} -->\n\n- ![gone](assets/gone.png) and ![web](https://x.example/p.png)\n",
+    );
+    graph.write("notes/grace-hopper.md", "---\nprivate: true\n---\n# Grace Hopper\n\n![](./assets/diagram.png)\n");
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("index.sqlite");
+    let mut indexer = Indexer::open(&path, prism_index::standard()).unwrap();
+    indexer.update(&graph.repo, graph.snapshot()).unwrap();
+    let db = indexer.connection();
+    assert_eq!(Assets::all(db).unwrap(), ["assets/diagram.png", "assets/unused.pdf"]);
+    let users: Vec<_> = Assets::used_in(db, "assets/diagram.png").unwrap().into_iter().map(|used| (used.path, used.block)).collect();
+    assert_eq!(users, [("notes/ada-lovelace.md".to_owned(), vec![1]), ("notes/grace-hopper.md".to_owned(), vec![1])]);
+    assert_eq!(Assets::shown_in(db, "notes/ada-lovelace.md").unwrap().len(), 2, "what is on the web is no asset");
+    assert_eq!(Assets::unused(db).unwrap(), ["assets/unused.pdf"]);
+    assert_eq!(Assets::missing(db).unwrap().iter().map(|used| used.asset.as_str()).collect::<Vec<_>>(), ["assets/gone.png"]);
+
+    // A view that hides private pages does not say they show it — but a
+    // file only a private page shows is still not one to clear out.
+    let hiding = Indexer::reader(&path).unwrap();
+    assert_eq!(Assets::used_in(&hiding, "assets/diagram.png").unwrap().len(), 1);
+    graph.write("notes/ada-lovelace.md", "# Ada Lovelace\n");
+    indexer.update(&graph.repo, graph.snapshot()).unwrap();
+    assert!(Assets::used_in(&hiding, "assets/diagram.png").unwrap().is_empty());
+    assert_eq!(Assets::unused(&hiding).unwrap(), ["assets/unused.pdf"]);
+    // A file taken away is known to be gone.
+    graph.delete("assets/unused.pdf");
+    indexer.update(&graph.repo, graph.snapshot()).unwrap();
+    assert!(Assets::unused(indexer.connection()).unwrap().is_empty());
+}
+
+#[test]
+fn pages_left_in_conflict_and_pages_left_blank_are_known() {
+    let graph = Graph::new();
+    graph.write("notes/clash.md", "# Clash\n\n<<<<<<< this device\n- mine\n=======\n- yours\n>>>>>>> other device\n");
+    graph.write("notes/prose.md", "# Prose\n\nMentions `<<<<<<<` but holds no conflict.\n");
+    graph.write("daily/2026-12-01.md", "- \n");
+    let mut indexer = Indexer::in_memory(prism_index::standard()).unwrap();
+    indexer.update(&graph.repo, graph.snapshot()).unwrap();
+    let db = indexer.connection();
+    assert_eq!(Catalog::conflicted(db).unwrap().into_iter().map(|r| r.path).collect::<Vec<_>>(), ["notes/clash.md"]);
+    assert!(Catalog::get(db, "daily/2026-12-01.md").unwrap().unwrap().blank);
+    assert!(!Catalog::get(db, "daily/2026-10-31.md").unwrap().unwrap().blank);
+    let found = |body: &str| prism_index::query::run_text(db, body, &Default::default()).unwrap().pages.into_iter().map(|p| p.title).collect::<Vec<_>>();
+    assert_eq!(found("is: conflicted"), ["Clash"]);
+    assert_eq!(found("is: day\nis not: blank"), ["2026-10-31", "2026-11-01"]);
+    // Settled, it is no longer listed.
+    graph.write("notes/clash.md", "# Clash\n\n- mine\n");
+    indexer.update(&graph.repo, graph.snapshot()).unwrap();
+    assert!(Catalog::conflicted(indexer.connection()).unwrap().is_empty());
 }

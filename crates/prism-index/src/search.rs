@@ -4,8 +4,8 @@ use crate::{File, Index, Result};
 use rusqlite::{params, Connection, Transaction};
 
 /// The words of every page, as they read — Markdown taken out — in
-/// SQLite's FTS5. Private pages are indexed like any other; whether to
-/// show them is the asker's to decide (join the [`Catalog`](crate::Catalog)).
+/// SQLite's FTS5. Private pages are indexed like any other, and found
+/// only by a connection that shows them ([`show_private`](crate::show_private)).
 pub struct Search;
 
 /// A page a search found.
@@ -55,10 +55,11 @@ impl Search {
     /// for more than one in the body.
     pub fn search(db: &Connection, typed: &str, limit: usize) -> Result<Vec<Hit>> {
         let Some(query) = fts_query(typed) else { return Ok(Vec::new()) };
-        let mut statement = db.prepare(
+        let mut statement = db.prepare(&format!(
             "SELECT path, title, snippet(search, 2, '[', ']', '…', 12) FROM search
-             WHERE search MATCH ?1 ORDER BY bm25(search, 0.0, 8.0, 1.0), path LIMIT ?2",
-        )?;
+                 WHERE search MATCH ?1 AND {} ORDER BY bm25(search, 0.0, 8.0, 1.0), path LIMIT ?2",
+            crate::seen("search.path")
+        ))?;
         let hits = statement
             .query_map(params![query, limit as i64], |r| Ok(Hit { path: r.get(0)?, title: r.get(1)?, snippet: r.get(2)? }))?
             .collect::<rusqlite::Result<_>>()?;
@@ -71,7 +72,7 @@ impl Search {
     /// `text:` condition.
     pub fn matching(db: &Connection, typed: &str) -> Result<Vec<String>> {
         let Some(query) = fts_query(typed) else { return Ok(Vec::new()) };
-        let mut statement = db.prepare("SELECT path FROM search WHERE search MATCH ?1")?;
+        let mut statement = db.prepare(&format!("SELECT path FROM search WHERE search MATCH ?1 AND {}", crate::seen("search.path")))?;
         let paths = statement.query_map([query], |r| r.get(0))?.collect::<rusqlite::Result<_>>()?;
         Ok(paths)
     }
@@ -79,7 +80,7 @@ impl Search {
 
 /// What was typed, as an FTS5 query: each word quoted, so nothing typed
 /// is taken for syntax, and the last one a prefix.
-fn fts_query(typed: &str) -> Option<String> {
+pub(crate) fn fts_query(typed: &str) -> Option<String> {
     let words: Vec<String> =
         typed.split(|c: char| !(c.is_alphanumeric() || c == '_')).filter(|word| !word.is_empty()).map(|word| format!("\"{word}\"")).collect();
     let (last, rest) = words.split_last()?;

@@ -66,24 +66,26 @@ impl Tasks {
     /// Every open task: newest days' first, then other pages', each
     /// page's in reading order.
     pub fn open(db: &Connection) -> Result<Vec<TaskRow>> {
-        let mut statement = db.prepare(
-            "SELECT path, block, text, done FROM tasks WHERE done = 0
-             ORDER BY path NOT LIKE 'daily/%', CASE WHEN path LIKE 'daily/%' THEN path END DESC, path, rowid",
-        )?;
+        let mut statement = db.prepare(&format!(
+            "SELECT path, block, text, done FROM tasks WHERE done = 0 AND {}
+                 ORDER BY path NOT LIKE 'daily/%', CASE WHEN path LIKE 'daily/%' THEN path END DESC, path, rowid",
+            crate::seen("tasks.path")
+        ))?;
         let tasks = statement.query_map([], task)?.collect::<rusqlite::Result<_>>()?;
         Ok(tasks)
     }
 
     /// A page's tasks, open and done, in reading order.
     pub fn in_note(db: &Connection, path: &str) -> Result<Vec<TaskRow>> {
-        let mut statement = db.prepare("SELECT path, block, text, done FROM tasks WHERE path = ?1 ORDER BY rowid")?;
+        let mut statement =
+            db.prepare(&format!("SELECT path, block, text, done FROM tasks WHERE path = ?1 AND {} ORDER BY rowid", crate::seen("tasks.path")))?;
         let tasks = statement.query_map([path], task)?.collect::<rusqlite::Result<_>>()?;
         Ok(tasks)
     }
 
     /// How many tasks are open, and how many done.
     pub fn counts(db: &Connection) -> Result<(usize, usize)> {
-        Ok(db.query_row("SELECT coalesce(sum(done = 0), 0), coalesce(sum(done = 1), 0) FROM tasks", [], |r| {
+        Ok(db.query_row(&format!("SELECT coalesce(sum(done = 0), 0), coalesce(sum(done = 1), 0) FROM tasks WHERE {}", crate::seen("tasks.path")), [], |r| {
             Ok((r.get::<_, i64>(0)? as usize, r.get::<_, i64>(1)? as usize))
         })?)
     }

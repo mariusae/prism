@@ -184,7 +184,7 @@ mod tests {
     fn one_note_is_named() {
         assert_eq!(describe(&[note(Action::Update, "daily/2026-09-25.md", "- x\n")]), "Update daily note for 2026-09-25");
         assert_eq!(describe(&[note(Action::Add, "notes/atlas.md", "# Project   Atlas\n")]), "Add Project Atlas");
-        assert_eq!(describe(&[note(Action::Delete, "notes/atlas.md", "---\ntitle: From Frontmatter\n---\n# Heading\n")]), "Delete From Frontmatter");
+        assert_eq!(describe(&[note(Action::Delete, "notes/atlas.md", "---\ntitle: a field\n---\n# Heading\n")]), "Delete Heading");
         assert_eq!(describe(&[note(Action::Update, "notes/my-project_notes.md", "no heading\n")]), "Update My Project Notes");
         assert_eq!(describe(&[note(Action::Update, "notes/McKinsey-notes.md", "")]), "Update McKinsey notes");
         assert_eq!(describe(&[note(Action::Add, "weekly/2026-W44.md", "- plan\n")]), "Add weekly note for 2026-W44");
