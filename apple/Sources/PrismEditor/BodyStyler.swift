@@ -456,6 +456,9 @@ final class BodyLayoutManager: NSLayoutManager {
         if start < storage.length {
             let glyph = glyphIndexForCharacter(at: start)
             let rect = lineFragmentRect(forGlyphAt: glyph, effectiveRange: nil)
+            // A row with nothing in it has only its line's end to ask, which
+            // sits lower than words would: its mark stands where words will.
+            if row.end <= row.start { return (rect, rect.minY + theme.body.ascender + 1.5) }
             return (rect, rect.minY + location(forGlyphAt: glyph).y)
         }
         // The last row, with nothing in it yet: the line the caret waits on.
