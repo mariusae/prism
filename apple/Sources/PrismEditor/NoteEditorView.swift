@@ -382,6 +382,9 @@ public final class NoteTextView: NSTextView {
     /// How far down the app's own block views reach.
     var blocksBottom: CGFloat = 0
     private var pressed: (point: CGPoint, link: EditorLink?, task: Int?)?
+    /// The little window asking where a link should lead, and the words it is for.
+    private var linkPrompt: NSPopover?
+    private var linkRange = NSRange(location: 0, length: 0)
 
     // MARK: "Title", at the first line's end
 
@@ -688,6 +691,10 @@ public final class NoteTextView: NSTextView {
             // Nothing to do as text: the key is whoever's wants it.
             return coordinator?.newTimeBlock() == true || super.performKeyEquivalent(with: event)
         }
+        if key == "k", flags == [.command, .option] {
+            askLink()
+            return true
+        }
         guard let command = Self.command(flags: flags, key: key, special: event.specialKey) else { return super.performKeyEquivalent(with: event) }
         let done = coordinator?.perform(command) ?? false
         // A fold with nothing to fold leaves its key — ⌘0 is many an app's own — to whoever wants it.
@@ -757,11 +764,59 @@ public final class NoteTextView: NSTextView {
     }
 
     /// The editor's own keys.
+    // MARK: A link, asked for
+
+    /// ⌥⌘K: asks where the words selected should lead, and links them
+    /// there; with nothing selected, writes the address itself.
+    func askLink() {
+        guard let window, linkPrompt == nil else { return }
+        let range = selectedRange()
+        var anchor = convert(window.convertFromScreen(firstRect(forCharacterRange: range, actualRange: nil)), from: nil)
+        anchor.size.width = max(anchor.width, 1)
+        let field = NSTextField(frame: NSRect(x: 12, y: 10, width: 300, height: 24))
+        field.placeholderString = "Link to — https://…"
+        field.bezelStyle = .roundedBezel
+        field.target = self
+        field.action = #selector(linkEntered(_:))
+        // An address already copied is most likely the one meant.
+        if let copied = NSPasteboard.general.string(forType: .string)?.trimmingCharacters(in: .whitespacesAndNewlines), webAddress(text: copied) != nil { field.stringValue = copied }
+        let holder = NSViewController()
+        holder.view = NSView(frame: NSRect(x: 0, y: 0, width: 324, height: 44))
+        holder.view.addSubview(field)
+        let prompt = NSPopover()
+        prompt.contentViewController = holder
+        prompt.behavior = .transient
+        prompt.delegate = self
+        linkPrompt = prompt
+        linkRange = range
+        prompt.show(relativeTo: anchor, of: self, preferredEdge: .maxY)
+        prompt.contentViewController?.view.window?.makeFirstResponder(field)
+    }
+
+    @objc private func linkEntered(_ field: NSTextField) {
+        var address = field.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
+        let range = linkRange
+        linkPrompt?.close()
+        guard !address.isEmpty else { return }
+        // Written without its scheme, as addresses are said.
+        if webAddress(text: address) == nil, !address.contains("://") { address = "https://" + address }
+        window?.makeFirstResponder(self)
+        setSelectedRange(range)
+        if range.length > 0 {
+            if coordinator?.link(to: address) != true { NSSound.beep() }
+        } else {
+            insertText("<\(address)>", replacementRange: range)
+        }
+    }
+
     private static func command(flags: NSEvent.ModifierFlags, key: String, special: NSEvent.SpecialKey?) -> EditCommand? {
         switch (flags, key) {
         case ([.command], "b"): return .bold
         case ([.command], "i"): return .italic
         case ([.command, .shift], "h"): return .highlight
+        // With ⇧, the keys say what they say shifted: ` is ~, - is _.
+        case ([.command, .shift], "`"), ([.command, .shift], "~"): return .code
+        case ([.command, .shift], "-"), ([.command, .shift], "_"): return .strikethrough
         case ([.command, .shift], "k"): return .deleteRows
         case ([.command, .shift], "d"): return .duplicateRows
         case ([.command, .shift], "8"), ([.command, .shift], "*"): return .bullet
@@ -788,6 +843,11 @@ public final class NoteTextView: NSTextView {
             }
         }
         return nil
+    }
+}
+extension NoteTextView: NSPopoverDelegate {
+    public func popoverDidClose(_ notification: Notification) {
+        if (notification.object as? NSPopover) === linkPrompt { linkPrompt = nil }
     }
 }
 #endif
