@@ -102,6 +102,9 @@ enum Snapshot {
             window.contentView = NSHostingView(rootView: QueryRiverEditor(store: store, ask: store.river.query == nil ? .new : .edit(store.river)))
         } else if environment["WEFT_SETTINGS"] != nil {
             window.contentView = NSHostingView(rootView: SettingsView())
+        } else if environment["WEFT_CALENDAR"] != nil {
+            // The calendar alone, as its popover shows it.
+            window.contentView = NSHostingView(rootView: CalendarPopover(store: store) { _ in }.background(Color.inkPaper))
         } else if environment["WEFT_PICKER"] != nil {
             // The icon and colour picker alone, as its popover shows it.
             window.contentView = NSHostingView(rootView: EmblemPicker(title: "Project Atlas", icon: .constant("map"), color: .constant("teal")).frame(width: frame.width, height: frame.height))

@@ -11,6 +11,8 @@ public final class WindowActions {
     public var quickOpen = 0
     public var typed = ""
     public var sidebar = 0
+    /// Moved to bring the calendar up.
+    public var calendar = 0
     public init() {}
 }
 
@@ -42,6 +44,7 @@ public struct ContentView: View {
     let store: GraphStore
     let actions: WindowActions
     @State private var showsQuickOpen = false
+    @State private var showsCalendar = false
     @State private var seed = ""
     @State private var columns: NavigationSplitViewVisibility = .detailOnly
     @State private var searchFocus = 0
@@ -96,7 +99,15 @@ public struct ContentView: View {
                         Button { withAnimation(.snappy(duration: 0.28)) { store.open(name: QuickOpen.day(Date()), after: store.river.selected) } } label: {
                             Label("Today", systemImage: "calendar")
                         }
-                        .help("Today (⇧⌘D)")
+                        .help("Today (⌘D) — right-click for a calendar (⇧⌘D)")
+                        // The other click: a month of days, to go to any of them, or to a week.
+                        .overlay { SecondaryClick { showsCalendar = true } }
+                        .popover(isPresented: $showsCalendar, arrowEdge: .bottom) {
+                            CalendarPopover(store: store) { title in
+                                showsCalendar = false
+                                withAnimation(.snappy(duration: 0.28)) { store.open(name: title, after: store.river.selected) }
+                            }
+                        }
                         Button { newPage() } label: { Label("New Note", systemImage: "square.and.pencil") }
                             .help("New Note (⌘N)")
                     }
@@ -113,6 +124,7 @@ public struct ContentView: View {
             if showsQuickOpen { showsQuickOpen = false } else { show(actions.typed) }
             actions.typed = ""
         }
+        .onChange(of: actions.calendar) { _, _ in showsCalendar = true }
         .onChange(of: actions.sidebar) { _, _ in
             withAnimation(.snappy(duration: 0.2)) { columns = columns == .detailOnly ? .all : .detailOnly }
         }

@@ -1632,6 +1632,18 @@ public final class PageDraft {
     /// A page that is itself a thing to do.
     public enum TaskState { case none, todo, done }
 
+    /// The note's checklist, if it holds one: its boxes ticked, of all.
+    public var checklist: (done: Int, total: Int)? {
+        _ = revision
+        var (done, total) = (0, 0)
+        for line in editor.layout().lines {
+            guard case .item(_, let ticked, _) = line.kind, let ticked else { continue }
+            total += 1
+            if ticked { done += 1 }
+        }
+        return total > 0 ? (done, total) : nil
+    }
+
     public var task: TaskState {
         _ = revision
         switch editor.field(key: "task") {

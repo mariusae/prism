@@ -168,7 +168,7 @@ struct StartPage: View {
                     VStack(spacing: 6) {
                         EmblemView(saved.emblem, size: 64, quiet: Color.inkSecondary)
                             .overlay(alignment: .topTrailing) { if isOpen { Circle().fill(Color.inkAccent).frame(width: 9, height: 9).offset(x: 2, y: -2) } }
-                        Text(saved.name).font(.caption).lineLimit(2).multilineTextAlignment(.center).foregroundStyle(Color.inkText)
+                        Text(saved.name).font(.caption).lineLimit(1).truncationMode(.tail).foregroundStyle(Color.inkText)
                     }
                 }
                 .buttonStyle(.plain)
@@ -379,8 +379,10 @@ struct RiverOverview: View {
                     .overlay(alignment: .topTrailing) {
                         if store.rivers.count > 1 {
                             Button { withAnimation(.snappy(duration: 0.25)) { store.closeRiver(at: index) } } label: {
-                                Image(systemName: "xmark").font(.system(size: 10, weight: .bold)).foregroundStyle(Color.inkSecondary)
-                                    .frame(width: 22, height: 22).background(Circle().fill(Color.inkHover)).frame(width: 40, height: 40)
+                                Image(systemName: "xmark").font(.system(size: 12, weight: .bold)).foregroundStyle(Color.inkSecondary)
+                                    .frame(width: 28, height: 28).background(Circle().fill(Color.inkHover))
+                                    // A finger's width to press, all of it: not only the mark.
+                                    .frame(width: 52, height: 52).contentShape(Rectangle())
                             }
                             .buttonStyle(.plain)
                         }

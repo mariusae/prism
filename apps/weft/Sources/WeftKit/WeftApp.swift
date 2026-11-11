@@ -64,6 +64,7 @@ public struct WeftMacApp: App {
             }
             CommandGroup(replacing: .newItem) {
                 Button("New Note") { newPage() }.keyboardShortcut("n")
+                Button("New To-Do") { newToDo() }.keyboardShortcut("n", modifiers: [.command, .shift])
                 Button("New Tab") { store?.newRiver() }.keyboardShortcut("t")
                 Button("New Query River…") { store?.queryAsk = .new }.keyboardShortcut("t", modifiers: [.command, .option])
                 Button("Quick Open…") { actions.quickOpen += 1 }.keyboardShortcut("o")
@@ -91,7 +92,8 @@ public struct WeftMacApp: App {
                 Button("Show or Hide the Sidebar") { actions.sidebar += 1 }.keyboardShortcut("s", modifiers: [.command, .control])
             }
             CommandMenu("Story") {
-                Button("Today") { today() }.keyboardShortcut("d", modifiers: [.command, .shift])
+                Button("Today") { today() }.keyboardShortcut("d")
+                Button("Go to Date…") { actions.calendar += 1 }.keyboardShortcut("d", modifiers: [.command, .shift])
                 Button("Close All Cards") { closeAll() }.keyboardShortcut("w", modifiers: [.command, .shift])
                 Button("Reopen Closed Note") { withAnimation(.snappy(duration: 0.28)) { _ = store?.reopenClosed() } }.keyboardShortcut("t", modifiers: [.command, .shift])
                 Divider()
@@ -150,6 +152,14 @@ public struct WeftMacApp: App {
 
     private func newPage() {
         withAnimation(.snappy(duration: 0.28)) { _ = store?.newNote() }
+    }
+
+    /// A new note that is a thing to do: its ring before its first words.
+    private func newToDo() {
+        guard let store else { return }
+        withAnimation(.snappy(duration: 0.28)) {
+            if let card = store.newNote() { store.draft(path: card.path, title: card.title).setTask(.todo) }
+        }
     }
 
     private func today() {
@@ -228,8 +238,25 @@ enum RiverKeys {
         monitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { event in handle(event) ? nil : event }
     }
 
+    /// Whether a window is one that shows rivers: not the settings, the diagnostics, a popover.
+    private static func isRiverWindow(_ window: NSWindow) -> Bool {
+        let name = (window.identifier?.rawValue ?? "").lowercased()
+        return window.styleMask.contains(.titled) && window.toolbar != nil && !name.contains("settings") && !name.contains("diagnostics")
+    }
+
     private static func handle(_ event: NSEvent) -> Bool {
         guard let store, let actions, let window = event.window, window.isKeyWindow, window.attachedSheet == nil else { return false }
+        // ⌘W closes the note in hand — the one being written in, else the
+        // one chosen — whatever has the keys: heard here, ahead of the
+        // window's own Close, which would take the window with it.
+        let pressed = event.modifierFlags.intersection([.command, .option, .control, .shift])
+        if pressed == .command, event.charactersIgnoringModifiers == "w", isRiverWindow(window) {
+            let river = store.river
+            if let card = river.writing ?? river.selected, river.card(card) != nil {
+                withAnimation(.snappy(duration: 0.28)) { store.close(card, in: river) }
+                return true
+            }
+        }
         // Keys typed into a field, or a card, are that field's — ⌘⌫ too,
         // which there takes the line back to its start, and is not left
         // for the menu, where it deletes the note.

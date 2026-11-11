@@ -119,11 +119,14 @@ public struct EditorLead: Equatable {
     public var tint: EditorColor?
     /// Whether it is a filled mark on the accent: a to-do done.
     public var isDone: Bool
+    /// A ring in place of the symbol: how far along a checklist is, from nothing to all.
+    public var progress: Double?
 
-    public init(symbol: String, tint: EditorColor? = nil, isDone: Bool = false) {
+    public init(symbol: String, tint: EditorColor? = nil, isDone: Bool = false, progress: Double? = nil) {
         self.symbol = symbol
         self.tint = tint
         self.isDone = isDone
+        self.progress = progress
     }
 }
 

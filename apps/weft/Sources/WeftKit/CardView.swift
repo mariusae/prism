@@ -45,7 +45,10 @@ struct CardView: View {
 
     private static func footKey(_ card: Card, in river: River) -> String { "\(river.id)|\(card.path)" }
 
-    private var emblem: Emblem { Emblem(title: draft.title, icon: draft.icon, color: draft.color, kindSymbol: isDay ? "calendar" : nil, letter: false) }
+    /// Its icon — or, holding a checklist and given none, how far along that is.
+    private var emblem: Emblem {
+        Emblem(title: draft.title, icon: draft.icon, color: draft.color, kindSymbol: isDay ? "calendar" : nil, letter: false, progress: draft.task == .none ? draft.checklist : nil)
+    }
     private var isSelected: Bool { river.selected == card.id }
     private var isWriting: Bool { river.writing == card.id }
     private var isDay: Bool { card.path.hasPrefix("daily/") || card.path.hasPrefix("weekly/") }
@@ -184,7 +187,10 @@ struct CardView: View {
         switch draft.task {
         case .todo: return EditorLead(symbol: "circle")
         case .done: return EditorLead(symbol: "checkmark.circle.fill", isDone: true)
-        case .none: return emblem.symbol.map { EditorLead(symbol: $0, tint: emblem.color.map { PlatformColor($0.color) }) }
+        case .none:
+            let tint = emblem.color.map { PlatformColor($0.color) }
+            if let progress = emblem.progress { return EditorLead(symbol: "circle", tint: tint, progress: progress) }
+            return emblem.symbol.map { EditorLead(symbol: $0, tint: tint) }
         }
     }
 

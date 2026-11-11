@@ -70,7 +70,10 @@ struct PhoneCard: View {
     private var isUntitled: Bool { !isDay && draft.isUntitled }
     private var showsHeader: Bool { !isUntitled || isRenaming }
     private var showsDrawer: Bool { isSelected && !card.folded }
-    private var emblem: Emblem { Emblem(title: draft.title, icon: draft.icon, color: draft.color, kindSymbol: isDay ? "calendar" : nil, letter: false) }
+    /// Its icon — or, holding a checklist and given none, how far along that is.
+    private var emblem: Emblem {
+        Emblem(title: draft.title, icon: draft.icon, color: draft.color, kindSymbol: isDay ? "calendar" : nil, letter: false, progress: draft.task == .none ? draft.checklist : nil)
+    }
     private var titleFont: Font { .system(size: TextSettings.titleSize, weight: .semibold, design: TextSettings.design) }
     /// Whether the note has anything to read: a link note's address, a link, a PDF.
     private var canRead: Bool { draft.exists && ReaderSource.any(in: draft.markdown, root: store.root) }
@@ -258,7 +261,10 @@ struct PhoneCard: View {
         switch draft.task {
         case .todo: return EditorLead(symbol: "circle")
         case .done: return EditorLead(symbol: "checkmark.circle.fill", isDone: true)
-        case .none: return emblem.symbol.map { EditorLead(symbol: $0, tint: emblem.color.map { PlatformColor($0.color) }) }
+        case .none:
+            let tint = emblem.color.map { PlatformColor($0.color) }
+            if let progress = emblem.progress { return EditorLead(symbol: "circle", tint: tint, progress: progress) }
+            return emblem.symbol.map { EditorLead(symbol: $0, tint: tint) }
         }
     }
 

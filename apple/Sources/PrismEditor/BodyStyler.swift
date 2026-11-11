@@ -440,6 +440,23 @@ final class BodyLayoutManager: NSLayoutManager {
     private func drawLead(_ lead: EditorLead, midX: CGFloat, baseline: CGFloat, origin: CGPoint) {
         let side = (size * 1.05).rounded()
         let box = CGRect(x: midX - side / 2, y: baseline - theme.body.capHeight / 2 - side / 2, width: side, height: side)
+        if let progress = lead.progress {
+            // A checklist's ring: as much of it drawn as is done.
+            let tint = lead.tint ?? theme.secondary
+            let ring = box.insetBy(dx: side * 0.16, dy: side * 0.16), line = max(side * 0.11, 1.5)
+            let track = EditorBezier(ovalIn: ring)
+            track.lineWidth = line
+            tint.withAlphaComponent(0.25).setStroke()
+            track.stroke()
+            if progress > 0 {
+                let arc = EditorBezier.arc(center: CGPoint(x: ring.midX, y: ring.midY), radius: ring.width / 2, fraction: min(progress, 1))
+                arc.lineWidth = line
+                tint.setStroke()
+                arc.stroke()
+            }
+            leadBox = box.offsetBy(dx: -origin.x, dy: -origin.y).insetBy(dx: -4, dy: -4)
+            return
+        }
         Self.draw(symbol: lead.symbol, in: box, pointSize: side * (lead.isDone ? 1 : 0.92), weight: .regular, colors: lead.isDone ? [.white, theme.accent] : [lead.tint ?? theme.secondary])
         leadBox = box.offsetBy(dx: -origin.x, dy: -origin.y).insetBy(dx: -4, dy: -4)
     }
@@ -882,3 +899,26 @@ extension UIImage.SymbolWeight {
     }
 }
 #endif
+
+#if os(macOS)
+typealias EditorBezier = NSBezierPath
+#else
+typealias EditorBezier = UIBezierPath
+#endif
+
+extension EditorBezier {
+    /// An arc from the top of a circle, clockwise as it is seen, so much of the way round.
+    static func arc(center: CGPoint, radius: CGFloat, fraction: Double) -> EditorBezier {
+        #if os(macOS)
+        // In a flipped view, angles run the other way: from the top is -90.
+        let path = NSBezierPath()
+        path.appendArc(withCenter: center, radius: radius, startAngle: -90, endAngle: -90 + 360 * fraction, clockwise: false)
+        path.lineCapStyle = .round
+        return path
+        #else
+        let path = UIBezierPath(arcCenter: center, radius: radius, startAngle: -.pi / 2, endAngle: -.pi / 2 + 2 * .pi * fraction, clockwise: true)
+        path.lineCapStyle = .round
+        return path
+        #endif
+    }
+}

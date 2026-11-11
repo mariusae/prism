@@ -306,6 +306,14 @@ struct PhoneBar: View {
     @State private var wasHeld = false
     /// How long + is held, still, to be listening.
     private static let hold = 0.2
+    /// A month of days, to go to one.
+    @State private var showsCalendar = false
+    /// The river's name held: its notes, to sweep to and let go on.
+    @State private var jump: JumpList.Shown?
+    /// The name was just held: its being let go is no tap.
+    @State private var wasJumping = false
+    /// Where the finger holding the name is, in the name's own room: nothing, once it is lifted.
+    @GestureState private var sweepAt: CGPoint?
 
     private var river: River { store.river }
 
@@ -342,7 +350,7 @@ struct PhoneBar: View {
                     .highPriorityGesture(turning)
                     HStack(spacing: 0) {
                         more
-                        Button { state.start = .browse } label: {
+                        Button { if !wasJumping { state.start = .browse } } label: {
                             HStack(spacing: 6) {
                                 let emblem = Emblem(title: store.title(of: river), icon: river.icon, color: river.color, letter: false)
                                 if emblem.isShown { EmblemView(emblem, size: 15, style: .plain, quiet: Color.inkSecondary) }
@@ -356,8 +364,19 @@ struct PhoneBar: View {
                     }
                     .glassEffect(.regular.interactive(), in: .capsule)
                     .glassEffectID("name", in: glass)
-                    // Before the taps on it: a drag turns the river, and opens nothing.
-                    .highPriorityGesture(turning)
+                    // Before the taps on it: a drag turns the river, and opens nothing —
+                    // but not while the name is held, when the finger's sweep is the list's.
+                    .highPriorityGesture(turning, including: wasJumping ? .subviews : .all)
+                    // Held still, then swept: the river's notes, and the one let go on.
+                    .simultaneousGesture(holding)
+                    .onChange(of: sweepAt) { before, now in
+                        switch (before, now) {
+                        case (nil, let at?): sweep(.began(at))
+                        case (_?, let at?): sweep(.moved(at))
+                        case (_?, nil): sweep(.ended)
+                        case (nil, nil): break
+                        }
+                    }
                     new.glassEffectID("new", in: glass)
                 }
                 .frame(height: 48)
@@ -378,6 +397,27 @@ struct PhoneBar: View {
             }
         }
         .animation(.easeOut(duration: 0.2), value: held.problem != nil || held.listening)
+        // Over it while the river's name is held: the river's notes.
+        .overlay(alignment: .bottom) {
+            if let jump {
+                JumpList(shown: jump)
+                    .padding(.horizontal, 14)
+                    .padding(.bottom, 48 + JumpList.gap)
+                    .transition(.opacity.combined(with: .scale(scale: 0.96, anchor: .bottom)))
+            }
+        }
+        .animation(.snappy(duration: 0.18), value: jump != nil)
+        .sheet(isPresented: $showsCalendar) {
+            CalendarPopover(store: store) { title in
+                showsCalendar = false
+                state.tucked = false
+                withAnimation(.snappy(duration: 0.28)) { store.open(name: title, after: river.selected) }
+            }
+            .padding(.top, 10)
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+            .presentationDetents([.height(400)])
+            .presentationDragIndicator(.visible)
+        }
         // Something came over the app — asked whether it may listen, a call — and the finger's lifting may never be told: given up.
         .onReceive(NotificationCenter.default.publisher(for: UIApplication.willResignActiveNotification)) { _ in
             pressed?.cancel()
@@ -433,11 +473,62 @@ struct PhoneBar: View {
             .accessibilityAction { withAnimation(.snappy(duration: 0.28)) { _ = store.newNote() } }
     }
 
+    /// The name held still a moment, and then wherever the finger goes.
+    private var holding: some Gesture {
+        LongPressGesture(minimumDuration: 0.3, maximumDistance: 10)
+            .sequenced(before: DragGesture(minimumDistance: 0, coordinateSpace: .local))
+            .updating($sweepAt) { value, at, _ in
+                if case .second(true, let drag) = value { at = drag?.location ?? CGPoint(x: 0, y: 24) }
+            }
+    }
+
+    /// The river's name held, and the finger swept over its notes: let
+    /// go on one, the river goes to it. `at` is in the name's own room:
+    /// above it is less than nothing.
+    private func sweep(_ phase: HoldSweep.Phase) {
+        switch phase {
+        case .began(let at):
+            let cards = river.all
+            guard !cards.isEmpty else { return }
+            wasJumping = true
+            state.swipe = 0
+            UIImpactFeedbackGenerator(style: .medium).impactOccurred()
+            let room = (UIScreen.main.bounds.height * 0.62 / JumpList.row).rounded(.down) * JumpList.row
+            var shown = JumpList.Shown(
+                rows: cards.map { JumpList.Row(id: $0.id, label: store.label(path: $0.path, title: $0.title), emblem: store.emblem(path: $0.path, title: $0.title)) },
+                height: min(CGFloat(cards.count) * JumpList.row, room), here: river.selected
+            )
+            shown.point(at.y)
+            jump = shown
+        case .moved(let at):
+            guard var shown = jump else { return }
+            let before = shown.chosen
+            shown.point(at.y)
+            if shown.chosen != before, shown.chosen != nil { UISelectionFeedbackGenerator().selectionChanged() }
+            jump = shown
+        case .ended:
+            if let shown = jump, let chosen = shown.chosen, shown.rows.indices.contains(chosen) {
+                let id = shown.rows[chosen].id
+                state.tucked = false
+                withAnimation(.snappy(duration: 0.3)) { river.reveal(id) }
+                store.rememberRivers()
+            }
+            jump = nil
+            // The button under the finger hears of the lifting after this does.
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) { wasJumping = false }
+        case .taken:
+            jump = nil
+            wasJumping = false
+        }
+    }
+
     /// The bar dragged: the river follows the finger, and past the middle
     /// gives way to the next. Dragged up, the rivers are all shown.
     private var turning: some Gesture {
         DragGesture(minimumDistance: 12, coordinateSpace: .global)
             .onChanged { drag in
+                // The name is held, and its notes swept over: the river stays where it is.
+                guard !wasJumping else { return }
                 guard abs(drag.translation.width) >= abs(drag.translation.height) else { return }
                 var x = drag.translation.width
                 // Before the first river there is nothing: it gives a little, and no more.
@@ -446,6 +537,7 @@ struct PhoneBar: View {
                 state.swipe = x
             }
             .onEnded { drag in
+                guard !wasJumping else { return }
                 if drag.translation.height < -24, abs(drag.translation.height) > abs(drag.translation.width) {
                     state.swipe = 0
                     state.showsOverview = true
@@ -494,6 +586,7 @@ struct PhoneBar: View {
             if store.rivers.count > 1 { Button("All Rivers", systemImage: "square.on.square") { state.showsOverview = true } }
             Section {
                 Button("Today", systemImage: "calendar") { withAnimation(.snappy(duration: 0.28)) { store.open(name: Days.name(Date()), after: river.selected) } }
+                Button("Go to Date…", systemImage: "calendar.badge.clock") { showsCalendar = true }
                 Button("New To-Do", systemImage: "circle") {
                     withAnimation(.snappy(duration: 0.28)) {
                         if let card = store.newNote() { store.draft(path: card.path, title: card.title).setTask(.todo) }
@@ -548,6 +641,82 @@ struct PhoneBar: View {
                 }
                 .contentShape(Rectangle())
         }
+    }
+}
+/// What a finger holding the river's name does.
+enum HoldSweep {
+    enum Phase { case began(CGPoint), moved(CGPoint), ended, taken }
+}
+
+/// A river's notes, over the bar while its name is held: the finger
+/// sweeps up over them, and is let go on the one to go to. A river with
+/// more notes than there is room for turns under the finger as it goes,
+/// so that the whole of it is within a thumb's reach.
+struct JumpList: View {
+    struct Row: Identifiable, Equatable {
+        var id: Card.ID
+        var label: String
+        var emblem: Emblem
+    }
+
+    struct Shown: Equatable {
+        var rows: [Row]
+        /// How tall the list is: all of its rows, or as many as there is room for.
+        var height: CGFloat
+        /// The card the river is at, marked.
+        var here: Card.ID?
+        /// The row under the finger.
+        var chosen: Int?
+        /// How far the rows are turned up under the list's top.
+        var turned: CGFloat = 0
+
+        /// The finger is here, measured from the top of the river's name:
+        /// over the list, less than nothing by its gap and more.
+        mutating func point(_ y: CGFloat) {
+            let inside = y + JumpList.gap + height
+            guard inside < height + JumpList.gap / 2 else {
+                // Back down on the name: nothing chosen, and let go, nowhere gone.
+                chosen = nil
+                return
+            }
+            let at = min(max(inside, 0), height - 0.5)
+            let whole = CGFloat(rows.count) * JumpList.row
+            turned = (at / height) * max(whole - height, 0)
+            chosen = min(max(Int((turned + at) / JumpList.row), 0), rows.count - 1)
+        }
+    }
+
+    static let row: CGFloat = 40
+    /// Between the list's foot and the bar.
+    static let gap: CGFloat = 10
+
+    let shown: Shown
+
+    var body: some View {
+        VStack(spacing: 0) {
+            ForEach(Array(shown.rows.enumerated()), id: \.element.id) { index, row in
+                let chosen = shown.chosen == index
+                HStack(spacing: 10) {
+                    if row.emblem.isShown {
+                        EmblemView(row.emblem, size: 15, style: .plain, quiet: chosen ? Color.white : Color.inkSecondary).frame(width: 18)
+                    } else {
+                        Circle().fill(row.id == shown.here ? Color.inkAccent : Color.clear).frame(width: 6, height: 6).frame(width: 18)
+                    }
+                    Text(row.emblem.caption(row.label)).font(.callout.weight(chosen ? .semibold : .regular)).lineLimit(1)
+                    Spacer(minLength: 0)
+                    if row.id == shown.here, row.emblem.isShown { Circle().fill(chosen ? Color.white : Color.inkAccent).frame(width: 6, height: 6) }
+                }
+                .padding(.horizontal, 14)
+                .frame(height: Self.row)
+                .foregroundStyle(chosen ? Color.white : Color.inkText)
+                .background(RoundedRectangle(cornerRadius: 12, style: .continuous).fill(chosen ? Color.inkAccent : Color.clear).padding(.horizontal, 5).padding(.vertical, 2))
+            }
+        }
+        .offset(y: -shown.turned)
+        .frame(height: shown.height, alignment: .top)
+        .clipShape(RoundedRectangle(cornerRadius: 22, style: .continuous))
+        .glassEffect(.regular, in: RoundedRectangle(cornerRadius: 22))
+        .allowsHitTesting(false)
     }
 }
 #endif

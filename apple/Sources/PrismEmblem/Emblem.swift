@@ -35,13 +35,14 @@ public enum EmblemColor: String, CaseIterable, Hashable, Sendable {
 /// One rule, the same in every app:
 ///
 /// 1. If it was given an icon, that icon.
-/// 2. Otherwise the symbol of its kind, if its kind has one: a day is a
+/// 2. Otherwise, if it holds a checklist, how far along that is: a ring.
+/// 3. Otherwise the symbol of its kind, if its kind has one: a day is a
 ///    calendar.
-/// 3. Otherwise — for a river — a letter of its name
+/// 4. Otherwise — for a river — a letter of its name
 ///    ([`Emblem.letter(for:)`]). A note is not given a letter: a note
 ///    with no icon has none, and where it is shown its words have the
 ///    room. One given only a colour is a dot of that colour.
-/// 4. In its colour if it was given one; else in whatever quiet colour
+/// 5. In its colour if it was given one; else in whatever quiet colour
 ///    the place it is shown in uses.
 ///
 /// What a page was given is in its frontmatter — `icon:` an SF Symbol's
@@ -52,6 +53,8 @@ public struct Emblem: Hashable, Sendable {
         case symbol(String)
         /// A letter, a digit or an emoji of the name.
         case letter(String)
+        /// How far along its checklist is: so many done, of so many. A ring.
+        case progress(done: Int, total: Int)
         /// Nothing: a note that was given no icon.
         case none
     }
@@ -67,10 +70,13 @@ public struct Emblem: Hashable, Sendable {
     ///     telling than a letter of its name: `calendar` for a day.
     ///   - letter: whether a letter of its name stands for it when
     ///     nothing else does: so for a river, not for a note.
-    public init(title: String, icon: String? = nil, color: String? = nil, kindSymbol: String? = nil, letter: Bool = true) {
+    ///   - progress: its checklist, if it holds one: boxes ticked, of all.
+    public init(title: String, icon: String? = nil, color: String? = nil, kindSymbol: String? = nil, letter: Bool = true, progress: (done: Int, total: Int)? = nil) {
         let icon = icon?.trimmingCharacters(in: .whitespaces)
         if let icon, !icon.isEmpty {
             glyph = .symbol(icon)
+        } else if let progress, progress.total > 0 {
+            glyph = .progress(done: progress.done, total: progress.total)
         } else if let kindSymbol {
             glyph = .symbol(kindSymbol)
         } else if letter {
@@ -90,6 +96,12 @@ public struct Emblem: Hashable, Sendable {
     /// Whether there is anything to draw: an icon, a letter, or — for a
     /// note given only a colour — a dot of it.
     public var isShown: Bool { glyph != .none || color != nil }
+
+    /// How far along its checklist is, from nothing to all, when that is what stands for it.
+    public var progress: Double? {
+        if case .progress(let done, let total) = glyph { return total > 0 ? min(Double(done) / Double(total), 1) : nil }
+        return nil
+    }
 
     /// The icon, when what stands for it is one.
     public var symbol: String? {
@@ -160,6 +172,15 @@ public struct EmblemView: View {
                     .font(.system(size: size * (style == .tile ? 0.6 : 0.74), weight: .bold, design: .rounded))
                     .minimumScaleFactor(0.5)
                     .lineLimit(1)
+            case .progress:
+                // A ring: as much of it drawn as is done; all of it, and a tick.
+                let side = size * (style == .tile ? 0.56 : 0.72), line = max(side * 0.14, 1.5), done = emblem.progress ?? 0
+                ZStack {
+                    Circle().stroke(tint.opacity(0.25), lineWidth: line)
+                    Circle().trim(from: 0, to: done).stroke(style: StrokeStyle(lineWidth: line, lineCap: .round)).rotationEffect(.degrees(-90))
+                    if done >= 1 { Image(systemName: "checkmark").font(.system(size: side * 0.5, weight: .bold)) }
+                }
+                .frame(width: side, height: side)
             case .none:
                 // Given only a colour: a dot of it. Given nothing: nothing.
                 if emblem.color != nil { Circle().frame(width: size * 0.42, height: size * 0.42) }
