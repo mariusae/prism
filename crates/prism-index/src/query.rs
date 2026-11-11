@@ -250,12 +250,12 @@ pub fn run(db: &Connection, query: &Query, options: &QueryOptions<'_>) -> Result
         }
     }
 
-    const BY_TITLE: &str = "notes.title COLLATE NOCASE, notes.path";
+    const BY_TITLE: &str = "notes.label COLLATE NOCASE, notes.path";
     let way = |descending: bool| if descending { " DESC" } else { "" };
     let mut dated: Option<&'static str> = None;
     let order_by = match order {
         Order::Title { descending: false } => BY_TITLE.to_owned(),
-        Order::Title { descending: true } => "notes.title COLLATE NOCASE DESC, notes.path DESC".to_owned(),
+        Order::Title { descending: true } => "notes.label COLLATE NOCASE DESC, notes.path DESC".to_owned(),
         Order::Time { column, descending } => {
             // Driven from the index of when pages changed; the pages
             // with no time are asked for after, if there is room.

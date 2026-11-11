@@ -292,6 +292,21 @@ impl Note {
         self.title_heading().is_none() && NoteKind::is_unnamed(path)
     }
 
+    /// Every name the note is found and linked by, the first its own:
+    /// its title — or, never having been given one, its first words —
+    /// and then its aliases. A note with no title and nothing written
+    /// has no name of its own: there is nothing to call it by, and
+    /// "Untitled" is what many are shown as, not what one is named.
+    pub fn names(&self, path: &str) -> Vec<String> {
+        let meta = self.meta(path);
+        let own = if self.is_untitled(path) { (!self.body.is_blank()).then(|| self.label(path)) } else { Some(meta.title.clone()) };
+        let mut names: Vec<String> = own.into_iter().collect();
+        names.extend(meta.aliases);
+        let mut seen = std::collections::HashSet::new();
+        names.retain(|name| !name.trim().is_empty() && seen.insert(name_key(name)));
+        names
+    }
+
     /// What the note is called where it is shown: its title — or, never
     /// having been given one, its first words. See [`label`].
     pub fn label(&self, path: &str) -> String {

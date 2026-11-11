@@ -258,7 +258,7 @@ struct QuickOpen: View {
                 page(found, detail: shared.contains(found.label) ? linkName(path: found.path).map { "\($0) · \(when(found))" } : nil)
             }
             let key = nameKey(name: name)
-            if !pages.contains(where: { nameKey(name: $0.title) == key }), store.resolve(name)?.exists != true {
+            if !pages.contains(where: { nameKey(name: $0.label) == key || nameKey(name: $0.title) == key }), store.resolve(name)?.exists != true {
                 top.append(Row(id: "new", symbol: "plus", name: "New note “\(name)”", detail: "↩") { _ = $0.newPage(title: name) })
             }
             found.append(Section(id: "names", title: nil, rows: top))

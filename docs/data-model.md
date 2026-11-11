@@ -175,6 +175,15 @@ name says nothing: only an id, or `untitled`, or `untitled-` and a stamp
 (`notes/untitled-2026-11-10-135831-jmgs.md`). Its *title* is then its
 own name — which is what a link to any page says — but nothing shows it.
 
+**Its first words are its name.** Everywhere a titled note goes by its
+title, an untitled one goes by its label (`Note::names`): it is what the
+catalog lists and orders it by, what completion and `title:` find it
+by, what a link written by hand — `[[Ads paper]]` — resolves to, at a
+title's rank, and what search ranks it by and shows it under. Its
+first words changed, its name is changed. A note with no title and
+nothing written has no name: "Untitled" is what many are shown as, not
+what one is called.
+
 What a note is shown as called is its **label** (`note::label`,
 `Note::label`, `Session::label`): a titled note's title; an untitled
 one's first words — the first line of its body that says anything, markup
@@ -731,11 +740,11 @@ written, snapshotted and indexed in about 4 ms (release build).
 
 ## 15. The index schema
 
-### `catalog` — pages, names, fields (version 5)
+### `catalog` — pages, names, fields (version 6)
 
 ```sql
 notes       (path PRIMARY KEY, title, kind, private, conflicted, blank, label, untitled)
-            -- indexed on (title, path); on path where conflicted
+            -- indexed on (label, path); on path where conflicted
 note_names  (key, name, path, rank)                 -- indexed on key, on path
 name_words  (suffix, path, score)                   -- indexed on suffix, on path
 note_fields (path, key, position, value, number)    -- indexed on (path, key), on (key, value)
@@ -746,7 +755,7 @@ note_fields (path, key, position, value, number)    -- indexed on (path, key), o
 | `notes.kind` | `day`, `week` or `note` |
 | `notes.conflicted` | the file holds a whole conflict block ([§18](#18-merging-the-model-under-two-writers)) |
 | `notes.blank` | nothing is written in it: no blocks, or only empty bullets |
-| `note_names.rank` | `-1` the page's own name (its file's), `0` the title, `1` an alias |
+| `note_names.rank` | `-1` the page's own name (its file's); `0` the title, or an untitled note's first words; `1` an alias |
 | `name_words.suffix` | a name's key from one of its words on: `ada lovelace` gives `ada lovelace` and `lovelace` |
 | `name_words.score` | for a title or an alias, `rank × 2`, plus 1 for a suffix that is not the whole name: lower is a better find |
 | `note_fields` | every frontmatter key, a row a value: a list is a row an item, in order. A key written twice is read as its first |
@@ -784,7 +793,7 @@ Asks: `backlinks` (given every name a page answers to), `outgoing`,
 order is read from), `unresolved` (names no page answers to; dates, tags
 and rivers left out).
 
-### `search` — full text (version 1)
+### `search` — full text (version 2)
 
 ```sql
 CREATE VIRTUAL TABLE search USING fts5(path UNINDEXED, title, body, tokenize = 'unicode61 remove_diacritics 2');

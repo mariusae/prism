@@ -84,7 +84,7 @@ impl Index for Catalog {
     }
 
     fn version(&self) -> u32 {
-        5
+        6
     }
 
     fn create(&self, tx: &Transaction<'_>) -> Result<()> {
@@ -92,6 +92,8 @@ impl Index for Catalog {
         if column_exists(tx, "notes", "path")? && !column_exists(tx, "notes", "label")? {
             tx.execute_batch("DROP TABLE notes; DROP TABLE IF EXISTS note_tags; DROP TABLE IF EXISTS note_fields;")?;
         }
+        // Pages were once listed by their titles; they are listed by what they are shown as called.
+        tx.execute_batch("DROP INDEX IF EXISTS notes_title;")?;
         tx.execute_batch(
             "CREATE TABLE IF NOT EXISTS notes (
                  path TEXT PRIMARY KEY, title TEXT NOT NULL, kind TEXT NOT NULL,
@@ -100,9 +102,9 @@ impl Index for Catalog {
                  label TEXT NOT NULL, untitled INTEGER NOT NULL
              ) WITHOUT ROWID;
              -- Pages in the order they are listed in.
-             CREATE INDEX IF NOT EXISTS notes_title ON notes (title COLLATE NOCASE, path);
+             CREATE INDEX IF NOT EXISTS notes_label ON notes (label COLLATE NOCASE, path);
              CREATE INDEX IF NOT EXISTS notes_conflicted ON notes (path) WHERE conflicted;
-             -- Every name a page answers to. rank: -1 its file's name, 0 its title, 1 an alias.
+             -- Every name a page answers to. rank: -1 its file's name; 0 its title, or an untitled note's first words; 1 an alias.
              CREATE TABLE IF NOT EXISTS note_names (key TEXT NOT NULL, name TEXT NOT NULL, path TEXT NOT NULL, rank INTEGER NOT NULL);
              CREATE INDEX IF NOT EXISTS note_names_key ON note_names (key);
              CREATE INDEX IF NOT EXISTS note_names_path ON note_names (path);
@@ -153,7 +155,8 @@ impl Index for Catalog {
         if let Some(own) = NoteKind::link_name(file.path) {
             insert_name.execute(params![name_key(own), own, file.path, OWN])?;
         }
-        for (rank, name) in meta.names().into_iter().enumerate() {
+        // What it is called: its title, or — never given one — its first words. Then its aliases.
+        for (rank, name) in note.names(file.path).into_iter().enumerate() {
             let (key, rank) = (name_key(&name), rank.min(1) as i64);
             insert_name.execute(params![key, name, file.path, rank])?;
             // The name from each of its words on.
@@ -215,7 +218,7 @@ impl Catalog {
 
     /// Every page, by title.
     pub fn all(db: &Connection) -> Result<Vec<NoteRow>> {
-        let mut statement = db.prepare(&format!("SELECT {COLUMNS} FROM notes WHERE {SEEN} ORDER BY title COLLATE NOCASE, path"))?;
+        let mut statement = db.prepare(&format!("SELECT {COLUMNS} FROM notes WHERE {SEEN} ORDER BY label COLLATE NOCASE, path"))?;
         let rows = statement.query_map([], row)?.collect::<rusqlite::Result<_>>()?;
         Ok(rows)
     }
@@ -314,7 +317,7 @@ impl Catalog {
             "SELECT {COLUMNS} FROM notes JOIN (
                  SELECT path, min(score) AS score FROM name_words WHERE suffix >= ?1 AND suffix < ?2 GROUP BY path
              ) AS found ON found.path = notes.path
-             WHERE {SEEN} ORDER BY found.score, notes.title COLLATE NOCASE LIMIT ?3"
+             WHERE {SEEN} ORDER BY found.score, notes.label COLLATE NOCASE LIMIT ?3"
         ))?;
         let rows = statement.query_map(params![key, format!("{key}{}", char::MAX), limit as i64], row)?.collect::<rusqlite::Result<_>>()?;
         Ok(rows)
@@ -323,7 +326,7 @@ impl Catalog {
     /// The pages left holding a conflict for a person to settle.
     pub fn conflicted(db: &Connection) -> Result<Vec<NoteRow>> {
         let mut statement =
-            db.prepare(&format!("SELECT {COLUMNS} FROM notes INDEXED BY notes_conflicted WHERE conflicted AND {SEEN} ORDER BY title COLLATE NOCASE, path"))?;
+            db.prepare(&format!("SELECT {COLUMNS} FROM notes INDEXED BY notes_conflicted WHERE conflicted AND {SEEN} ORDER BY label COLLATE NOCASE, path"))?;
         let rows = statement.query_map([], row)?.collect::<rusqlite::Result<_>>()?;
         Ok(rows)
     }
@@ -333,7 +336,7 @@ impl Catalog {
     pub fn tagged(db: &Connection, tag: &str) -> Result<Vec<NoteRow>> {
         let mut statement = db.prepare(&format!(
             "SELECT {COLUMNS} FROM notes WHERE {SEEN} AND path IN (SELECT source FROM links WHERE kind = 'tag' AND key = ?1)
-             ORDER BY notes.title COLLATE NOCASE, notes.path"
+             ORDER BY notes.label COLLATE NOCASE, notes.path"
         ))?;
         let rows = statement.query_map([name_key(tag.trim().trim_start_matches('#'))], row)?.collect::<rusqlite::Result<_>>()?;
         Ok(rows)
@@ -420,7 +423,7 @@ impl Catalog {
     pub fn with_field(db: &Connection, key: &str, value: Option<&str>) -> Result<Vec<NoteRow>> {
         let mut statement = db.prepare(&format!(
             "SELECT {COLUMNS} FROM notes WHERE {SEEN} AND path IN (SELECT path FROM note_fields WHERE key = ?1 AND (?2 IS NULL OR value = ?2 COLLATE NOCASE))
-             ORDER BY notes.title COLLATE NOCASE, notes.path"
+             ORDER BY notes.label COLLATE NOCASE, notes.path"
         ))?;
         let rows = statement.query_map(params![key, value], row)?.collect::<rusqlite::Result<_>>()?;
         Ok(rows)

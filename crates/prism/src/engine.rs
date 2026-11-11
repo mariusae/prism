@@ -393,14 +393,16 @@ impl Engine {
         self.settle();
         let db = self.everything()?;
         let new_title = new_title.trim();
+        // What it was called: its title — or, never given one, its first words.
         let old_title = match self.graph.note(path)? {
-            Some(note) => note.title(path),
+            Some(note) => note.names(path).into_iter().next().unwrap_or_else(|| note.title(path)),
             None => return Err(Error::NotRenamable(path.to_owned())),
         };
         if prism_markup::Day::parse(new_title).is_some() || prism_markup::Week::parse(new_title).is_some() {
             return Err(Error::TitleTaken(new_title.to_owned()));
         }
         let mut renamed = self.graph.retitle(path, new_title)?;
+        renamed.old_title = old_title.clone();
         if prism_markup::name_key(&old_title) != prism_markup::name_key(new_title) {
             // The index is as it was before the heading changed: each name leads where it led.
             // The old title's links, if they were this page's; the new title's, if they are another's.

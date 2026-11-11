@@ -340,6 +340,59 @@ fn renaming_a_page_relinks_the_graph_and_the_indices_follow() {
 }
 
 #[test]
+fn a_note_never_titled_is_named_by_its_first_words() {
+    let world = World::new();
+    let a = world.first("a", Schedule::default());
+    let path = "notes/untitled-2026-11-07-205827-trg6.md";
+    a.write(path, "- [Ads paper](https://example.com/ads.pdf)\n- to read this week\n").unwrap();
+    a.write("notes/yan.md", "# Yan Yan\n\nNo blockers for ads; the paper is with her. See [[Ads paper]].\n").unwrap();
+    a.write("notes/ipnext.md", "# IPnext Paper\n\nAnother paper, about ads.\n").unwrap();
+    a.write("notes/untitled-2026-11-08-101010-aaaa.md", "").unwrap();
+    a.settle();
+    let db = a.index().unwrap();
+
+    // Its first words are its name: what it is listed by, found by, and linked by.
+    let row = Catalog::get(&db, path).unwrap().unwrap();
+    assert_eq!((row.label.as_str(), row.untitled), ("Ads paper", true));
+    assert_eq!(Catalog::names(&db, path).unwrap(), ["Ads paper"]);
+    assert_eq!(Catalog::resolve(&db, "ads  PAPER").unwrap().unwrap().path(), path);
+    assert_eq!(Catalog::resolve(&db, "untitled-2026-11-07-205827-trg6").unwrap().unwrap().path(), path, "and its file's name still leads to it");
+    assert_eq!(Catalog::complete(&db, "ads pa", 5).unwrap().iter().map(|page| page.path.as_str()).collect::<Vec<_>>(), [path]);
+    assert_eq!(Catalog::complete(&db, "paper", 5).unwrap().iter().map(|page| page.label.as_str()).collect::<Vec<_>>(), ["Ads paper", "IPnext Paper"]);
+    // Searched for by name, it is the first found, under its name.
+    let hits = Search::search(&db, "ads paper", 5).unwrap();
+    assert_eq!((hits[0].path.as_str(), hits[0].title.as_str()), (path, "Ads paper"));
+    // A link written with its name leads to it.
+    assert_eq!(Links::leading_to(&db, path).unwrap().iter().map(|link| link.source.as_str()).collect::<Vec<_>>(), ["notes/yan.md"]);
+    assert!(Links::unresolved(&db).unwrap().is_empty());
+    assert_eq!(a.query("title: ads", None).unwrap().pages.iter().map(|page| page.path.as_str()).collect::<Vec<_>>(), [path]);
+    // Pages are listed by what they are shown as called.
+    let listed: Vec<String> = Catalog::all(&db).unwrap().into_iter().map(|page| page.label).collect();
+    assert_eq!(listed, ["Ads paper", "IPnext Paper", "Untitled", "Yan Yan"]);
+    // A note with nothing in it has no name: "Untitled" is what it is shown as, not what it is called.
+    assert_eq!(Catalog::resolve(&db, "Untitled").unwrap(), None);
+    assert!(Catalog::duplicates(&db).unwrap().is_empty());
+
+    // Its first words change: so does its name.
+    a.write(path, "- Advertising paper\n").unwrap();
+    a.settle();
+    let db = a.index().unwrap();
+    assert_eq!(Catalog::resolve(&db, "Ads paper").unwrap(), None);
+    assert_eq!(Catalog::resolve(&db, "advertising paper").unwrap().unwrap().path(), path);
+
+    // Given a title, a link written with its first words is pinned to its file, and still leads to it.
+    a.write(path, "- Ads paper\n").unwrap();
+    a.settle();
+    let renamed = a.rename_note(path, "The Ads Paper").unwrap();
+    assert_eq!(renamed.old_title, "Ads paper");
+    assert!(a.graph().read("notes/yan.md").unwrap().unwrap().ends_with("See [[untitled-2026-11-07-205827-trg6]].\n"));
+    a.settle();
+    let db = a.index().unwrap();
+    assert_eq!(Catalog::names(&db, path).unwrap(), ["The Ads Paper"]);
+    assert_eq!(Links::leading_to(&db, path).unwrap().len(), 1);
+}
+
+#[test]
 fn two_pages_may_have_one_title_and_no_link_changes_where_it_leads() {
     let world = World::new();
     let a = world.first("a", Schedule::default());

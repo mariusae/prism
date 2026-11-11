@@ -24,7 +24,7 @@ impl Index for Search {
     }
 
     fn version(&self) -> u32 {
-        1
+        2
     }
 
     fn create(&self, tx: &Transaction<'_>) -> Result<()> {
@@ -44,7 +44,7 @@ impl Index for Search {
 
     fn put(&self, tx: &Transaction<'_>, file: &File<'_>) -> Result<()> {
         let Some(note) = file.note() else { return Ok(()) };
-        tx.execute("INSERT INTO search (path, title, body) VALUES (?1, ?2, ?3)", params![file.path, note.title(file.path), note.plain_text()])?;
+        tx.execute("INSERT INTO search (path, title, body) VALUES (?1, ?2, ?3)", params![file.path, note.label(file.path), note.plain_text()])?;
         Ok(())
     }
 }
