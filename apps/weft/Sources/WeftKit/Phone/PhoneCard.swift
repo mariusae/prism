@@ -112,15 +112,11 @@ struct PhoneCard: View {
         .animation(.spring(response: 0.34, dampingFraction: 0.82), value: showsDrawer)
         .task(id: store.indexRevision) { refresh() }
         .onChange(of: bodyHeight) { _, height in store.cardHeights[card.path] = height }
-        .sheet(item: $linkShown) { link in
-            PhoneLinkSheet(link: link, draft: draft)
+        .fullScreenCover(item: $linkShown) { link in
+            BottomCard { PhoneLinkSheet(link: link, draft: draft) }
         }
-        .sheet(isPresented: $addsTag) {
-            TagAdder(store: store, draft: draft) { addsTag = false; refresh() }
-                .padding(.top, 14)
-                .frame(maxHeight: .infinity, alignment: .top)
-                .presentationDetents([.height(260)])
-                .presentationDragIndicator(.visible)
+        .fullScreenCover(isPresented: $addsTag) {
+            BottomCard { TagAdder(store: store, draft: draft) { addsTag = false; refresh() } }
         }
         .sheet(isPresented: $choosesLook) {
             EmblemPicker(
@@ -862,37 +858,99 @@ struct PhoneLinkSheet: View {
                     if let url = URL(string: link.address) { openURL(url) }
                     dismiss()
                 } label: {
-                    Label("Open", systemImage: "safari").frame(maxWidth: .infinity)
+                    Label("Open", systemImage: "safari")
                 }
-                .buttonStyle(.borderedProminent)
+                .buttonStyle(SheetButton(isMain: true))
                 if let title = found?.title, draft.hasBareLink(link.address) {
                     Button {
                         draft.titleLink(link.address, as: title)
                         UIImpactFeedbackGenerator(style: .light).impactOccurred()
                         dismiss()
                     } label: {
-                        Label("Replace Link with Its Title", systemImage: "textformat").frame(maxWidth: .infinity)
+                        Label("Replace Link with Its Title", systemImage: "textformat")
                     }
-                    .buttonStyle(.bordered)
+                    .buttonStyle(SheetButton())
                 }
                 Button {
                     UIPasteboard.general.string = link.address
                     dismiss()
                 } label: {
-                    Label("Copy Link", systemImage: "doc.on.doc").frame(maxWidth: .infinity)
+                    Label("Copy Link", systemImage: "doc.on.doc")
                 }
-                .buttonStyle(.bordered)
+                .buttonStyle(SheetButton())
             }
             .controlSize(.large)
             .padding(.top, 16)
-            Spacer(minLength: 0)
         }
         .padding(.horizontal, 18)
-        .padding(.top, 26)
+        .padding(.top, 6)
+        .padding(.bottom, 8)
         .foregroundStyle(Color.inkText)
-        .presentationDetents([.height(cover == nil ? 300 : 470)])
-        .presentationDragIndicator(.visible)
         .onAppear { WebCards.shared.look(link.address) }
+    }
+}
+/// A sheet's button, the width of the sheet: the one most likely wanted
+/// in the accent, its words dark on it; the others a quiet fill, their
+/// words in the text's own colour. Told apart, and read, on glass.
+struct SheetButton: ButtonStyle {
+    var isMain = false
+
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .font(.body.weight(.semibold))
+            .foregroundStyle(isMain ? Color.black.opacity(0.85) : Color.inkText)
+            .frame(maxWidth: .infinity, minHeight: 50)
+            .background(Capsule().fill(isMain ? AnyShapeStyle(Color.inkAccent) : AnyShapeStyle(Color.inkText.opacity(0.12))))
+            .overlay(Capsule().strokeBorder(Color.inkText.opacity(isMain ? 0 : 0.14), lineWidth: 1))
+            .opacity(configuration.isPressed ? 0.7 : 1)
+            .contentShape(Capsule())
+    }
+}
+/// A card that comes up from the foot of the screen and stands on it:
+/// no gap under it. What is behind is dimmed; a touch there, or the card
+/// drawn down, sends it away. Shown in a full-screen cover, whose own
+/// ground it clears.
+struct BottomCard<Content: View>: View {
+    @ViewBuilder var content: () -> Content
+    @Environment(\.dismiss) private var dismiss
+    @State private var dimmed = false
+    @State private var drawn: CGFloat = 0
+
+    var body: some View {
+        ZStack(alignment: .bottom) {
+            Color.black.opacity(dimmed ? 0.4 : 0)
+                .ignoresSafeArea()
+                .contentShape(Rectangle())
+                .onTapGesture { leave() }
+            VStack(spacing: 0) {
+                Capsule().fill(Color.inkFaint.opacity(0.6)).frame(width: 38, height: 5).padding(.top, 8).padding(.bottom, 10)
+                content()
+            }
+            .frame(maxWidth: .infinity)
+            .background(
+                UnevenRoundedRectangle(topLeadingRadius: 30, topTrailingRadius: 30, style: .continuous)
+                    .fill(Color.inkPaper)
+                    .overlay(UnevenRoundedRectangle(topLeadingRadius: 30, topTrailingRadius: 30, style: .continuous).strokeBorder(Color.inkRule, lineWidth: 0.5))
+                    // Down past the foot of the screen: it stands on the edge, and drawn up shows nothing under it.
+                    .padding(.bottom, -400)
+                    .ignoresSafeArea(edges: .bottom)
+            )
+            .offset(y: max(drawn, 0))
+            .gesture(
+                DragGesture(minimumDistance: 8)
+                    .onChanged { drawn = $0.translation.height }
+                    .onEnded { drag in
+                        if drag.translation.height > 90 || drag.predictedEndTranslation.height > 240 { leave() } else { withAnimation(.snappy(duration: 0.25)) { drawn = 0 } }
+                    }
+            )
+        }
+        .presentationBackground(.clear)
+        .onAppear { withAnimation(.easeOut(duration: 0.25).delay(0.1)) { dimmed = true } }
+    }
+
+    private func leave() {
+        withAnimation(.easeIn(duration: 0.12)) { dimmed = false }
+        dismiss()
     }
 }
 #endif

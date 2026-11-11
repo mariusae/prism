@@ -272,6 +272,20 @@ struct StartPage: View {
     // MARK: Finding
 
     @ViewBuilder private var finding: some View {
+        // A day or a week asked for in words: today, last tuesday, next week, Jan 3.
+        if let when = store.spoken(asked) {
+            Button { open(name: when.name) } label: {
+                HStack(alignment: .firstTextBaseline, spacing: 12) {
+                    Image(systemName: "calendar").font(.system(size: 17)).foregroundStyle(Color.inkSecondary).frame(width: 28)
+                    Text(when.said).font(.system(size: 17)).lineLimit(1)
+                    Spacer(minLength: 8)
+                    Text(when.name).font(.system(size: 13)).foregroundStyle(Color.inkFaint)
+                }
+                .padding(.horizontal, 14).padding(.vertical, 10)
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+        }
         // Notes of one title are told apart by their files' names.
         let shared = store.sharedLabels(among: names)
         ForEach(names, id: \.path) { page in pageRow(page, snippet: shared.contains(page.label) ? linkName(path: page.path) : nil, named: true) }
@@ -326,8 +340,15 @@ struct StartPage: View {
 
     private func submit() {
         guard !asked.isEmpty else { return }
+        if let when = store.spoken(asked) { return open(name: when.name) }
         if let first = names.first { return open(path: first.path, title: first.title) }
         withAnimation(.snappy(duration: 0.28)) { store.open(name: asked, after: store.river.selected) }
+        dismiss()
+    }
+
+    /// Goes to the page a name leads to: a day's, a week's.
+    private func open(name: String) {
+        withAnimation(.snappy(duration: 0.28)) { store.open(name: name, after: store.river.selected) }
         dismiss()
     }
 

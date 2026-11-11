@@ -407,16 +407,14 @@ struct PhoneBar: View {
             }
         }
         .animation(.snappy(duration: 0.18), value: jump != nil)
-        .sheet(isPresented: $showsCalendar) {
-            CalendarPopover(store: store) { title in
-                showsCalendar = false
-                state.tucked = false
-                withAnimation(.snappy(duration: 0.28)) { store.open(name: title, after: river.selected) }
+        .fullScreenCover(isPresented: $showsCalendar) {
+            BottomCard {
+                CalendarPopover(store: store) { title in
+                    showsCalendar = false
+                    state.tucked = false
+                    withAnimation(.snappy(duration: 0.28)) { store.open(name: title, after: river.selected) }
+                }
             }
-            .padding(.top, 10)
-            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
-            .presentationDetents([.height(400)])
-            .presentationDragIndicator(.visible)
         }
         // Something came over the app — asked whether it may listen, a call — and the finger's lifting may never be told: given up.
         .onReceive(NotificationCenter.default.publisher(for: UIApplication.willResignActiveNotification)) { _ in

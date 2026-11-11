@@ -248,18 +248,28 @@ extension NoteTextView {
 /// window of its own, so that it lies over whatever is there, takes no
 /// clicks and no keys, and is gone the moment the pointer moves on.
 @MainActor
+extension NoteEditorView {
+    /// Posted by what an app shows in a link's card, when what it offered
+    /// was done: the card goes.
+    public static let hoverCardDone = Notification.Name("prism.editor.hoverCardDone")
+}
+
 final class HoverCard {
     private let panel: NSPanel
     private weak var parent: NSWindow?
     /// Where the pointer was, on the screen.
     private let pointer: CGPoint
     private var resized: NSObjectProtocol?
+    /// Whether the pointer is on the card: it stays while it is.
+    private(set) var isPointed = false
+    /// The pointer left the card.
+    var onLeave: () -> Void = {}
 
     init(content: AnyView, at pointer: CGPoint, over parent: NSWindow) {
         self.pointer = pointer
         self.parent = parent
         let shape = RoundedRectangle(cornerRadius: 12, style: .continuous)
-        let host = NSHostingController(rootView: content.background(.regularMaterial).clipShape(shape).overlay(shape.strokeBorder(.separator, lineWidth: 0.5)))
+        let host = NSHostingController(rootView: AnyView(EmptyView()))
         // It is as large as what it shows — which may grow, as a page's picture comes in.
         host.sizingOptions = [.preferredContentSize]
         panel = NSPanel(contentRect: .zero, styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: true)
@@ -267,8 +277,18 @@ final class HoverCard {
         panel.isOpaque = false
         panel.backgroundColor = .clear
         panel.hasShadow = true
-        panel.ignoresMouseEvents = true
+        // The pointer may come onto it: what it offers can be clicked.
+        panel.ignoresMouseEvents = false
+        panel.acceptsMouseMovedEvents = true
         panel.isReleasedWhenClosed = false
+        host.rootView = AnyView(
+            content.background(.regularMaterial).clipShape(shape).overlay(shape.strokeBorder(.separator, lineWidth: 0.5))
+                .onHover { [weak self] inside in
+                    guard let self else { return }
+                    self.isPointed = inside
+                    if !inside { self.onLeave() }
+                }
+        )
         panel.setContentSize(host.view.fittingSize)
         place()
         resized = NotificationCenter.default.addObserver(forName: NSWindow.didResizeNotification, object: panel, queue: .main) { [weak self] _ in
@@ -277,13 +297,14 @@ final class HoverCard {
         parent.addChildWindow(panel, ordered: .above)
     }
 
-    /// Under the pointer and a little to its right; over it, where there
-    /// is no room under; and never off the screen's edge.
+    /// Under the pointer and a little to its right — near enough to
+    /// reach without leaving it far behind; over it, where there is no
+    /// room under; and never off the screen's edge.
     private func place() {
         let size = panel.frame.size
         let screen = (NSScreen.screens.first { $0.frame.contains(pointer) } ?? NSScreen.main)?.visibleFrame ?? CGRect(origin: .zero, size: size)
-        var origin = CGPoint(x: pointer.x + 10, y: pointer.y - 18 - size.height)
-        if origin.y < screen.minY + 6 { origin.y = pointer.y + 14 }
+        var origin = CGPoint(x: pointer.x + 6, y: pointer.y - 12 - size.height)
+        if origin.y < screen.minY + 6 { origin.y = pointer.y + 12 }
         origin.x = min(max(origin.x, screen.minX + 6), max(screen.maxX - size.width - 6, screen.minX + 6))
         if panel.frame.origin != origin { panel.setFrameOrigin(origin) }
     }
@@ -428,6 +449,7 @@ public final class NoteTextView: NSTextView {
 
     private var hovered: EditorLink?
     private var hoverWork: DispatchWorkItem?
+    private var leaveWork: DispatchWorkItem?
     private var card: HoverCard?
     private var tracking: NSTrackingArea?
 
@@ -489,19 +511,22 @@ public final class NoteTextView: NSTextView {
         if point(event) { super.mouseMoved(with: event) }
         guard under == .text || under == .link, let manager = layoutManager as? BodyLayoutManager, let container = textContainer else {
             hovered = nil
-            hideCard()
+            hideCardSoon()
             return
         }
         let point = containerPoint(event)
         let link = manager.link(at: point, in: container)
         guard link != hovered else { return }
         hovered = link
+        // Off the link: its card waits a moment, for the pointer may be on its way to it.
+        guard let link else { return hideCardSoon() }
         hideCard()
-        guard let link else { return }
         let work = DispatchWorkItem { [weak self] in
             guard let self, self.hovered == link, let window = self.window, let content = self.coordinator?.parent.linkPreview(link) else { return }
             // By the pointer, where it has come to rest.
-            self.card = HoverCard(content: content, at: NSEvent.mouseLocation, over: window)
+            let card = HoverCard(content: content, at: NSEvent.mouseLocation, over: window)
+            card.onLeave = { [weak self] in self?.hideCardSoon() }
+            self.card = card
         }
         hoverWork = work
         // Long enough that passing over a link shows nothing.
@@ -512,7 +537,8 @@ public final class NoteTextView: NSTextView {
         super.mouseExited(with: event)
         under = .elsewhere
         hovered = nil
-        hideCard()
+        // Onto the card, perhaps: it is over the text, and a window of its own.
+        hideCardSoon()
     }
 
     public override func scrollWheel(with event: NSEvent) {
@@ -523,6 +549,8 @@ public final class NoteTextView: NSTextView {
     }
 
     public override func viewWillMove(toWindow newWindow: NSWindow?) {
+        NotificationCenter.default.removeObserver(self, name: NoteEditorView.hoverCardDone, object: nil)
+        if newWindow != nil { NotificationCenter.default.addObserver(self, selector: #selector(cardDone(_:)), name: NoteEditorView.hoverCardDone, object: nil) }
         if newWindow == nil { hideCard() }
         super.viewWillMove(toWindow: newWindow)
     }
@@ -530,8 +558,28 @@ public final class NoteTextView: NSTextView {
     private func hideCard() {
         hoverWork?.cancel()
         hoverWork = nil
+        leaveWork?.cancel()
+        leaveWork = nil
         card?.close()
         card = nil
+    }
+
+    /// Hides the card unless, a moment on, the pointer is on it — or back on its link.
+    private func hideCardSoon() {
+        guard card != nil else { return hideCard() }
+        leaveWork?.cancel()
+        let work = DispatchWorkItem { [weak self] in
+            guard let self, let card = self.card else { return }
+            if !card.isPointed, self.hovered == nil { self.hideCard() }
+        }
+        leaveWork = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.35, execute: work)
+    }
+
+    /// What a card did is done: it goes. For what an app's card offers.
+    @objc private func cardDone(_ note: Notification) {
+        hovered = nil
+        hideCard()
     }
 
     static func make() -> NoteTextView {

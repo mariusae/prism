@@ -327,3 +327,172 @@ mod tests {
         assert_eq!(Timestamp::parse("2026-10-31T25:00:00Z"), None);
     }
 }
+
+/// What a few words say of when: a day, or a week.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Spoken {
+    Day(Day),
+    Week(Week),
+}
+
+impl fmt::Display for Spoken {
+    /// As its page is named: `2026-11-10`, `2026-W46`.
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Spoken::Day(day) => day.fmt(f),
+            Spoken::Week(week) => week.fmt(f),
+        }
+    }
+}
+
+const WEEKDAYS: [&str; 7] = ["monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday"];
+const MONTHS: [&str; 12] = ["january", "february", "march", "april", "may", "june", "july", "august", "september", "october", "november", "december"];
+
+/// A day or a week as it is asked for in a few words, counted from
+/// `today`: `today`, `yesterday`, `tomorrow`; `friday` — the coming one,
+/// today if it is one — `last friday`, `next friday`; `this week`, `next
+/// week`, `last week`; `3 days ago`, `in two weeks`, `a month from now`;
+/// `Jan 3`, `3 January`, `March 5 2024`; or a date as a page is named,
+/// `2026-10-05`, `2026-W41`. Case and spacing aside. `None` for words
+/// that say no day: what is typed is, most of the time, something else.
+///
+/// A word cut short is still its word once it could be no other: `tom`
+/// is tomorrow, `wed` Wednesday, `sept` September.
+pub fn spoken(text: &str, today: Day) -> Option<Spoken> {
+    let text = text.trim().to_lowercase().replace(',', " ");
+    let words: Vec<&str> = text.split_whitespace().collect();
+    let day = |days: i64| today.plus_days(days).map(Spoken::Day);
+    let cut = |word: &str, whole: &str| word.len() >= 3 && whole.starts_with(word);
+    match words.as_slice() {
+        [] => None,
+        [one] => {
+            if let Some(day) = Day::parse(one) {
+                return Some(Spoken::Day(day));
+            }
+            if let Some(week) = Week::parse(&one.to_uppercase()) {
+                return Some(Spoken::Week(week));
+            }
+            match *one {
+                "now" | "tmrw" | "tmr" => day(i64::from(*one != "now")),
+                word if cut(word, "today") => day(0),
+                word if cut(word, "tomorrow") => day(1),
+                word if cut(word, "yesterday") => day(-1),
+                word => weekday(word).and_then(|wanted| day((wanted - today.weekday() as i64).rem_euclid(7))),
+            }
+        }
+        [which, "week"] => {
+            let weeks = match *which {
+                "this" => 0,
+                "next" | "coming" => 1,
+                "last" | "past" | "previous" => -1,
+                _ => return None,
+            };
+            today.plus_days(weeks * 7).map(|day| Spoken::Week(day.week()))
+        }
+        [which, word] if weekday(word).is_some() && matches!(*which, "this" | "coming" | "next" | "last" | "past" | "previous") => {
+            let ahead = (weekday(word)? - today.weekday() as i64).rem_euclid(7);
+            match *which {
+                "this" | "coming" => day(ahead),
+                "next" => day(if ahead == 0 { 7 } else { ahead }),
+                _ => day(if ahead == 0 { -7 } else { ahead - 7 }),
+            }
+        }
+        _ => relative(&words, today).or_else(|| written(&words, today)).map(Spoken::Day),
+    }
+}
+
+/// A weekday by its name, or the start of it: Monday is 0.
+fn weekday(word: &str) -> Option<i64> {
+    (word.len() >= 3).then(|| WEEKDAYS.iter().position(|day| day.starts_with(word))).flatten().map(|at| at as i64)
+}
+
+/// `3 days ago`, `in two weeks`, `a month from now`, `a year later`.
+fn relative(words: &[&str], today: Day) -> Option<Day> {
+    let (sign, words) = match words {
+        ["in", rest @ ..] => (1, rest),
+        [rest @ .., "ago"] => (-1, rest),
+        [rest @ .., "from", "now"] => (1, rest),
+        [rest @ .., "later" | "hence"] => (1, rest),
+        _ => return None,
+    };
+    let [count, unit] = words else { return None };
+    let named = ["a", "one", "two", "three", "four", "five", "six", "seven", "eight", "nine", "ten", "eleven", "twelve"];
+    let count: i64 = match *count {
+        "an" => 1,
+        count => count.parse().ok().or_else(|| named.iter().position(|word| *word == count).map(|at| at.max(1) as i64))?,
+    } * sign;
+    match unit.trim_end_matches('s') {
+        "day" => today.plus_days(count),
+        "week" => today.plus_days(count * 7),
+        "month" => months_on(today, count),
+        "year" => months_on(today, count * 12),
+        _ => None,
+    }
+}
+
+/// The same day so many months on — or the month's last, where it has no such day.
+fn months_on(day: Day, months: i64) -> Option<Day> {
+    let index = i64::from(day.year()) * 12 + i64::from(day.month()) - 1 + months;
+    let (year, month) = (i32::try_from(index.div_euclid(12)).ok()?, (index.rem_euclid(12) + 1) as u8);
+    (1..=day.day()).rev().find_map(|d| Day::new(year, month, d))
+}
+
+/// A date as it is written out: `Jan 3`, `January 3rd`, `3 Jan`, `March 5 2024`. This year, with none said.
+fn written(words: &[&str], today: Day) -> Option<Day> {
+    let month = |word: &str| (word.len() >= 3).then(|| MONTHS.iter().position(|month| month.starts_with(word))).flatten().map(|at| at as u8 + 1);
+    let number = |word: &str| word.trim_end_matches(|c: char| c.is_ascii_alphabetic()).parse::<u32>().ok();
+    let (month, day, year) = match words {
+        [m, d] if month(m).is_some() => (month(m)?, number(d)?, None),
+        [d, m] if month(m).is_some() => (month(m)?, number(d)?, None),
+        [m, d, y] if month(m).is_some() => (month(m)?, number(d)?, Some(y)),
+        [d, m, y] if month(m).is_some() => (month(m)?, number(d)?, Some(y)),
+        _ => return None,
+    };
+    let year = match year {
+        Some(year) => year.parse::<i32>().ok().filter(|year| (1000..=9999).contains(year))?,
+        None => today.year(),
+    };
+    Day::new(year, month, u8::try_from(day).ok()?)
+}
+
+#[cfg(test)]
+mod spoken_tests {
+    use super::*;
+
+    #[test]
+    fn days_and_weeks_are_asked_for_in_a_few_words() {
+        // A Tuesday.
+        let today = Day::new(2026, 11, 10).unwrap();
+        let said = |text: &str| spoken(text, today).map(|when| when.to_string());
+        let is = |text: &str, when: &str| assert_eq!(said(text).as_deref(), Some(when), "{text}");
+        is("today", "2026-11-10");
+        is("  Tomorrow ", "2026-11-11");
+        is("tom", "2026-11-11");
+        is("yesterday", "2026-11-09");
+        is("tuesday", "2026-11-10");
+        is("wed", "2026-11-11");
+        is("monday", "2026-11-16");
+        is("last tuesday", "2026-11-03");
+        is("last monday", "2026-11-09");
+        is("next tuesday", "2026-11-17");
+        is("next friday", "2026-11-13");
+        is("this week", "2026-W46");
+        is("next week", "2026-W47");
+        is("last week", "2026-W45");
+        is("3 days ago", "2026-11-07");
+        is("in two weeks", "2026-11-24");
+        is("a month from now", "2026-12-10");
+        is("a year ago", "2025-11-10");
+        is("Jan 3", "2026-01-03");
+        is("3 january", "2026-01-03");
+        is("March 5, 2024", "2024-03-05");
+        is("sept 1st", "2026-09-01");
+        is("2026-10-05", "2026-10-05");
+        is("2026-w41", "2026-W41");
+        // A month has no 31st: its last day.
+        assert_eq!(spoken("in a month", Day::new(2026, 1, 31).unwrap()).map(|when| when.to_string()).as_deref(), Some("2026-02-28"));
+        for nothing in ["", "to", "mo", "ads paper", "next", "week", "mayhem 3", "feb 30", "in a while", "march"] {
+            assert_eq!(said(nothing), None, "{nothing}");
+        }
+    }
+}

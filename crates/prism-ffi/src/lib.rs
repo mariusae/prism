@@ -120,6 +120,16 @@ pub fn link_name(path: String) -> Option<String> {
     prism::markup::NoteKind::link_name(&path).map(str::to_owned)
 }
 
+/// The day or the week a few words ask for — `today`, `last tuesday`,
+/// `next week`, `Jan 3` — as its page is named: `2026-11-10`,
+/// `2026-W47`. `today` is the day it is where the words are said, so
+/// named. `None` for words that say no day.
+#[uniffi::export]
+pub fn spoken_date(text: String, today: String) -> Option<String> {
+    let today = prism::markup::Day::parse(&today)?;
+    prism::markup::spoken(&text, today).map(|when| when.to_string())
+}
+
 /// The river a link's target names — `rivers/Work` is `Work` — if any.
 #[uniffi::export]
 pub fn river_name(link_target: String) -> Option<String> {

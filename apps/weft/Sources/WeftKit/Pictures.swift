@@ -279,6 +279,8 @@ struct PictureView: View {
 struct LinkCard: View {
     let store: GraphStore
     let link: EditorLink
+    /// The note the link is written in: where its address can be given its title.
+    var draft: PageDraft?
 
     var body: some View {
         Group {
@@ -317,6 +319,18 @@ struct LinkCard: View {
                     Text(title ?? found?.title ?? Self.host(address)).font(.system(size: 13, weight: .semibold)).lineLimit(2)
                 }
                 Text(Self.host(address)).font(.caption).foregroundStyle(Color.inkSecondary).lineLimit(1)
+                // An address written bare: written again as a link, with the page's title for words.
+                if title == nil, let named = found?.title, let draft, draft.hasBareLink(address) {
+                    Button {
+                        draft.titleLink(address, as: named)
+                        NotificationCenter.default.post(name: NoteEditorView.hoverCardDone, object: nil)
+                    } label: {
+                        Label("Replace Link with Its Title", systemImage: "textformat").font(.system(size: 12, weight: .medium)).frame(maxWidth: .infinity)
+                    }
+                    .buttonStyle(.bordered)
+                    .controlSize(.regular)
+                    .padding(.top, 8)
+                }
             }
             .padding(12)
         }

@@ -295,6 +295,26 @@ public final class GraphStore {
         return ((try? engine.page(path: path)) ?? nil)?.label ?? title
     }
 
+    /// The day or the week a few words ask for — "today", "last tuesday",
+    /// "next week", "Jan 3" — by the name of its page, and said in full.
+    /// The engine reads the words; today is the day it is here.
+    public func spoken(_ typed: String) -> (name: String, said: String)? {
+        guard let name = spokenDate(text: typed, today: Days.name(Date())) else { return nil }
+        return (name, Self.said(name))
+    }
+
+    /// A day's or a week's page, said in full: "Wednesday, November 11, 2026"; "Week 47, 2026".
+    static func said(_ name: String) -> String {
+        let read = DateFormatter()
+        read.calendar = Calendar(identifier: .gregorian)
+        read.locale = Locale(identifier: "en_US_POSIX")
+        read.dateFormat = "yyyy-MM-dd"
+        if let day = read.date(from: name) { return day.formatted(date: .complete, time: .omitted) }
+        let parts = name.split(separator: "-")
+        if parts.count == 2, parts[1].hasPrefix("W"), let week = Int(parts[1].dropFirst()) { return "Week \(week), \(parts[0])" }
+        return name
+    }
+
     /// The pages offered for a link being typed: those whose names match
     /// what was typed, then those that say it, then a river or two — and,
     /// when nothing is called just that, a new note of that name.
@@ -311,6 +331,11 @@ public final class GraphStore {
         var offers: [EditorOffer] = []
         var seen = Set<String>()
         if let this { seen.insert(this) }
+        // A day or a week asked for in words: first, as what was meant.
+        if let when = spoken(typed) {
+            offers.append(EditorOffer(name: when.name, title: when.said, detail: when.name, symbol: "calendar"))
+            if let page = resolve(when.name) { seen.insert(page.path) }
+        }
         let named = (try? engine.complete(typed: typed, limit: 6)) ?? []
         // Notes of one title are told apart by their files' names.
         let shared = sharedLabels(among: named)

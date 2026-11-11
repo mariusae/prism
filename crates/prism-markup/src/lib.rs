@@ -93,7 +93,7 @@ pub mod table;
 pub mod time;
 
 pub use block::{Block, BlockKind, Callout, Code, Document, Item, Layout, LineEnding, Marker, Row, Task};
-pub use date::{Day, Timestamp, Week, Weekday};
+pub use date::{spoken, Day, Spoken, Timestamp, Week, Weekday};
 pub use fields::{FieldKind, FieldSpec, FieldValue};
 pub use frontmatter::{Frontmatter, Value};
 pub use inline::{Span, SpanKind, Style};

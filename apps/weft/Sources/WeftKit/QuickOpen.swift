@@ -248,8 +248,9 @@ struct QuickOpen: View {
             }
         } else {
             var top: [Row] = []
-            if let day = Self.spoken(name) {
-                top.append(Row(id: "day:\(day)", symbol: "calendar", name: day, detail: "Day") { $0.open(name: day, after: $0.river.selected) })
+            // A day or a week asked for in words: today, last tuesday, next week, Jan 3.
+            if let when = store.spoken(name) {
+                top.append(Row(id: "day:\(when.name)", symbol: "calendar", name: when.said, detail: when.name) { $0.open(name: when.name, after: $0.river.selected) })
             }
             let pages = (try? store.engine.complete(typed: name, limit: 8)) ?? []
             // Notes of one title are told apart by their files' names.
@@ -288,19 +289,6 @@ struct QuickOpen: View {
         format.locale = Locale(identifier: "en_US_POSIX")
         format.dateFormat = "yyyy-MM-dd"
         return format.string(from: date)
-    }
-
-    /// A day by a few words: today, yesterday, tomorrow, or its date.
-    static func spoken(_ words: String) -> String? {
-        let calendar = Calendar.current
-        switch words.lowercased() {
-        case "today": return day(Date())
-        case "yesterday": return calendar.date(byAdding: .day, value: -1, to: Date()).map(day)
-        case "tomorrow": return calendar.date(byAdding: .day, value: 1, to: Date()).map(day)
-        default:
-            let parts = words.split(separator: "-")
-            return parts.count == 3 && parts[0].count == 4 && parts.allSatisfy({ $0.allSatisfy(\.isNumber) }) ? words : nil
-        }
     }
 }
 #endif
