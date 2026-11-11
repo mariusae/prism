@@ -96,12 +96,17 @@ public struct ContentView: View {
                             }
                             .help(syncing ? "Syncing…" : (store.syncNote.map { "\($0) — Sync Now (⌘R)" } ?? "Sync Now (⌘R)"))
                         }
-                        Button { withAnimation(.snappy(duration: 0.28)) { store.open(name: QuickOpen.day(Date()), after: store.river.selected) } } label: {
-                            Label("Today", systemImage: "calendar")
+                        // A month of days, to go to any of them, or to a week; with ⌘ held, straight to today.
+                        Button {
+                            if NSEvent.modifierFlags.contains(.command) {
+                                withAnimation(.snappy(duration: 0.28)) { store.open(name: QuickOpen.day(Date()), after: store.river.selected) }
+                            } else {
+                                showsCalendar = true
+                            }
+                        } label: {
+                            Label("Calendar", systemImage: "calendar")
                         }
-                        .help("Today (⌘D) — right-click for a calendar (⇧⌘D)")
-                        // The other click: a month of days, to go to any of them, or to a week.
-                        .overlay { SecondaryClick { showsCalendar = true } }
+                        .help("Go to a date (⇧⌘D) — ⌘-click for today (⌘D)")
                         .popover(isPresented: $showsCalendar, arrowEdge: .bottom) {
                             CalendarPopover(store: store) { title in
                                 showsCalendar = false

@@ -265,31 +265,4 @@ private struct ScrollCatcher: NSViewRepresentable {
 
     func updateNSView(_ view: Catcher, context: Context) { view.scrolled = scrolled }
 }
-
-/// Lies over a control and hears only the secondary click: every other
-/// click goes through to what is under it.
-struct SecondaryClick: NSViewRepresentable {
-    let action: () -> Void
-
-    final class Catcher: NSView {
-        var action: () -> Void = {}
-
-        override func hitTest(_ point: NSPoint) -> NSView? {
-            guard let event = NSApp.currentEvent else { return nil }
-            let secondary = event.type == .rightMouseDown || event.type == .rightMouseUp || (event.type == .leftMouseDown && event.modifierFlags.contains(.control))
-            return secondary ? super.hitTest(point) : nil
-        }
-
-        override func rightMouseDown(with event: NSEvent) { action() }
-        override func mouseDown(with event: NSEvent) { action() }
-    }
-
-    func makeNSView(context: Context) -> Catcher {
-        let view = Catcher()
-        view.action = action
-        return view
-    }
-
-    func updateNSView(_ view: Catcher, context: Context) { view.action = action }
-}
 #endif
