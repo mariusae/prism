@@ -340,6 +340,42 @@ fn renaming_a_page_relinks_the_graph_and_the_indices_follow() {
 }
 
 #[test]
+fn a_page_is_found_by_what_its_pictures_say() {
+    let world = World::new();
+    let a = world.first("a", Schedule::default());
+    a.write("notes/trip.md", "# Trip\n\n- the receipt ![](assets/receipt.png)\n- and ![a sign](assets/sign.jpg)\n").unwrap();
+    a.write("notes/words.md", "# Words\n\nA page that says espresso itself.\n").unwrap();
+    a.write("notes/secret.md", "---\nprivate: true\n---\n# Secret\n\n![](assets/receipt.png)\n").unwrap();
+    a.add_asset("receipt.png", b"png").unwrap();
+    a.add_asset("sign.jpg", b"jpg").unwrap();
+    a.add_asset("loose.png", b"png").unwrap();
+    a.add_asset("paper.pdf", b"pdf").unwrap();
+    a.settle();
+    let db = a.index().unwrap();
+
+    // The pictures pages show are to be read: not a file nothing shows, nor one that is no picture.
+    assert_eq!(a.pictures_unread(10).unwrap(), ["assets/receipt.png", "assets/sign.jpg"]);
+    assert_eq!(a.pictures_unread(1).unwrap(), ["assets/receipt.png"]);
+    a.set_picture_words("assets/receipt.png", "Caffè Nero\n  2 x Espresso   4.80").unwrap();
+    a.set_picture_words("assets/sign.jpg", "").unwrap();
+    assert!(a.pictures_unread(10).unwrap().is_empty(), "one without words was read all the same");
+    assert_eq!(a.picture_words("assets/receipt.png").unwrap().as_deref(), Some("Caffè Nero 2 x Espresso 4.80"));
+
+    // Found by a picture's words, after the pages that say them themselves; a private page's are as private as it is.
+    let found = |db: &prism::index::rusqlite::Connection, typed: &str| -> Vec<(String, String)> {
+        a.search(db, typed, 5).unwrap().into_iter().map(|hit| (hit.path, hit.snippet)).collect()
+    };
+    assert_eq!(found(&db, "caffe ner"), [("notes/trip.md".to_owned(), "[Caffè] [Nero] 2 x Espresso 4.80".to_owned())]);
+    assert_eq!(found(&db, "espresso").iter().map(|hit| hit.0.as_str()).collect::<Vec<_>>(), ["notes/words.md", "notes/trip.md"]);
+    assert_eq!(a.search(&db, "espresso", 5).unwrap()[1].title, "Trip");
+    assert_eq!(found(&a.index_showing_private().unwrap(), "nero").iter().map(|hit| hit.0.as_str()).collect::<Vec<_>>(), ["notes/secret.md", "notes/trip.md"]);
+    assert!(found(&db, "trip").iter().all(|hit| hit.0 == "notes/trip.md") && found(&db, "nothing").is_empty());
+    // Read again, it says what it says now.
+    a.set_picture_words("assets/receipt.png", "Tea").unwrap();
+    assert!(found(&db, "nero").is_empty() && found(&db, "tea").len() == 1);
+}
+
+#[test]
 fn a_note_never_titled_is_named_by_its_first_words() {
     let world = World::new();
     let a = world.first("a", Schedule::default());

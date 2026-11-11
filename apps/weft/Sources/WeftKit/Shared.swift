@@ -4,6 +4,11 @@ import SwiftUI
 
 /// A day's name, as the graph writes it: 2026-11-10.
 enum Days {
+    /// What a page is shown as called, given what it is called: a day's
+    /// or a week's by its date as it is read — "Nov 12, 2025", "Week 46,
+    /// 2026" — and any other as it is. The engine's rule.
+    static func shown(_ title: String) -> String { dateTitle(name: title) ?? title }
+
     static func name(_ date: Date) -> String {
         let format = DateFormatter()
         format.calendar = Calendar(identifier: .gregorian)

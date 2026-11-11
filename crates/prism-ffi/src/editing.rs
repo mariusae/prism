@@ -668,6 +668,59 @@ impl NoteEditor {
         self.session().set_folded_rows(&rows)
     }
 
+    // --- Focus: one row of the outline, shown as a note of its own ------------
+
+    /// The name of a row shown — a line of the outline, counted from the
+    /// first — given one now if it had none. A name is written in the
+    /// note, after the row, where nothing shows it; it is what
+    /// `set_focus` takes and what a river's card keeps. `nil` for a row
+    /// that is no list's: only those can have rows under them.
+    pub fn row_name(&self, row: u32) -> Option<String> {
+        self.session().anchor_row(row as usize)
+    }
+
+    /// Shows only what is under the row of a name — or, given none, the
+    /// whole note again. What is written is written in the note all the
+    /// same, and `markdown` is the whole file. Says whether there is
+    /// such a row; if not, the whole note is shown.
+    pub fn set_focus(&self, name: Option<String>) -> bool {
+        self.session().set_focus(name.as_deref())
+    }
+
+    /// The name of the row focused on, when one is.
+    pub fn focus(&self) -> Option<String> {
+        self.session().focus()
+    }
+
+    /// The words of the row focused on, as they are written: the title
+    /// of what is shown.
+    pub fn focus_title(&self) -> Option<String> {
+        self.session().focus_title()
+    }
+
+    /// The row focused on as it reads, its Markdown taken out.
+    pub fn focus_label(&self) -> Option<String> {
+        self.session().focus_label()
+    }
+
+    /// Writes the row focused on anew.
+    pub fn set_focus_title(&self, title: String) {
+        self.session().set_focus_title(&title)
+    }
+
+    /// The rows the row focused on is under, outermost first, each as
+    /// it reads: the way to it from the note's top.
+    pub fn focus_trail(&self) -> Vec<String> {
+        self.session().focus_trail()
+    }
+
+    /// The name of a row the row focused on is under — `levels` 1 the
+    /// one right over it — given one now if it had none: what to focus
+    /// on to see more. `nil` when that far out is the whole note.
+    pub fn focus_out(&self, levels: u32) -> Option<String> {
+        self.session().focus_out(levels as usize)
+    }
+
     /// Takes the last change back, structure and all.
     pub fn undo(&self) -> Option<BodyEdit> {
         self.changing(|session, _| session.undo())
@@ -699,7 +752,8 @@ impl NoteEditor {
     /// What the note, kept at `path`, is called where it is shown: its
     /// title, or — untitled — its first words.
     pub fn label(&self, path: String) -> String {
-        self.session().label(&path)
+        let label = self.session().label(&path);
+        crate::shown_label(&path, label)
     }
 
     /// The words an untitled note could be titled by: its first line's.

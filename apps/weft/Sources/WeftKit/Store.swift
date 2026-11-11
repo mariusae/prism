@@ -96,6 +96,7 @@ public final class GraphStore {
     /// Lets go of the graph: before it is opened again, as another account.
     public func close() {
         polling?.cancel()
+        readingPictures?.cancel()
         saveAll()
         engine.stopListening()
         relay = .off
@@ -257,7 +258,24 @@ public final class GraphStore {
         }
     }
 
+    /// The reading of pictures' words, while it goes on.
+    private var readingPictures: Task<Void, Never>?
+
+    /// Has the pictures not yet read read, in the background: so that
+    /// search finds a page by what its pictures say.
+    private func readPictures() {
+        guard !Days.isHeadless, readingPictures == nil else { return }
+        let (engine, root) = (engine, root)
+        readingPictures = Task { [weak self] in
+            let count = await Task.detached(priority: .utility) { await PictureWords.readAll(engine: engine, root: root) }.value
+            guard let self else { return }
+            if count > 0 { self.note("pictures", "Read the words in \(count) picture\(count == 1 ? "" : "s")") }
+            self.readingPictures = nil
+        }
+    }
+
     private func refreshCounts() {
+        readPictures()
         pageCount = (try? engine.allPages().count) ?? pageCount
         conflicted = (try? engine.conflictedPages()) ?? []
         icons = (try? engine.fieldValues(key: "icon")) ?? icons
@@ -292,7 +310,7 @@ public final class GraphStore {
     /// its first words, as the engine's index has them.
     public func label(path: String, title: String) -> String {
         if let open = drafts[path] { return open.label }
-        return ((try? engine.page(path: path)) ?? nil)?.label ?? title
+        return ((try? engine.page(path: path)) ?? nil)?.label ?? Days.shown(title)
     }
 
     /// The day or the week a few words ask for — "today", "last tuesday",
@@ -448,13 +466,36 @@ public final class GraphStore {
         return Prism.linkName(path: found.path) ?? name
     }
 
+    /// The icon the page a link leads to was given, if it was given one.
+    public func linkIcon(_ name: String) -> String? {
+        guard let found = resolve(name), found.exists else { return nil }
+        return icons[found.path]
+    }
+
+    /// A row's words as a title shows them: as they read (`plain`), each
+    /// page linked in them (`written`, the row's Markdown) called what a
+    /// link to it shows — its title, or a day's date as it is read.
+    public func titled(_ plain: String, written: String) -> String {
+        var shown = plain
+        guard written.contains("[["), let links = try? NSRegularExpression(pattern: #"\[\[([^\[\]|]+)\]\]"#) else { return shown }
+        let text = written as NSString
+        for match in links.matches(in: written, range: NSRange(location: 0, length: text.length)) {
+            let name = text.substring(with: match.range(at: 1))
+            if let label = linkLabel(name) { shown = shown.replacingOccurrences(of: name, with: label) }
+        }
+        return shown
+    }
+
     /// What a link shows, where it is written with something other than
     /// what its page is called: the page's title, or its first words.
     public func linkLabel(_ name: String) -> String? {
         let key = name.trimmingCharacters(in: .whitespaces)
         if let known = labels[key] { return known }
         var label: String?
-        if let found = resolve(name), found.exists {
+        // A day or a week, written or not, reads as its date does.
+        if let dated = dateTitle(name: key) {
+            label = dated
+        } else if let found = resolve(name), found.exists {
             let shown = self.label(path: found.path, title: name)
             if shown != key { label = shown }
         }
@@ -563,7 +604,7 @@ public final class GraphStore {
         var saved = ((try? engine.river(name: name)) ?? nil) ?? SavedRiver(cards: [], query: nil, placed: [], folded: [], opened: [], hidden: [], icon: nil, color: nil, place: nil)
         // Cards are kept by their pages' own names; what the file said of each is found by where its name leads.
         let known = Dictionary(saved.cards.map { (path(named: $0.title), $0) }, uniquingKeysWith: { first, _ in first })
-        saved.cards = river.cards.map { RiverCard(title: self.name(of: $0), foldedRows: $0.foldedRows, placeRank: known[$0.path]?.placeRank, placeKey: known[$0.path]?.placeKey) }
+        saved.cards = river.cards.map { RiverCard(title: self.name(of: $0), focus: $0.focus, foldedRows: $0.foldedRows, placeRank: known[$0.path]?.placeRank, placeKey: known[$0.path]?.placeKey) }
         saved.folded = river.cards.filter(\.folded).map { self.name(of: $0) }
         saved.icon = river.icon
         saved.color = river.color
@@ -598,12 +639,13 @@ public final class GraphStore {
     /// looks and what it asks. A card of a note already open keeps its
     /// identity, so nothing jumps.
     private func adopt(_ saved: SavedRiver, into river: River) {
-        let open = Dictionary(river.cards.map { ($0.path, $0) }, uniquingKeysWith: { first, _ in first })
+        var open = Dictionary(river.cards.map { ($0.spot, $0) }, uniquingKeysWith: { first, _ in first })
         let folded = Set(saved.folded.map { path(named: $0) })
         river.cards = saved.cards.compactMap { held in
             let path = path(named: held.title)
             guard !isGone(path: path) else { return nil }
-            var card = open[path] ?? Card(path: path, title: title(of: path, named: held.title))
+            // A page may have several cards, each of a row of its own: each is found by both.
+            var card = open.removeValue(forKey: Card.spot(path: path, focus: held.focus)) ?? Card(path: path, title: title(of: path, named: held.title), focus: held.focus)
             card.folded = folded.contains(path)
             card.foldedRows = held.foldedRows
             return card
@@ -681,7 +723,7 @@ public final class GraphStore {
         river.cards = saved.cards.compactMap { card in
             let path = path(named: card.title)
             guard !isGone(path: path) else { return nil }
-            var made = Card(path: path, title: title(of: path, named: card.title))
+            var made = Card(path: path, title: title(of: path, named: card.title), focus: card.focus)
             made.folded = folded.contains(path)
             made.foldedRows = card.foldedRows
             return made
@@ -1082,16 +1124,26 @@ public struct Card: Identifiable, Hashable, Codable {
     /// The rows of its outline folded away, in this river: each known by
     /// its place and its words, as the river's file keeps them.
     public var folds: [Fold]?
+    /// The row of its page it shows, by the name the row has in the
+    /// note, when it shows only what is under one: a note within the
+    /// note, written in as one. `nil` for a card of the whole page.
+    public var focus: String?
 
     public struct Fold: Hashable, Codable {
         public var index: Int
         public var text: String
     }
 
-    public init(path: String, title: String) {
+    public init(path: String, title: String, focus: String? = nil) {
         self.path = path
         self.title = title
+        self.focus = focus
     }
+
+    /// What it shows: its page, and the row of it if it shows only one.
+    /// A river has one card of each.
+    public var spot: String { Self.spot(path: path, focus: focus) }
+    static func spot(path: String, focus: String?) -> String { focus.map { "\(path)^\($0)" } ?? path }
 
     /// What a river keeps it by: its page's own name — its file's.
     public var name: String { linkName(path: path) ?? title }
@@ -1134,6 +1186,15 @@ public final class River: Identifiable {
     public var writing: Card.ID?
     /// Asks the river's view to scroll a card to the top; moved each time.
     public var scrollTarget: (card: Card.ID, tick: Int)?
+    /// Asks the river's view to bring a card into sight, moving no more
+    /// than that takes: after a card was closed or folded, so that what
+    /// is left is not a stretch of nothing. Moved each time.
+    public var settleTarget: (card: Card.ID, tick: Int)?
+
+    func settle(on id: Card.ID?) {
+        guard let id else { return }
+        settleTarget = (id, (settleTarget?.tick ?? 0) + 1)
+    }
     /// The note whose pages are being read, over the river.
     public var reading: Place?
 
@@ -1242,7 +1303,7 @@ public final class River: Identifiable {
     }
 
     var signature: Signature {
-        Signature(folds: cards.map { $0.folds ?? [] }, cards: cards.map(\.name), folded: Set(cards.filter(\.folded).map(\.name)), icon: icon, color: color, query: query, hidden: query == nil ? [] : hidden, opened: query == nil ? [] : opened)
+        Signature(folds: cards.map { $0.folds ?? [] }, cards: cards.map { card in card.focus.map { "\(card.name)^\($0)" } ?? card.name }, folded: Set(cards.filter(\.folded).map(\.name)), icon: icon, color: color, query: query, hidden: query == nil ? [] : hidden, opened: query == nil ? [] : opened)
     }
 
     var kept: Kept { Kept(id: id, name: name, cards: cards, icon: icon, color: color, query: query, hidden: hidden, opened: Array(opened)) }
@@ -1265,6 +1326,18 @@ public final class River: Identifiable {
     }
 
     public func card(_ id: Card.ID) -> Card? { all.first { $0.id == id } }
+
+    /// Has a card show only what is under a row of its page — the row of
+    /// that name — or, given none, the whole page again.
+    public func setFocus(_ id: Card.ID, _ focus: String?) {
+        if let index = cards.firstIndex(where: { $0.id == id }) { cards[index].focus = focus } else if let index = found.firstIndex(where: { $0.id == id }) { found[index].focus = focus }
+    }
+
+    /// A card of its own for a row of a card's page, straight after that card.
+    public func openFocus(_ focus: String, of id: Card.ID) {
+        guard let from = card(id) else { return }
+        open(Card(path: from.path, title: from.title, focus: focus), after: id)
+    }
 
     /// A card's outline was folded or unfolded: which of its rows are folded now.
     public func setFolds(_ id: Card.ID, _ rows: [RiverFoldedRow]) {
@@ -1297,17 +1370,17 @@ public final class River: Identifiable {
     }
 
     public var title: String {
-        name ?? cards.first?.title ?? (query == nil ? "New River" : "Query")
+        name ?? cards.first.map { Days.shown($0.title) } ?? (query == nil ? "New River" : "Query")
     }
 
     /// Opens a card after another — or scrolls to it, if the page is open already.
     public func open(_ card: Card, after: Card.ID? = nil) {
-        if let open = cards.first(where: { $0.path == card.path }) {
+        if let open = cards.first(where: { $0.spot == card.spot }) {
             reveal(open.id, from: after)
             return
         }
         // Found by the query already: opened out of its line, where it stands.
-        if query != nil, let index = found.firstIndex(where: { $0.path == card.path }) {
+        if card.focus == nil, query != nil, let index = found.firstIndex(where: { $0.path == card.path }) {
             opened.insert(found[index].name)
             found[index].folded = false
             reveal(found[index].id, from: after)
@@ -1325,6 +1398,8 @@ public final class River: Identifiable {
     /// jump was made `from`, else the one chosen — is kept to go back to.
     public func reveal(_ id: Card.ID, from: Card.ID? = nil) {
         leave(for: id, from: from)
+        // Gone to on purpose: opened out, if it was folded.
+        if card(id)?.folded == true { toggleFold(id) }
         selected = id
         scrollTarget = (id, (scrollTarget?.tick ?? 0) + 1)
     }
@@ -1342,9 +1417,11 @@ public final class River: Identifiable {
         if writing == id { writing = nil }
         let left = all
         if selected == id { selected = left.indices.contains(place) ? left[place].id : left.last?.id }
+        settle(on: left.indices.contains(place) ? left[place].id : left.last?.id)
     }
 
     public func toggleFold(_ id: Card.ID) {
+        defer { if card(id)?.folded == true { settle(on: id) } }
         if let index = cards.firstIndex(where: { $0.id == id }) {
             cards[index].folded.toggle()
             if cards[index].folded, writing == id { writing = nil }
@@ -1408,6 +1485,34 @@ public final class PageDraft {
     /// something of it — its summary, whether it is blank — redraws on.
     public private(set) var revision = 0
     public private(set) var isConflicted = false
+
+    /// The note as cards that show one row of it have it: each a note
+    /// of its own, read from this one and focused there, good for as
+    /// long as nothing but that card has changed the note since.
+    @ObservationIgnored private var views: [Card.ID: (editor: NoteEditor, revision: Int)] = [:]
+
+    /// The note as a card showing only one of its rows writes in it —
+    /// `nil` when the note has no row of that name any more.
+    public func view(for card: Card.ID, focus: String) -> NoteEditor? {
+        if let open = views[card], open.revision == revision, open.editor.focus() == focus { return open.editor }
+        let made = NoteEditor.open(source: editor.markdown(), mode: .outline)
+        guard made.setFocus(name: focus) else {
+            views[card] = nil
+            return nil
+        }
+        views[card] = (made, revision)
+        return made
+    }
+
+    /// The note was changed in a card that shows one row of it: what
+    /// that card's note now says is what the note says, in every card.
+    public func changed(from card: Card.ID) {
+        guard let view = views[card] else { return changed() }
+        editor = NoteEditor.open(source: view.editor.markdown(), mode: editor.mode())
+        revision += 1
+        views[card] = (view.editor, revision)
+        touch()
+    }
 
     @ObservationIgnored private weak var store: GraphStore?
     /// The file as it was last read or written: what a save is merged from.
@@ -1499,6 +1604,19 @@ public final class PageDraft {
         return lines.prefix(3).joined(separator: "  ")
     }
 
+    /// The note's first few pictures — those on lines of their own: what
+    /// stands for it, small, at the end of its folded card.
+    public var pictures: [EditorPicture] {
+        _ = revision
+        var found: [EditorPicture] = []
+        for line in editor.text().split(whereSeparator: { $0 == "\n" || $0 == "\u{2028}" }) where line.contains("![") {
+            let words = line.replacingOccurrences(of: #"^\s*([-*+]|\d+[.)])\s+(\[.\]\s+)?"#, with: "", options: .regularExpression)
+            found += EditorPicture.all(line: words) ?? []
+            if found.count >= 3 { break }
+        }
+        return Array(found.prefix(3))
+    }
+
     /// The first picture in the note, if it has one on a line of its own:
     /// what stands for it, small, when its card is folded.
     public var firstPicture: EditorPicture? {
@@ -1570,7 +1688,7 @@ public final class PageDraft {
     /// given one — its first words. The engine's rule.
     public var label: String {
         _ = revision
-        return editor.title() == nil && !isUntitled ? title : editor.label(path: path)
+        return Days.shown(editor.title() == nil && !isUntitled ? title : editor.label(path: path))
     }
 
     public var markdown: String { editor.markdown() }

@@ -184,8 +184,18 @@ struct RiverBar: View {
                 // The one shown keeps its name while there is room to say any of it.
                 let shrunk = widths.shrunk && (!current || widths.current < 72)
                 let alone = store.rivers.count == 1 && !river.isStyled
+                // ⌘ held: the number that chooses it, in its icon's place. The first
+                // eight by their places; ⌘9 is the last, wherever it is.
+                let numbered = CommandKey.shared.isHeld && store.rivers.count > 1 && (index < 8 || index == store.rivers.count - 1)
                 HStack(spacing: 6) {
-                    if alone {
+                    if numbered {
+                        Text(index < 8 ? "\(index + 1)" : "9")
+                            .font(.system(size: 10.5, weight: .bold, design: .rounded).monospacedDigit())
+                            .foregroundStyle(Color.inkText)
+                            .frame(width: shrunk ? 20 : 16, height: shrunk ? 20 : 16)
+                            .background(Circle().fill(Color.inkText.opacity(0.14)))
+                            .transition(.opacity)
+                    } else if alone {
                         // One river with nothing of its own is simply the place to search from.
                         Image(systemName: "magnifyingglass").font(.system(size: 11, weight: .semibold)).foregroundStyle(Color.inkSecondary)
                     } else if shrunk {
@@ -258,6 +268,7 @@ struct RiverBar: View {
         .fixedSize()
         .animation(.snappy(duration: 0.2), value: store.currentRiver)
         .animation(.snappy(duration: 0.2), value: store.rivers.count)
+        .animation(.easeOut(duration: 0.12), value: CommandKey.shared.isHeld)
     }
 }
 

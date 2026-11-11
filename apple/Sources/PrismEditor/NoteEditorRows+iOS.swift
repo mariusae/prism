@@ -393,6 +393,11 @@ final class RowHands: NSObject, UIGestureRecognizerDelegate, @preconcurrency UIE
         if coordinator.parent.onMoveRows != nil {
             actions.append(action("Move to…", "arrow.right.doc.on.clipboard", []) { [weak self] in self?.coordinator?.moveElsewhere([row]) })
         }
+        // A row of a list, shown as a note of its own: here, or in a card beside this one.
+        if coordinator.parent.onZoom != nil, coordinator.isListRow(row) {
+            actions.append(action("Focus", "scope", []) { [weak self] in self?.coordinator?.zoom(row: row, apart: false) })
+            actions.append(action("Open as Card", "rectangle.stack.badge.plus", []) { [weak self] in self?.coordinator?.zoom(row: row, apart: true) })
+        }
         // Beside Move to…: where among its own rows, or elsewhere.
         let reorder = UIMenu(title: "Reorder", image: UIImage(systemName: "arrow.up.arrow.down"), children: [
             command("Move to Top", "arrow.up.to.line", .moveToTop, info.canMoveUp, true),

@@ -275,6 +275,15 @@ mod tests {
     use super::*;
 
     #[test]
+    fn days_and_weeks_are_shown_as_they_are_read() {
+        assert_eq!(shown("2025-11-12").as_deref(), Some("Nov 12, 2025"));
+        assert_eq!(shown(" 2026-05-01 ").as_deref(), Some("May 1, 2026"));
+        assert_eq!(shown("2026-W46").as_deref(), Some("Week 46, 2026"));
+        assert_eq!(shown("2026-w05").as_deref(), Some("Week 5, 2026"));
+        assert_eq!((shown("2026-13-01"), shown("Atlas"), shown("")), (None, None, None));
+    }
+
+    #[test]
     fn days_parse_strictly_and_print_back() {
         let day = Day::parse("2026-10-31").unwrap();
         assert_eq!((day.year(), day.month(), day.day()), (2026, 10, 31));
@@ -343,6 +352,21 @@ impl fmt::Display for Spoken {
             Spoken::Week(week) => week.fmt(f),
         }
     }
+}
+
+/// A day's or a week's page as it is called where it is shown, from
+/// the name its file has: `2025-11-12` is "Nov 12, 2025", `2026-W46`
+/// is "Week 46, 2026". `None` for a name that is neither's.
+///
+/// The name is still what the page is: what links to it are written
+/// with, what it is sorted and found by. This is only how it reads.
+pub fn shown(name: &str) -> Option<String> {
+    let name = name.trim();
+    if let Some(day) = Day::parse(name) {
+        let month = MONTHS[usize::from(day.month()) - 1];
+        return Some(format!("{}{} {}, {}", month[..1].to_uppercase(), &month[1..3], day.day(), day.year()));
+    }
+    Week::parse(&name.to_uppercase()).map(|week| format!("Week {}, {}", week.week(), week.year()))
 }
 
 const WEEKDAYS: [&str; 7] = ["monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday"];

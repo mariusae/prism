@@ -22,6 +22,8 @@ public struct NoteEditorView: NSViewRepresentable {
     var pageExists: (String) -> Bool
     /// What a link's page is shown as called, where the link does not say it.
     var linkLabel: (String) -> String?
+    /// The icon a link's page was given.
+    var linkIcon: (String) -> String?
     var onChange: () -> Void
     var onFocus: (Bool) -> Void
     var onFollow: (EditorLink) -> Void
@@ -56,8 +58,15 @@ public struct NoteEditorView: NSViewRepresentable {
     /// says here which rows are folded, and is told (`onFolds`) when that
     /// changes: a row was folded or unfolded, or the note changed around
     /// one, so that it is now known by another place or other words.
-    var foldedRows: [EditorFoldedRow]
+    var foldedRows: [EditorFoldedRow]?
     var onFolds: ([EditorFoldedRow]) -> Void
+    /// Asked to show one row of the outline as a note of its own — only
+    /// what is under it: handed the row's name in the note, for the app
+    /// to have this card show it (`NoteEditor.setFocus`), or — `apart` —
+    /// a card of its own. `nil`, and it is not offered.
+    var onZoom: ((_ row: String, _ apart: Bool) -> Void)?
+    /// Asked to show more than the row now shown: the row it is under.
+    var onZoomOut: (() -> Void)?
     /// Takes rows to another note: handed their Markdown, the app asks
     /// where to, puts them there, and then calls what it was handed with
     /// it — which takes them out of this note. `nil`, and "Move to…" is
@@ -82,15 +91,17 @@ public struct NoteEditorView: NSViewRepresentable {
         editor: NoteEditor, theme: EditorTheme, isWriting: Bool, height: Binding<CGFloat>, refresh: Int = 0,
         pageExists: @escaping (String) -> Bool = { _ in true },
         linkLabel: @escaping (String) -> String? = { _ in nil },
+        linkIcon: @escaping (String) -> String? = { _ in nil },
         blockView: @escaping (EditorBlock) -> AnyView? = { _ in nil },
         linkPreview: @escaping (EditorLink) -> AnyView? = { _ in nil },
         lead: EditorLead? = nil, onLead: @escaping () -> Void = {},
         offers: @escaping (BodyCompletion) -> [EditorOffer] = { _ in [] },
         offersTitle: Bool = false, onTitle: @escaping () -> Void = {},
-        foldedRows: [EditorFoldedRow] = [], onFolds: @escaping ([EditorFoldedRow]) -> Void = { _ in },
+        foldedRows: [EditorFoldedRow]? = nil, onFolds: @escaping ([EditorFoldedRow]) -> Void = { _ in },
         onMoveRows: ((_ markdown: String, _ moved: @escaping () -> Void) -> Void)? = nil,
         savePictures: @escaping ([EditorPastedPicture]) -> [String] = { _ in [] },
         isToday: Bool = false,
+        onZoom: ((_ row: String, _ apart: Bool) -> Void)? = nil, onZoomOut: (() -> Void)? = nil,
         onChange: @escaping () -> Void = {}, onFocus: @escaping (Bool) -> Void = { _ in }, onFollow: @escaping (EditorLink) -> Void = { _ in }
     ) {
         self.editor = editor
@@ -100,6 +111,7 @@ public struct NoteEditorView: NSViewRepresentable {
         self.refresh = refresh
         self.pageExists = pageExists
         self.linkLabel = linkLabel
+        self.linkIcon = linkIcon
         self.blockView = blockView
         self.linkPreview = linkPreview
         self.lead = lead
@@ -109,6 +121,8 @@ public struct NoteEditorView: NSViewRepresentable {
         self.onTitle = onTitle
         self.foldedRows = foldedRows
         self.onFolds = onFolds
+        self.onZoom = onZoom
+        self.onZoomOut = onZoomOut
         self.onMoveRows = onMoveRows
         self.savePictures = savePictures
         self.isToday = isToday
@@ -631,6 +645,7 @@ public final class NoteTextView: NSTextView {
     public override func mouseDown(with event: NSEvent) {
         hovered = nil
         hideCard()
+        leaveRows()
         guard let manager = layoutManager as? BodyLayoutManager, let container = textContainer else { return super.mouseDown(with: event) }
         let point = containerPoint(event)
         if manager.isLead(at: point) {
@@ -679,6 +694,7 @@ public final class NoteTextView: NSTextView {
     public override func resignFirstResponder() -> Bool {
         let resigned = super.resignFirstResponder()
         if resigned {
+            leaveRows()
             setSelectedRange(NSRange(location: selectedRange().location, length: 0))
             DispatchQueue.main.async { [weak self] in self?.coordinator?.focusChanged(false) }
         }
@@ -690,7 +706,117 @@ public final class NoteTextView: NSTextView {
     // While pages are offered for a link being typed, the keys that
     // choose among them are the list's.
 
+    // MARK: Rows chosen
+    //
+    // Esc, in an outline, chooses the row the caret is in: the whole row,
+    // marked across the note's width. ↑ and ↓ then choose the row above
+    // or below — with ⇧, more of them — and what is done is done to the
+    // rows: Tab and ⇧Tab set them in and out, ⌫ deletes them, ⌃⌘↑ and
+    // ⌃⌘↓ carry them, ⌘C copies them as Markdown. Return, a click, or
+    // anything typed goes back to writing; Esc again leaves the note.
+
+    /// The rows chosen, from the one first chosen to the one gone to
+    /// since: lines of the outline, counted from the first. Nothing,
+    /// while the note is written in.
+    private var rowsChosen: (anchor: Int, head: Int)?
+    var isChoosingRows: Bool { rowsChosen != nil }
+
+    private var outlineLines: [BodyLine] {
+        guard let layout = coordinator?.layout, !layout.markersInText else { return [] }
+        return layout.lines
+    }
+
+    private func row(at location: Int) -> Int? {
+        let lines = outlineLines
+        return lines.lastIndex { Int($0.start) <= location } ?? (lines.isEmpty ? nil : 0)
+    }
+
+    /// Chooses rows: the text they cover is what is selected, so that
+    /// what is done to a selection is done to them.
+    private func chooseRows(anchor: Int, head: Int) {
+        let lines = outlineLines
+        guard !lines.isEmpty else { return leaveRows() }
+        let (anchor, head) = (min(max(anchor, 0), lines.count - 1), min(max(head, 0), lines.count - 1))
+        rowsChosen = (anchor, head)
+        let (first, last) = (lines[min(anchor, head)], lines[max(anchor, head)])
+        setSelectedRange(NSRange(location: Int(first.start), length: Int(last.end) - Int(first.start)))
+        // The rows are marked whole; the words in them are not marked again, and there is no caret.
+        selectedTextAttributes = [:]
+        insertionPointColor = .clear
+        (layoutManager as? BodyLayoutManager)?.chosen = Int(first.start)...Int(last.end)
+        scrollRangeToVisible(NSRange(location: Int(lines[head].start), length: 0))
+        needsDisplay = true
+    }
+
+    /// The rows the selection covers now, chosen: after something was done to them.
+    private func chooseSelectedRows() {
+        let selection = selectedRange()
+        guard rowsChosen != nil, let first = row(at: selection.location), let last = row(at: max(NSMaxRange(selection) - (selection.length > 0 ? 1 : 0), selection.location)) else { return }
+        chooseRows(anchor: first, head: max(last, first))
+    }
+
+    /// Back to writing: the caret where `at` says, or left as it is.
+    private func leaveRows(caretAt at: Int? = nil) {
+        guard rowsChosen != nil else { return }
+        rowsChosen = nil
+        (layoutManager as? BodyLayoutManager)?.chosen = nil
+        selectedTextAttributes = [.backgroundColor: NSColor.selectedTextBackgroundColor]
+        insertionPointColor = coordinator?.parent.theme.accent ?? .controlAccentColor
+        if let at { setSelectedRange(NSRange(location: min(at, textStorage?.length ?? at), length: 0)) }
+        needsDisplay = true
+    }
+
+    private func stepRows(_ step: Int, extending: Bool) {
+        guard let chosen = rowsChosen else { return }
+        let head = chosen.head + step
+        chooseRows(anchor: extending ? chosen.anchor : head, head: head)
+    }
+
+    public override func moveUpAndModifySelection(_ sender: Any?) {
+        if isChoosingRows { stepRows(-1, extending: true) } else { super.moveUpAndModifySelection(sender) }
+    }
+
+    public override func moveDownAndModifySelection(_ sender: Any?) {
+        if isChoosingRows { stepRows(1, extending: true) } else { super.moveDownAndModifySelection(sender) }
+    }
+
+    public override func insertBacktab(_ sender: Any?) {
+        _ = coordinator?.perform(.outdent)
+        chooseSelectedRows()
+    }
+
+    public override func insertText(_ string: Any, replacementRange: NSRange) {
+        // Typed over rows chosen: written at the end of the last of them, not in their place.
+        if let chosen = rowsChosen {
+            let lines = outlineLines
+            leaveRows(caretAt: lines.indices.contains(chosen.head) ? Int(lines[chosen.head].end) : nil)
+            return super.insertText(string, replacementRange: selectedRange())
+        }
+        super.insertText(string, replacementRange: replacementRange)
+    }
+
+    public override func copy(_ sender: Any?) {
+        // Rows chosen are copied as they are written: their bullets and boxes with them.
+        if let chosen = rowsChosen, let markdown = coordinator?.markdown(ofRows: Array(min(chosen.anchor, chosen.head)...max(chosen.anchor, chosen.head))) {
+            NSPasteboard.general.clearContents()
+            NSPasteboard.general.setString(markdown, forType: .string)
+            return
+        }
+        super.copy(sender)
+    }
+
+    public override func cut(_ sender: Any?) {
+        guard isChoosingRows else { return super.cut(sender) }
+        copy(sender)
+        deleteBackward(sender)
+    }
+
     public override func insertNewline(_ sender: Any?) {
+        // Return, with rows chosen: back to writing, at the end of the last gone to.
+        if let chosen = rowsChosen {
+            let lines = outlineLines
+            return leaveRows(caretAt: lines.indices.contains(chosen.head) ? Int(lines[chosen.head].end) : nil)
+        }
         if coordinator?.acceptOffer() == true { return }
         // Return at the end of a first line written as a heading: that line, the title.
         if coordinator?.titlesByReturn() == true { return coordinator?.parent.onTitle() ?? () }
@@ -699,27 +825,38 @@ public final class NoteTextView: NSTextView {
 
     public override func insertTab(_ sender: Any?) {
         if coordinator?.acceptOffer() == true { return }
-        if coordinator?.perform(.indent) != true { super.insertTab(sender) }
+        if coordinator?.perform(.indent) != true, !isChoosingRows { super.insertTab(sender) }
+        chooseSelectedRows()
     }
 
     public override func moveUp(_ sender: Any?) {
+        if isChoosingRows { return stepRows(-1, extending: false) }
         if coordinator?.isOffering == true { coordinator?.moveOffer(by: -1) } else { super.moveUp(sender) }
     }
 
     public override func moveDown(_ sender: Any?) {
+        if isChoosingRows { return stepRows(1, extending: false) }
         if coordinator?.isOffering == true { coordinator?.moveOffer(by: 1) } else { super.moveDown(sender) }
     }
 
-    public override func insertBacktab(_ sender: Any?) {
-        _ = coordinator?.perform(.outdent)
-    }
-
     public override func deleteBackward(_ sender: Any?) {
+        // Rows chosen are deleted whole; the row that takes their place is chosen.
+        if let chosen = rowsChosen {
+            let at = min(chosen.anchor, chosen.head)
+            if coordinator?.perform(.deleteRows) == true {
+                let left = outlineLines.count
+                if left == 0 { leaveRows(caretAt: 0) } else { chooseRows(anchor: min(at, left - 1), head: min(at, left - 1)) }
+            }
+            return
+        }
         if coordinator?.perform(.deleteBackward) != true { super.deleteBackward(sender) }
     }
 
     public override func cancelOperation(_ sender: Any?) {
         if coordinator?.isOffering == true { return coordinator?.dismissOffers() ?? () }
+        // In an outline, Esc first chooses the row being written in; again, it leaves the note.
+        if !isChoosingRows, !hasMarkedText(), let at = row(at: selectedRange().location) { return chooseRows(anchor: at, head: at) }
+        leaveRows()
         window?.makeFirstResponder(nil)
     }
 
@@ -743,8 +880,19 @@ public final class NoteTextView: NSTextView {
             askLink()
             return true
         }
+        // ⌘] shows the caret's row as a note of its own; with ⇧, in a card of its own. ⌘[ shows more again.
+        if key == "]" || key == "}", flags == [.command] || flags == [.command, .shift], coordinator?.parent.onZoom != nil {
+            if coordinator?.zoom(apart: flags.contains(.shift)) != true { NSSound.beep() }
+            return true
+        }
+        if key == "[", flags == [.command], let out = coordinator?.parent.onZoomOut {
+            out()
+            return true
+        }
         guard let command = Self.command(flags: flags, key: key, special: event.specialKey) else { return super.performKeyEquivalent(with: event) }
         let done = coordinator?.perform(command) ?? false
+        // Done to rows chosen: they are chosen still, wherever they went.
+        if done { chooseSelectedRows() }
         // A fold with nothing to fold leaves its key — ⌘0 is many an app's own — to whoever wants it.
         return done || !Self.outlineOnly.contains(command) || super.performKeyEquivalent(with: event)
     }
@@ -798,6 +946,18 @@ public final class NoteTextView: NSTextView {
         if selectedRange().length > 0, let words = board.string(forType: .string), coordinator?.link(to: words) == true { return }
         if coordinator?.insert(pictures: Self.pasted(from: board)) == true { return }
         super.paste(sender)
+    }
+
+    /// A picture can be pasted, though the text view holds only words:
+    /// said so, or Paste is greyed out — and ⌘V does nothing — whenever
+    /// what was copied is a picture and nothing else.
+    public override var readablePasteboardTypes: [NSPasteboard.PasteboardType] {
+        super.readablePasteboardTypes + Self.pictureTypes.filter { !super.readablePasteboardTypes.contains($0) }
+    }
+
+    public override func validateUserInterfaceItem(_ item: any NSValidatedUserInterfaceItem) -> Bool {
+        if item.action == #selector(paste(_:)), isEditable, NSPasteboard.general.availableType(from: Self.pictureTypes) != nil { return true }
+        return super.validateUserInterfaceItem(item)
     }
 
     public override var acceptableDragTypes: [NSPasteboard.PasteboardType] {

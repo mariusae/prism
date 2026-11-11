@@ -71,6 +71,8 @@ struct BodyStyler {
     /// when that is not the name a link to it is written with: `nil`
     /// where the link already says it, or leads nowhere.
     var linkLabel: (String) -> String? = { _ in nil }
+    /// The icon the page a link leads to was given: an SF Symbol's name.
+    var linkIcon: (String) -> String? = { _ in nil }
 
     static let hiddenFont = EditorFont.systemFont(ofSize: 0.1)
     static let headingScales: [CGFloat] = [1.45, 1.25, 1.12, 1.05, 1, 1]
@@ -239,10 +241,10 @@ struct BodyStyler {
             case .pageLink(let target, _):
                 let isRiver = riverName(linkTarget: target) != nil
                 let missing = !isRiver && !pageExists(target)
-                let symbol = isRiver ? "square.stack" : (isDate(target) ? "calendar" : "doc.text")
+                let symbol = isRiver ? "square.stack" : (linkIcon(target) ?? (isDate(target) ? "calendar" : "doc.text"))
                 link(storage, range, to: .page(target), symbol: symbol, missing: missing, line: line, shown: shown, markupEnd: markupEnd)
                 // A link written with its page's file's name shows the page's title — off the lines being written in.
-                if !shown, !isRiver, !missing, (storage.string as NSString).substring(with: range) == target, let label = linkLabel(target) {
+                if !shown, !isRiver, (storage.string as NSString).substring(with: range) == target, let label = linkLabel(target) {
                     relabel(storage, range, as: label)
                 }
             case .webLink(let url):
@@ -419,6 +421,8 @@ final class BodyLayoutManager: NSLayoutManager {
     /// an app's view stands in place of too; empty for text. What a touch
     /// finds a row by, and where a folded row's pill is drawn.
     var lines: [BodyLine] = []
+    /// The rows chosen whole, as the characters they cover: marked across the note's width.
+    var chosen: ClosedRange<Int>?
     /// What an outline's timelines draw at its rows.
     var marks: [BodyTimeMark] = []
     /// The rows being written in: a time block's label is not drawn over
@@ -442,18 +446,7 @@ final class BodyLayoutManager: NSLayoutManager {
         let box = CGRect(x: midX - side / 2, y: baseline - theme.body.capHeight / 2 - side / 2, width: side, height: side)
         if let progress = lead.progress {
             // A checklist's ring: as much of it drawn as is done.
-            let tint = lead.tint ?? theme.secondary
-            let ring = box.insetBy(dx: side * 0.16, dy: side * 0.16), line = max(side * 0.11, 1.5)
-            let track = EditorBezier(ovalIn: ring)
-            track.lineWidth = line
-            tint.withAlphaComponent(0.25).setStroke()
-            track.stroke()
-            if progress > 0 {
-                let arc = EditorBezier.arc(center: CGPoint(x: ring.midX, y: ring.midY), radius: ring.width / 2, fraction: min(progress, 1))
-                arc.lineWidth = line
-                tint.setStroke()
-                arc.stroke()
-            }
+            drawRing(in: box.insetBy(dx: side * 0.16, dy: side * 0.16), fraction: progress, tint: lead.tint ?? theme.secondary)
             leadBox = box.offsetBy(dx: -origin.x, dy: -origin.y).insetBy(dx: -4, dy: -4)
             return
         }
@@ -461,9 +454,47 @@ final class BodyLayoutManager: NSLayoutManager {
         leadBox = box.offsetBy(dx: -origin.x, dy: -origin.y).insetBy(dx: -4, dy: -4)
     }
 
+    /// A ring, as much of it drawn as is done: a quiet track, and over it the arc.
+    private func drawRing(in ring: CGRect, fraction: Double, tint: EditorColor) {
+        let line = max(ring.width * 0.15, 1.5)
+        let track = EditorBezier(ovalIn: ring)
+        track.lineWidth = line
+        tint.withAlphaComponent(0.28).setStroke()
+        track.stroke()
+        guard fraction > 0 else { return }
+        let arc = EditorBezier.arc(center: CGPoint(x: ring.midX, y: ring.midY), radius: ring.width / 2, fraction: min(fraction, 1))
+        arc.lineWidth = line
+        tint.setStroke()
+        arc.stroke()
+    }
+
+    /// How far along the checklist under a row is — every box in the
+    /// rows set in under it, ticked of all: nothing for a row over none.
+    private func progress(under row: BodyLine) -> Double? {
+        guard let at = lines.firstIndex(where: { $0.start == row.start }) else { return nil }
+        var (done, total) = (0, 0)
+        for line in lines[(at + 1)...] {
+            guard line.depth > row.depth else { break }
+            if case .item(_, let ticked, _) = line.kind, let ticked {
+                total += 1
+                if ticked { done += 1 }
+            }
+        }
+        return total > 0 ? Double(done) / Double(total) : nil
+    }
+
     /// Whether a point of the container is on the lead.
     func isLead(at point: CGPoint) -> Bool {
         lead != nil && leadBox?.contains(point) == true
+    }
+
+    /// How far under a line's top words of the body stand: where an empty row's mark is to stand too.
+    private var wordsBaseline: CGFloat {
+        #if os(macOS)
+        defaultBaselineOffset(for: theme.body)
+        #else
+        theme.body.ascender
+        #endif
     }
 
     /// Where a row's first line is: its line's box, and its baseline.
@@ -475,13 +506,13 @@ final class BodyLayoutManager: NSLayoutManager {
             let rect = lineFragmentRect(forGlyphAt: glyph, effectiveRange: nil)
             // A row with nothing in it has only its line's end to ask, which
             // sits lower than words would: its mark stands where words will.
-            if row.end <= row.start { return (rect, rect.minY + theme.body.ascender + 1.5) }
+            if row.end <= row.start { return (rect, rect.minY + wordsBaseline) }
             return (rect, rect.minY + location(forGlyphAt: glyph).y)
         }
         // The last row, with nothing in it yet: the line the caret waits on.
         let rect = extraLineFragmentRect
         guard rect.height > 0 else { return nil }
-        return (rect, rect.minY + theme.body.ascender + 1.5)
+        return (rect, rect.minY + wordsBaseline)
     }
 
     /// The box a row's mark is drawn in: the step before its words.
@@ -496,6 +527,22 @@ final class BodyLayoutManager: NSLayoutManager {
         let characters = characterRange(forGlyphRange: glyphsToShow, actualGlyphRange: nil)
         let font = theme.body
 
+        if let chosen {
+            // Each row chosen, a band the width of the note — its mark's room with it.
+            var band = CGRect.null
+            for row in lines where Int(row.start) <= chosen.upperBound && Int(row.end) >= chosen.lowerBound && Int(row.start) >= chosen.lowerBound {
+                let glyphs = glyphRange(forCharacterRange: NSRange(location: Int(row.start), length: max(Int(row.end) - Int(row.start), 0)), actualCharacterRange: nil)
+                var rect = glyphs.length > 0 ? boundingRect(forGlyphRange: glyphs, in: container) : (firstLine(of: row)?.rect ?? .null)
+                guard !rect.isNull else { continue }
+                rect.origin.x = 0
+                rect.size.width = container.size.width
+                band = band.union(rect)
+            }
+            if !band.isNull {
+                theme.accent.withAlphaComponent(0.16).setFill()
+                Self.roundedPath(band.insetBy(dx: -4, dy: -1).offsetBy(dx: origin.x, dy: origin.y), radius: 6).fill()
+            }
+        }
         drawTimeMarks(at: origin, in: characters)
         for (index, line) in lines.enumerated() where line.isFolded && Int(line.start) <= NSMaxRange(characters) && Int(line.end) >= characters.location {
             if let pill = foldPill(ofRow: index) { drawFoldPill(in: pill.offsetBy(dx: origin.x, dy: origin.y)) }
@@ -518,6 +565,10 @@ final class BodyLayoutManager: NSLayoutManager {
                 let attributes: [NSAttributedString.Key: Any] = [.font: EditorFont.monospacedDigitSystemFont(ofSize: size * 0.85, weight: .regular), .foregroundColor: theme.secondary]
                 let width = label.size(withAttributes: attributes).width
                 label.draw(at: CGPoint(x: box.maxX - 6 - width, y: baseline - font.ascender * 0.85 - 1), withAttributes: attributes)
+            } else if !nodes.contains(Int(row.start)), let progress = progress(under: row) {
+                // A row over a checklist: how far along that is, where its bullet would be.
+                let side = (size * 0.74).rounded()
+                drawRing(in: CGRect(x: box.midX - side / 2, y: baseline - font.xHeight / 2 - side / 2, width: side, height: side), fraction: progress, tint: theme.secondary)
             } else if !nodes.contains(Int(row.start)) {
                 // (A time block's bullet is its node on the timeline, drawn with the line.)
                 let diameter = max(4.5, (size * 0.3).rounded())

@@ -85,6 +85,18 @@ pub struct Session {
     /// Where the last typing left the caret: typing on from there is
     /// part of the same change.
     typing: Option<usize>,
+    /// For a session focused on one row: the rest of the body, kept
+    /// aside while `body` is only what is under that row.
+    outer: Option<Outer>,
+}
+
+/// What a focused session is not showing: the whole body — but for the
+/// rows under the one focused on, which are the session's `body` while
+/// it is — and where in it that row is.
+#[derive(Debug, Clone)]
+struct Outer {
+    whole: Document,
+    root: Path,
 }
 
 impl Session {
@@ -95,13 +107,14 @@ impl Session {
         let mut session = Session {
             frontmatter,
             heading: rest[..heading_len].to_owned(),
-            body: Document::parse(&rest[heading_len..]),
+            body: read_marks(Document::parse(&rest[heading_len..])),
             mode,
             text: String::new(),
             rows: Vec::new(),
             undone: Vec::new(),
             redone: Vec::new(),
             typing: None,
+            outer: None,
         };
         session.project();
         session
@@ -110,7 +123,7 @@ impl Session {
     /// The note's file, as it now is. What was not edited is as it was read.
     pub fn markdown(&self) -> String {
         let front = self.frontmatter.as_ref().map(ToString::to_string).unwrap_or_default();
-        format!("{front}{}{}", self.heading, self.body.to_markdown())
+        format!("{front}{}{}", self.heading, written_marks(&self.whole()).to_markdown())
     }
 
     pub fn mode(&self) -> Mode {
@@ -380,9 +393,30 @@ impl Session {
     /// was folded is folded still, for when it is shown as an outline.
     fn read(&mut self, text: String) {
         let folds = self.folded_rows();
-        self.body = Document::parse(&text);
+        // The rows with names of their own keep them, found again as folds are.
+        let named: Vec<(FoldedRow, String)> = self
+            .body
+            .rows()
+            .iter()
+            .enumerate()
+            .filter_map(|(index, row)| Some((FoldedRow { index, text: row.block.text.clone() }, row.block.anchor.clone()?)))
+            .collect();
+        self.body = read_marks(Document::parse(&text));
         self.text = text;
-        self.fold(&folds);
+        if !folds.is_empty() {
+            self.fold(&folds);
+        }
+        for (row, name) in named {
+            let all = self.body.rows();
+            let fits =
+                |at: usize| all.get(at).is_some_and(|found| found.block.text == row.text && found.block.anchor.is_none() && found.block.can_have_children());
+            let at = if fits(row.index) { Some(row.index) } else { (0..all.len()).filter(|at| fits(*at)).min_by_key(|at| at.abs_diff(row.index)) };
+            let path = at.map(|at| all[at].path.clone());
+            drop(all);
+            if let Some(block) = path.and_then(|path| self.body.get_mut(&path)) {
+                block.anchor = Some(name);
+            }
+        }
     }
 
     /// Carries out a command. `None` when it has nothing to do there, and
@@ -1143,6 +1177,127 @@ impl Session {
         marks
     }
 
+    // --- Focus ---------------------------------------------------------------------
+    //
+    // A session can be **focused** on one row of the outline: it then
+    // shows, and edits, only the rows under that row — as a note of
+    // their own, the first of them at the margin. The rest of the note
+    // is kept aside, untouched, and [`markdown`](Self::markdown) is the
+    // whole file all the same. A row is focused on by its name
+    // ([`Block::anchor`]), which it is given when first asked for: the
+    // name is written in the note, so a view of it — a card in a river —
+    // can be remembered, and found again whatever is written around it.
+
+    /// The whole body: what is shown, and — focused — what is not.
+    fn whole(&self) -> std::borrow::Cow<'_, Document> {
+        let Some(outer) = &self.outer else { return std::borrow::Cow::Borrowed(&self.body) };
+        let mut whole = outer.whole.clone();
+        if let Some(root) = whole.get_mut(&outer.root) {
+            root.children = self.body.blocks.clone();
+            // The empty row a focus on a row with nothing under it is given to write in.
+            if matches!(root.children.as_slice(), [only] if only.text.is_empty() && only.children.is_empty() && only.anchor.is_none()) {
+                root.children.clear();
+            }
+        }
+        std::borrow::Cow::Owned(whole)
+    }
+
+    /// The name of a row shown, given one now if it had none: what
+    /// [`set_focus`](Self::set_focus) takes, and what a river keeps. Only
+    /// a list's row can have one — only it can have rows under it.
+    pub fn anchor_row(&mut self, row: usize) -> Option<String> {
+        let path = self.rows.get(row)?.path.clone();
+        self.anchor_at(&path, true)
+    }
+
+    /// The name of the block at a path — in the body shown (`shown`), or
+    /// in what a focused session keeps aside.
+    fn anchor_at(&mut self, path: &[usize], shown: bool) -> Option<String> {
+        let name = new_anchor(&self.whole());
+        let document = if shown { &mut self.body } else { &mut self.outer.as_mut()?.whole };
+        let block = document.get_mut(path).filter(|block| block.can_have_children())?;
+        Some(block.anchor.get_or_insert(name).clone())
+    }
+
+    /// The name of the row focused on, if the session is focused.
+    pub fn focus(&self) -> Option<String> {
+        let outer = self.outer.as_ref()?;
+        outer.whole.get(&outer.root)?.anchor.clone()
+    }
+
+    /// Focuses on the row of a name — or, given none, on nothing: the
+    /// whole note is shown again. Says whether there was such a row; if
+    /// not, the whole note is shown. A focused session is an outline;
+    /// what was done before cannot be undone after.
+    pub fn set_focus(&mut self, name: Option<&str>) -> bool {
+        if let Some(outer) = self.outer.take() {
+            let mut whole = self.whole_with(outer);
+            std::mem::swap(&mut self.body, &mut whole);
+        }
+        self.undone.clear();
+        self.redone.clear();
+        self.typing = None;
+        let found = name.is_none_or(|name| {
+            let Some(root) = anchored(&self.body, name) else { return false };
+            let Some(block) = self.body.get_mut(&root) else { return false };
+            let mut under = std::mem::take(&mut block.children);
+            if under.is_empty() {
+                under.push(Block::bullet(""));
+            }
+            let shown = Document { blocks: under, final_newline: true, line_ending: self.body.line_ending, ..Document::default() };
+            let whole = std::mem::replace(&mut self.body, shown);
+            self.outer = Some(Outer { whole, root });
+            self.mode = Mode::Outline;
+            true
+        });
+        self.project();
+        found
+    }
+
+    /// The whole body, of a session that was focused: its parts put together.
+    fn whole_with(&mut self, outer: Outer) -> Document {
+        self.outer = Some(outer);
+        let whole = self.whole().into_owned();
+        self.outer = None;
+        whole
+    }
+
+    /// The words of the row focused on: the title of what is shown.
+    pub fn focus_title(&self) -> Option<String> {
+        let outer = self.outer.as_ref()?;
+        Some(outer.whole.get(&outer.root)?.text.clone())
+    }
+
+    /// The row focused on as it reads, its Markdown taken out: what to call what is shown.
+    pub fn focus_label(&self) -> Option<String> {
+        self.focus_title().map(|title| inline::plain_text(&title))
+    }
+
+    /// Writes the row focused on anew: its words, on one line.
+    pub fn set_focus_title(&mut self, title: &str) {
+        let Some(outer) = &mut self.outer else { return };
+        if let Some(root) = outer.whole.get_mut(&outer.root) {
+            root.text = title.split_whitespace().collect::<Vec<_>>().join(" ");
+        }
+    }
+
+    /// The rows the row focused on is under, outermost first, each as it
+    /// reads: the way to it from the note's top.
+    pub fn focus_trail(&self) -> Vec<String> {
+        let Some(outer) = &self.outer else { return Vec::new() };
+        (1..outer.root.len()).filter_map(|depth| outer.whole.get(&outer.root[..depth])).map(|block| inline::plain_text(&block.text)).collect()
+    }
+
+    /// The name of a row the row focused on is under — the one right
+    /// over it (`levels` 1), the one over that — given one now if it had
+    /// none: what to focus on, to see more. `None` where there is no such
+    /// row: `levels` up is the whole note.
+    pub fn focus_out(&mut self, levels: usize) -> Option<String> {
+        let root = self.outer.as_ref()?.root.clone();
+        let depth = root.len().checked_sub(levels).filter(|depth| *depth >= 1 && levels >= 1)?;
+        self.anchor_at(&root[..depth], false)
+    }
+
     // --- Folds ---------------------------------------------------------------------
 
     /// The rows folded: each by its place among all the body's rows —
@@ -1284,6 +1439,100 @@ fn visible(document: &Document) -> Vec<Path> {
     let mut out = Vec::new();
     visit(&document.blocks, &mut Vec::new(), &mut out);
     out
+}
+
+/// What a folded row's first line ends with, in the note's file: which
+/// rows are folded is the note's own to remember, and so the same in
+/// every river and on every device. A comment, which nothing shows.
+pub const FOLDED: &str = "<!-- folded -->";
+
+/// A row's name, as the note's file has it after the row's first line:
+/// `<!-- ^k3f9 -->`.
+fn written_anchor(name: &str) -> String {
+    format!("<!-- ^{name} -->")
+}
+
+/// The name in a comment that is a row's name and nothing else.
+fn read_anchor(comment: &str) -> Option<&str> {
+    let name = comment.strip_prefix("<!--")?.strip_suffix("-->")?.trim().strip_prefix('^')?;
+    (!name.is_empty() && name.chars().all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')).then_some(name)
+}
+
+/// A body as it was read, the marks at the end of its rows' first lines
+/// taken out of their words: a row marked folded, having rows under it,
+/// is folded; a row with a name has it as its [`Block::anchor`].
+fn read_marks(mut document: Document) -> Document {
+    fn read(blocks: &mut [Block]) {
+        for block in blocks {
+            while block.can_have_children() {
+                let line = block.text.find('\n').unwrap_or(block.text.len());
+                let first = block.text[..line].trim_end();
+                if let Some(kept) = first.strip_suffix(FOLDED) {
+                    let kept = kept.trim_end().len();
+                    block.text.replace_range(kept..line, "");
+                    block.folded = !block.children.is_empty();
+                } else if let Some((at, name)) = first.rfind("<!--").and_then(|at| Some((at, read_anchor(&first[at..])?))) {
+                    // The first written is the one kept, were there two.
+                    block.anchor = Some(name.to_owned());
+                    let kept = first[..at].trim_end().len();
+                    block.text.replace_range(kept..line, "");
+                } else {
+                    break;
+                }
+            }
+            read(&mut block.children);
+        }
+    }
+    read(&mut document.blocks);
+    document
+}
+
+/// A body as it is written: each named row's first line ending with its
+/// name, and each folded row's with the mark of a fold.
+fn written_marks(document: &Document) -> std::borrow::Cow<'_, Document> {
+    fn write(blocks: &mut [Block]) {
+        for block in blocks {
+            let folded = block.folded && !block.children.is_empty();
+            let marks: Vec<String> = block.anchor.as_deref().map(written_anchor).into_iter().chain(folded.then(|| FOLDED.to_owned())).collect();
+            if !marks.is_empty() {
+                let line = block.text.find('\n').unwrap_or(block.text.len());
+                let gap = if block.text[..line].is_empty() { "" } else { " " };
+                block.text.insert_str(line, &format!("{gap}{}", marks.join(" ")));
+            }
+            write(&mut block.children);
+        }
+    }
+    if !document.walk().any(|block| block.anchor.is_some() || (block.folded && !block.children.is_empty())) {
+        return std::borrow::Cow::Borrowed(document);
+    }
+    let mut marked = document.clone();
+    write(&mut marked.blocks);
+    std::borrow::Cow::Owned(marked)
+}
+
+/// A name for a row: a few letters no row of the body has.
+fn new_anchor(document: &Document) -> String {
+    use std::hash::{BuildHasher, Hasher};
+    const LETTERS: &[u8] = b"abcdefghijklmnopqrstuvwxyz0123456789";
+    loop {
+        // Random as a hasher's keys are: nothing here needs more.
+        let mut bits = std::collections::hash_map::RandomState::new().build_hasher().finish();
+        let name: String = (0..6)
+            .map(|_| {
+                let letter = LETTERS[(bits % LETTERS.len() as u64) as usize] as char;
+                bits /= LETTERS.len() as u64;
+                letter
+            })
+            .collect();
+        if !document.walk().any(|block| block.anchor.as_deref() == Some(name.as_str())) {
+            return name;
+        }
+    }
+}
+
+/// Where the row of a name is.
+fn anchored(document: &Document, name: &str) -> Option<Path> {
+    document.rows().into_iter().find(|row| row.block.anchor.as_deref() == Some(name)).map(|row| row.path)
 }
 
 /// Folds a block, or unfolds it; a block with nothing under it is never
@@ -1491,6 +1740,107 @@ mod tests {
     }
 
     /// A session in an outline, and the view of it.
+    #[test]
+    fn a_folded_row_is_marked_in_the_file_and_read_folded_again() {
+        const NOTE: &str = "# Plan\n\n- one\n  - under\n- [ ] two\n  more of two\n  - under two\n- three\n";
+        let (mut session, mut view) = outline(NOTE);
+        on(&mut session, &mut view, &["one"], 0, Command::ToggleFold).unwrap();
+        on(&mut session, &mut view, &["two"], 0, Command::ToggleFold).unwrap();
+        let written = session.markdown();
+        assert_eq!(written, "# Plan\n\n- one <!-- folded -->\n  - under\n- [ ] two <!-- folded -->\n  more of two\n  - under two\n- three\n");
+        // Read again: folded as they were, and the marks no part of the rows' words.
+        let again = Session::new(&written, Mode::Outline);
+        assert_eq!(again.folded_rows().iter().map(|row| (row.index, row.text.as_str())).collect::<Vec<_>>(), [(0, "one"), (2, "two\nmore of two")]);
+        assert!(!again.text().contains("folded") && !again.text().contains("under"));
+        assert_eq!(again.markdown(), written);
+        // As text, the marks are not shown, and are written still.
+        let mut text = Session::new(&written, Mode::Text);
+        assert!(!text.text().contains("folded"));
+        let end = text.text().len();
+        text.replace(end..end, "- four\n");
+        assert_eq!(text.markdown(), format!("{written}- four\n"));
+        // Unfolded, a row is written as it was; a mark on a row with nothing under it is dropped.
+        let (mut session, mut view) = outline(&written);
+        on(&mut session, &mut view, &["one"], 0, Command::ToggleFold).unwrap();
+        on(&mut session, &mut view, &["two"], 0, Command::ToggleFold).unwrap();
+        assert_eq!(session.markdown(), NOTE);
+        assert_eq!(Session::new("- alone <!-- folded -->\n", Mode::Outline).markdown(), "- alone\n");
+        // In code, they are only words.
+        const CODE: &str = "```\nx <!-- folded -->\n```\n";
+        assert_eq!(Session::new(CODE, Mode::Outline).markdown(), CODE);
+    }
+
+    #[test]
+    fn a_session_focused_on_a_row_shows_and_edits_only_what_is_under_it() {
+        const NOTE: &str = "# Plan\n\n- one\n- two **bold**\n  - under two\n    - deep\n      - deeper\n  - also under\n- three\n";
+        let (mut session, view) = outline(NOTE);
+        // A row is focused on by its name, which it is given when asked for — and keeps.
+        let deep = session.anchor_row(row(&session, "deep")).unwrap();
+        assert_eq!(session.anchor_row(row(&session, "deep")).as_deref(), Some(deep.as_str()));
+        assert_eq!(session.text(), view, "a name is no part of a row's words");
+        let named = NOTE.replace("- deep\n", &format!("- deep <!-- ^{deep} -->\n"));
+        assert_eq!(session.markdown(), named);
+        assert!(!session.set_focus(Some("nosuch")) && session.focus().is_none() && session.text() == view);
+
+        assert!(session.set_focus(Some(&deep)));
+        assert_eq!((session.focus().as_deref(), session.focus_title().as_deref()), (Some(deep.as_str()), Some("deep")));
+        assert_eq!(session.focus_trail(), ["two bold", "under two"]);
+        assert_eq!(session.text(), "deeper");
+        assert_eq!(session.layout().lines[0].depth, 1, "what is under it starts at the margin");
+        assert_eq!(session.markdown(), named, "and the file is the whole note's");
+        // Written in, it is the note that is written in: there, and nowhere else.
+        let mut view = session.text().to_owned();
+        let end = view.len();
+        shown(&mut view, &session.replace(end..end, "!"));
+        shown(&mut view, &session.perform(end + 1..end + 1, Command::Newline).unwrap());
+        let end = view.len();
+        shown(&mut view, &session.replace(end..end, "new"));
+        assert_eq!(view, "deeper!\nnew");
+        session.set_focus_title("deep,  renamed\n");
+        let written = named.replace("- deep <", "- deep, renamed <").replace("      - deeper\n", "      - deeper!\n      - new\n");
+        assert_eq!(session.markdown(), written);
+        // Read again, focused again: by the name, whatever was written around it.
+        let mut again = Session::new(&written.replace("- one\n", "- zero\n- one\n  - under one\n"), Mode::Text);
+        assert!(again.set_focus(Some(&deep)) && again.mode() == Mode::Outline);
+        assert_eq!(again.text(), "deeper!\nnew");
+
+        // Out a level: the row over it, named now; and from the outermost, the whole note.
+        let over = session.focus_out(1).unwrap();
+        assert!(session.focus_out(3).is_none() && session.focus_out(0).is_none());
+        assert!(session.set_focus(Some(&over)));
+        assert_eq!((session.focus_title().as_deref(), session.text()), (Some("under two"), "deep, renamed\ndeeper!\nnew"));
+        let top = session.focus_out(1).unwrap();
+        assert!(session.set_focus(Some(&top)) && session.focus_trail().is_empty() && session.focus_out(1).is_none());
+        assert!(session.set_focus(None) && session.focus().is_none());
+        assert_eq!(session.text(), "one\ntwo **bold**\nunder two\ndeep, renamed\ndeeper!\nnew\nalso under\nthree");
+        assert_eq!(session.markdown().matches("<!-- ^").count(), 3);
+
+        // A row with nothing under it is given a row to write in, which is no part of the note until it is.
+        let (mut session, _) = outline("- alone\n- [ ] other\n");
+        let alone = session.anchor_row(0).unwrap();
+        let marked = format!("- alone <!-- ^{alone} -->\n- [ ] other\n");
+        assert!(session.set_focus(Some(&alone)));
+        assert_eq!((session.text(), session.markdown()), ("", marked.clone()));
+        session.replace(0..0, "child");
+        assert_eq!(session.markdown(), marked.replace("-->\n", "-->\n  - child\n"));
+        // Folded and named both, a row is marked as both; a copy of a named row has no name; only a list's row has one.
+        let (mut session, mut view) = outline(&format!("- a <!-- ^x1 --> {FOLDED}\n  - b\n\nprose <!-- ^no -->\n"));
+        assert_eq!((session.text(), session.folded_rows().len()), ("a\nprose <!-- ^no -->", 1));
+        assert_eq!(session.anchor_row(1), None);
+        on(&mut session, &mut view, &["a"], 0, Command::DuplicateRows).unwrap();
+        assert_eq!(session.markdown().matches("^x1").count(), 1);
+        // As text, names are not shown, and are kept.
+        let mut text = Session::new("- a <!-- ^x1 -->\n  - b\n", Mode::Text);
+        assert_eq!(text.text(), "- a\n  - b\n");
+        text.replace(0..0, "- first\n");
+        assert_eq!(text.markdown(), "- first\n- a <!-- ^x1 -->\n  - b\n");
+    }
+
+    /// The note's file, but for the marks of its folded rows.
+    fn unmarked(session: &Session) -> String {
+        session.markdown().replace(" <!-- folded -->", "")
+    }
+
     fn outline(source: &str) -> (Session, String) {
         let session = Session::new(source, Mode::Outline);
         let view = session.text().to_owned();
@@ -1883,7 +2233,7 @@ mod tests {
         let change = on(&mut session, &mut view, &["two"], caret, Command::Fold).unwrap();
         assert_eq!(view, "one\ntwo\nthree");
         assert_eq!(change.selection, 4..4);
-        assert_eq!(session.markdown(), TREE, "a fold is no part of the note");
+        assert_eq!(session.markdown(), TREE.replace("- two\n", "- two <!-- folded -->\n"), "a fold is the note's to remember");
         assert_eq!(session.row_folds(), [(false, false), (true, true), (false, false)]);
         assert_eq!(session.folded_rows(), [FoldedRow { index: 1, text: "two".into() }]);
         let info = session.row_info(1).unwrap();
@@ -1954,17 +2304,17 @@ mod tests {
         // Typed in the folded row: its words change, and nothing under it.
         let at = at_end_of(&view, "two");
         shown(&mut view, &session.replace(at..at, "!"));
-        assert_eq!(session.markdown(), TREE.replace("- two", "- two!"));
+        assert_eq!(unmarked(&session), TREE.replace("- two", "- two!"));
         // Return at its end: the new row comes after all it hides, not among them.
         let change = session.perform(at + 1..at + 1, Command::Newline).unwrap();
         shown(&mut view, &change);
         assert_eq!((view.as_str(), change.selection), ("one\ntwo!\n\nthree", 9..9));
-        assert_eq!(session.markdown(), "- one\n- two!\n  - under two\n    - deep\n  - also under\n- \n- three\n");
+        assert_eq!(unmarked(&session), "- one\n- two!\n  - under two\n    - deep\n  - also under\n- \n- three\n");
         shown(&mut view, &session.undo().unwrap());
         // Return in the middle of it: what it hides stays with its first half.
         shown(&mut view, &session.perform(at - 1..at - 1, Command::Newline).unwrap());
         assert_eq!(view, "one\ntw\no!\nthree");
-        assert_eq!(session.markdown(), "- one\n- tw\n  - under two\n    - deep\n  - also under\n- o!\n- three\n");
+        assert_eq!(unmarked(&session), "- one\n- tw\n  - under two\n    - deep\n  - also under\n- o!\n- three\n");
         shown(&mut view, &session.undo().unwrap());
         assert_eq!(view, "one\ntwo!\nthree");
         // Lines pasted at its end are rows after it.
@@ -1977,7 +2327,7 @@ mod tests {
         let change = session.perform(three..three, Command::DeleteBackward).unwrap();
         shown(&mut view, &change);
         assert_eq!((view.as_str(), change.selection), ("one\ntwo!three", 8..8));
-        assert_eq!(session.markdown(), "- one\n- two!three\n  - under two\n    - deep\n  - also under\n");
+        assert_eq!(unmarked(&session), "- one\n- two!three\n  - under two\n    - deep\n  - also under\n");
     }
 
     #[test]
@@ -2003,10 +2353,10 @@ mod tests {
         let change = session.perform(caret..caret, Command::MoveDown).unwrap();
         shown(&mut view, &change);
         assert_eq!(view, "one\nthree\ntwo");
-        assert_eq!(session.markdown(), "- one\n- three\n- two\n  - under two\n    - deep\n  - also under\n");
+        assert_eq!(session.markdown(), "- one\n- three\n- two <!-- folded -->\n  - under two\n    - deep\n  - also under\n");
         let caret = change.selection.start;
         shown(&mut view, &session.perform(caret..caret, Command::Indent).unwrap());
-        assert_eq!(session.markdown(), "- one\n- three\n  - two\n    - under two\n      - deep\n    - also under\n");
+        assert_eq!(unmarked(&session), "- one\n- three\n  - two\n    - under two\n      - deep\n    - also under\n");
         assert_eq!(view, "one\nthree\ntwo");
         shown(&mut view, &session.perform(caret..caret, Command::Outdent).unwrap());
         shown(&mut view, &session.perform(caret..caret, Command::MoveToTop).unwrap());
@@ -2112,7 +2462,7 @@ mod tests {
             let change = session.move_rows(&rows, before, depth, 0..0)?;
             shown(view, &change);
             assert_eq!(view, session.text());
-            Some(session.markdown())
+            Some(unmarked(session))
         };
         // "three", before "also under": no shallower than that row, no deeper than under the row above.
         let (three, also) = (row(&session, "three"), row(&session, "also under"));

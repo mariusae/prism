@@ -24,6 +24,8 @@ public struct NoteEditorView: UIViewRepresentable {
     var pageExists: (String) -> Bool
     /// What a link's page is shown as called, where the link does not say it.
     var linkLabel: (String) -> String?
+    /// The icon a link's page was given.
+    var linkIcon: (String) -> String?
     var onChange: () -> Void
     var onFocus: (Bool) -> Void
     var onFollow: (EditorLink) -> Void
@@ -40,8 +42,15 @@ public struct NoteEditorView: UIViewRepresentable {
     var onTitle: () -> Void
     /// The rows of the outline that are folded, which the app keeps, and
     /// what it is told when they change: see NoteEditorView.swift.
-    var foldedRows: [EditorFoldedRow]
+    var foldedRows: [EditorFoldedRow]?
     var onFolds: ([EditorFoldedRow]) -> Void
+    /// Asked to show one row of the outline as a note of its own — only
+    /// what is under it: handed the row's name in the note, for the app
+    /// to have this card show it (`NoteEditor.setFocus`), or — `apart` —
+    /// a card of its own. `nil`, and it is not offered.
+    var onZoom: ((_ row: String, _ apart: Bool) -> Void)?
+    /// Asked to show more than the row now shown: the row it is under.
+    var onZoomOut: (() -> Void)?
     /// Takes rows to another note: handed their Markdown, the app asks
     /// where to, puts them there, and then calls what it was handed with
     /// it — which takes them out of this note. `nil`, and "Move to…" is
@@ -63,15 +72,17 @@ public struct NoteEditorView: UIViewRepresentable {
         editor: NoteEditor, theme: EditorTheme, isWriting: Bool, height: Binding<CGFloat>, refresh: Int = 0,
         pageExists: @escaping (String) -> Bool = { _ in true },
         linkLabel: @escaping (String) -> String? = { _ in nil },
+        linkIcon: @escaping (String) -> String? = { _ in nil },
         blockView: @escaping (EditorBlock) -> AnyView? = { _ in nil },
         linkPreview: @escaping (EditorLink) -> AnyView? = { _ in nil },
         lead: EditorLead? = nil, onLead: @escaping () -> Void = {},
         offers: @escaping (BodyCompletion) -> [EditorOffer] = { _ in [] },
         offersTitle: Bool = false, onTitle: @escaping () -> Void = {},
-        foldedRows: [EditorFoldedRow] = [], onFolds: @escaping ([EditorFoldedRow]) -> Void = { _ in },
+        foldedRows: [EditorFoldedRow]? = nil, onFolds: @escaping ([EditorFoldedRow]) -> Void = { _ in },
         onMoveRows: ((_ markdown: String, _ moved: @escaping () -> Void) -> Void)? = nil,
         savePictures: @escaping ([EditorPastedPicture]) -> [String] = { _ in [] },
         isToday: Bool = false,
+        onZoom: ((_ row: String, _ apart: Bool) -> Void)? = nil, onZoomOut: (() -> Void)? = nil,
         onChange: @escaping () -> Void = {}, onFocus: @escaping (Bool) -> Void = { _ in }, onFollow: @escaping (EditorLink) -> Void = { _ in }
     ) {
         self.editor = editor
@@ -81,6 +92,7 @@ public struct NoteEditorView: UIViewRepresentable {
         self.refresh = refresh
         self.pageExists = pageExists
         self.linkLabel = linkLabel
+        self.linkIcon = linkIcon
         self.blockView = blockView
         self.linkPreview = linkPreview
         self.lead = lead
@@ -90,6 +102,8 @@ public struct NoteEditorView: UIViewRepresentable {
         self.onTitle = onTitle
         self.foldedRows = foldedRows
         self.onFolds = onFolds
+        self.onZoom = onZoom
+        self.onZoomOut = onZoomOut
         self.onMoveRows = onMoveRows
         self.savePictures = savePictures
         self.isToday = isToday

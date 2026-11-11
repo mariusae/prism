@@ -68,6 +68,7 @@
 mod assets;
 mod catalog;
 mod links;
+mod pictures;
 pub mod query;
 mod search;
 mod tasks;
@@ -76,6 +77,7 @@ mod times;
 pub use assets::{AssetUse, Assets};
 pub use catalog::{Catalog, NoteRow, Resolved};
 pub use links::{Backlink, Links};
+pub use pictures::Pictures;
 pub use prism_markup::LinkKind;
 pub use query::{QueryOptions, QueryResult, Show};
 pub use search::{Hit, Search};

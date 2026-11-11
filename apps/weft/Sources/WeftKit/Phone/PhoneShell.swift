@@ -164,6 +164,14 @@ struct RiverColumn: View {
             })
             .onScrollPhaseChange { _, phase in byHand = phase == .interacting || phase == .decelerating }
             .onScrollGeometryChange(for: CGFloat.self) { $0.contentOffset.y + $0.contentInsets.top } action: { _, y in follow(y) }
+            // A card closed or folded: what is left is brought into sight, once it has settled.
+            .onChange(of: river.settleTarget?.tick) { _, _ in
+                guard let target = river.settleTarget?.card else { return }
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
+                    guard river.card(target) != nil else { return }
+                    withAnimation(.snappy(duration: 0.24)) { proxy.scrollTo(target) }
+                }
+            }
             .onChange(of: river.scrollTarget?.tick) { _, _ in
                 guard let target = river.scrollTarget?.card else { return }
                 // To the top of what shows — under the clock, not behind it.

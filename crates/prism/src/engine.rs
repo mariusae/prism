@@ -163,6 +163,7 @@ pub struct Engine {
     shared: Arc<Shared>,
     stop: StopHandle,
     index_path: PathBuf,
+    pictures: Mutex<prism_index::Pictures>,
     local: crate::Local,
     auth: Auth,
     remote_url: Option<String>,
@@ -194,6 +195,7 @@ impl Engine {
         let index_path = config.index_path.clone().unwrap_or_else(|| repo.git_dir().join("prism").join("index.sqlite"));
         let indexer = Indexer::open(&index_path, prism_index::standard())?;
         let local = crate::Local::open(index_path.with_file_name("local.sqlite"))?;
+        let pictures = Mutex::new(prism_index::Pictures::open(index_path.with_file_name("pictures.sqlite"))?);
         let remote_url = repo.remote_url(&config.sync.remote);
         let stop = StopHandle::default();
         // The indexing thread's own handle; it leaves git's index to the sync.
@@ -232,6 +234,7 @@ impl Engine {
             shared,
             stop,
             index_path,
+            pictures,
             local,
             auth: config.auth,
             remote_url,
@@ -568,6 +571,40 @@ impl Engine {
     /// search, backlinks, tasks and queries alike.
     pub fn index_showing_private(&self) -> Result<prism_index::rusqlite::Connection> {
         Ok(Indexer::reader_showing_private(&self.index_path)?)
+    }
+
+    // --- What pictures say -------------------------------------------------------
+
+    fn pictures(&self) -> std::sync::MutexGuard<'_, prism_index::Pictures> {
+        self.pictures.lock().unwrap_or_else(|poisoned| poisoned.into_inner())
+    }
+
+    /// The pictures pages show whose words have not been read: at most
+    /// `limit`, as paths in the graph (`assets/receipt.png`). Reading
+    /// them is the app's — it has the device's means for it — and what
+    /// each says is told with [`set_picture_words`](Self::set_picture_words),
+    /// after which it is asked for no more. See [`prism_index::Pictures`].
+    pub fn pictures_unread(&self, limit: usize) -> Result<Vec<String>> {
+        Ok(self.pictures().unread(&self.everything()?, limit)?)
+    }
+
+    /// Keeps the words read in a picture — none, for one without any —
+    /// to find the pages showing it by ([`search`](Self::search)).
+    pub fn set_picture_words(&self, asset: &str, words: &str) -> Result<()> {
+        Ok(self.pictures().read(asset, words)?)
+    }
+
+    /// The words a picture was read to say, once it has been read.
+    pub fn picture_words(&self, asset: &str) -> Result<Option<String>> {
+        Ok(self.pictures().words(asset)?)
+    }
+
+    /// The pages with every word typed, best first — the last word a
+    /// prefix: those that say them, then those showing a picture that
+    /// does. `db` is a connection from [`index`](Self::index), and what
+    /// it may see is what is found.
+    pub fn search(&self, db: &prism_index::rusqlite::Connection, typed: &str, limit: usize) -> Result<Vec<prism_index::Hit>> {
+        Ok(self.pictures().search(db, typed, limit)?)
     }
 
     /// The engine's own view, for what it does to the graph: a rename

@@ -89,6 +89,15 @@ impl Assets {
         Ok(files)
     }
 
+    /// The files in `assets/` that some page shows, sorted — a private
+    /// page counted, whoever asks.
+    pub fn shown(db: &Connection) -> Result<Vec<String>> {
+        let mut statement =
+            db.prepare("SELECT path FROM asset_files WHERE EXISTS (SELECT 1 FROM asset_uses WHERE asset_uses.asset = asset_files.path) ORDER BY path")?;
+        let files = statement.query_map([], |r| r.get(0))?.collect::<rusqlite::Result<_>>()?;
+        Ok(files)
+    }
+
     /// The pages showing an asset, by page, in reading order.
     pub fn used_in(db: &Connection, asset: &str) -> Result<Vec<AssetUse>> {
         let mut statement =

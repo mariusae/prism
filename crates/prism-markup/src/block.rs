@@ -158,6 +158,12 @@ pub struct Block {
     /// an editing [`Session`](crate::Session)'s, which keeps it here so
     /// that a block moved takes its fold with it.
     pub folded: bool,
+    /// What the block is known by, if it was given a name of its own: a
+    /// few letters, written after its first line as a comment
+    /// (`<!-- ^k3f9 -->`). Like `folded` it is an editing
+    /// [`Session`](crate::Session)'s to read and write; held here so
+    /// that a block moved, or written in, keeps its name.
+    pub anchor: Option<String>,
 }
 
 /// A fenced code block's parts.
@@ -180,7 +186,7 @@ pub struct Callout<'a> {
 
 impl Block {
     pub fn new(kind: BlockKind, text: impl Into<String>) -> Block {
-        Block { kind, text: text.into(), children: Vec::new(), layout: Layout::default(), folded: false }
+        Block { kind, text: text.into(), children: Vec::new(), layout: Layout::default(), folded: false, anchor: None }
     }
 
     pub fn paragraph(text: impl Into<String>) -> Block {

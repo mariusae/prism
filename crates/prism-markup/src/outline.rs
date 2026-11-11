@@ -109,6 +109,12 @@ pub fn duplicate(document: &mut Document, path: &[usize]) -> Option<Path> {
     let siblings = document.siblings_mut(path)?;
     let mut copy = siblings.get(index)?.clone();
     copy.layout.gap.clear();
+    // A copy is another block: it has no name until it is given one.
+    fn unnamed(block: &mut Block) {
+        block.anchor = None;
+        block.children.iter_mut().for_each(unnamed);
+    }
+    unnamed(&mut copy);
     siblings.insert(index + 1, copy);
     Some([parent, &[index + 1]].concat())
 }

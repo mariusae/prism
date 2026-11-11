@@ -123,6 +123,14 @@ struct RiverView: View {
             }
             // A query river finds again whenever the graph moves, or it is asked something else.
             .task(id: "\(store.indexRevision)|\(river.query ?? "")|\(river.hidden.count)|\(river.cards.count)") { store.find(for: river) }
+            // A card closed or folded: what is left is brought into sight, once it has settled.
+            .onChange(of: river.settleTarget?.tick) { _, _ in
+                guard let target = river.settleTarget?.card else { return }
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
+                    guard river.card(target) != nil else { return }
+                    withAnimation(.snappy(duration: 0.24)) { proxy.scrollTo(target) }
+                }
+            }
             .onChange(of: river.scrollTarget?.tick) { _, _ in
                 guard let target = river.scrollTarget?.card else { return }
                 DispatchQueue.main.async {

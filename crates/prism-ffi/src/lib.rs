@@ -130,6 +130,23 @@ pub fn spoken_date(text: String, today: String) -> Option<String> {
     prism::markup::spoken(&text, today).map(|when| when.to_string())
 }
 
+/// A day's or a week's page as it is called where it is shown, from
+/// the name its file has: `2025-11-12` is "Nov 12, 2025", `2026-W46`
+/// is "Week 46, 2026". `nil` for a name that is neither's. Links are
+/// still written with the name; this is only how it reads.
+#[uniffi::export]
+pub fn date_title(name: String) -> Option<String> {
+    prism::markup::shown_date(&name)
+}
+
+/// What a page is shown as called: a day's or a week's, by its date as
+/// it is read; any other, as the index has it.
+pub(crate) fn shown_label(path: &str, label: String) -> String {
+    let name = path.rsplit('/').next().unwrap_or(path).trim_end_matches(".md");
+    let dated = path.starts_with("daily/") || path.starts_with("weekly/");
+    dated.then(|| prism::markup::shown_date(name)).flatten().unwrap_or(label)
+}
+
 /// The river a link's target names — `rivers/Work` is `Work` — if any.
 #[uniffi::export]
 pub fn river_name(link_target: String) -> Option<String> {

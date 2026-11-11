@@ -14,7 +14,11 @@
 //! - [[Beta]]
 //! ```
 //!
-//! A card is a link a line. Under it, indented, the rows folded in it:
+//! A card is a link a line. A card that shows only part of its page —
+//! one row of its outline, and what is under it — names the row after
+//! the link: `- [[Alpha]] ^k3f9` (the name the row has in the page, see
+//! [`Session::set_focus`](crate::Session::set_focus)); a page may so
+//! have several cards. Under it, indented, the rows folded in it:
 //! each row's place among the card's rows, and its text. The cards
 //! showing only their titles are the frontmatter's `folded`.
 //!
@@ -96,6 +100,9 @@ pub struct FoldedRow {
 pub struct Card {
     /// The page's title.
     pub title: String,
+    /// The row of the page it shows — that row's name — when it shows
+    /// only what is under one: `None` for a card of the whole page.
+    pub focus: Option<String>,
     /// The rows folded in it.
     pub folded_rows: Vec<FoldedRow>,
     /// For a card placed by hand among what a query finds: where — a
@@ -212,6 +219,8 @@ impl River {
                     card.place = Some((rank, key.to_owned()));
                     river.placed.push(card);
                 } else {
+                    // `- [[Title]] ^row`
+                    card.focus = rest.trim().strip_prefix('^').filter(|name| !name.is_empty() && !name.contains(char::is_whitespace)).map(str::to_owned);
                     river.cards.push(card);
                 }
             }
@@ -272,7 +281,10 @@ impl River {
         let card_lines = |text: &mut String, card: &Card| {
             match &card.place {
                 Some((rank, key)) => text.push_str(&format!("- [[{}]] @ {rank} {key}\n", card.title)),
-                None => text.push_str(&format!("- [[{}]]\n", card.title)),
+                None => match &card.focus {
+                    Some(row) => text.push_str(&format!("- [[{}]] ^{row}\n", card.title)),
+                    None => text.push_str(&format!("- [[{}]]\n", card.title)),
+                },
             }
             for row in &card.folded_rows {
                 text.push_str(&format!("  - {}: {}\n", row.index, escape(&row.text)));
@@ -336,6 +348,16 @@ mod tests {
             assert_eq!(name_of(other).filter(|n| *n != ".md"), None, "{other}");
         }
         assert_eq!((target("Work"), link("Work"), path("Work")), ("rivers/Work".into(), "[[rivers/Work]]".into(), "rivers/Work.md".into()));
+    }
+
+    #[test]
+    fn a_card_may_show_one_row_of_its_page() {
+        const FOCUSED: &str = "- [[Alpha]]\n- [[Alpha]] ^k3f9\n- [[Beta]] ^x_1\n  - 2: A row\n- [[Gamma]] ^\n";
+        let mut river = River::parse(FOCUSED);
+        assert_eq!(river.cards.iter().map(|card| card.focus.as_deref()).collect::<Vec<_>>(), [None, Some("k3f9"), Some("x_1"), None]);
+        assert_eq!(river.to_markdown(), FOCUSED, "read and written back, it is as it was");
+        river.cards[0].focus = Some("top".into());
+        assert_eq!(river.to_markdown(), "- [[Alpha]] ^top\n- [[Alpha]] ^k3f9\n- [[Beta]] ^x_1\n  - 2: A row\n- [[Gamma]]\n");
     }
 
     const PLAIN: &str = "---\nfolded:\n  - Beta\n---\n- [[Alpha]]\n  - 4: Projects\n  - 7: Two\\nlines \\\\ here\n- [[Beta]]\n";

@@ -228,6 +228,7 @@ public struct WeftMacApp: App {
 @MainActor
 enum RiverKeys {
     private static var monitor: Any?
+    private static var flags: Any?
     private static weak var store: GraphStore?
     private static weak var actions: WindowActions?
 
@@ -236,6 +237,14 @@ enum RiverKeys {
         self.actions = actions
         guard monitor == nil else { return }
         monitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { event in handle(event) ? nil : event }
+        // ⌘ held, alone: the tabs say their numbers.
+        flags = NSEvent.addLocalMonitorForEvents(matching: .flagsChanged) { event in
+            CommandKey.shared.changed(event.modifierFlags)
+            return event
+        }
+        NotificationCenter.default.addObserver(forName: NSApplication.didResignActiveNotification, object: nil, queue: .main) { _ in
+            MainActor.assumeIsolated { CommandKey.shared.changed([]) }
+        }
     }
 
     /// Whether a window is one that shows rivers: not the settings, the diagnostics, a popover.
@@ -254,6 +263,18 @@ enum RiverKeys {
             let river = store.river
             if let card = river.writing ?? river.selected, river.card(card) != nil {
                 withAnimation(.snappy(duration: 0.28)) { store.close(card, in: river) }
+                return true
+            }
+        }
+        // ⌘1 to ⌘8: the river at that place among the tabs; ⌘9, the last —
+        // but in a note being written, ⌘9 is the outline's, to fold a row.
+        if pressed == .command, isRiverWindow(window), let digit = event.charactersIgnoringModifiers.flatMap({ Int($0) }), (1...9).contains(digit) {
+            let writing = window.firstResponder is NSText
+            if digit < 9 || !writing {
+                let index = digit == 9 ? store.rivers.count - 1 : digit - 1
+                guard store.rivers.indices.contains(index) else { return digit < 9 }
+                CommandKey.shared.used()
+                withAnimation(.snappy(duration: 0.2)) { store.currentRiver = index }
                 return true
             }
         }
@@ -479,6 +500,34 @@ struct Welcome: View {
                 try? FileManager.default.removeItem(at: folder)
             }
         }
+    }
+}
+/// Whether ⌘ is being held, alone, long enough to be asking what it
+/// can do: when it is, the tabs say the numbers they are chosen by.
+@MainActor
+@Observable
+final class CommandKey {
+    static let shared = CommandKey()
+    private(set) var isHeld = false
+    @ObservationIgnored private var waiting: DispatchWorkItem?
+
+    func changed(_ flags: NSEvent.ModifierFlags) {
+        waiting?.cancel()
+        waiting = nil
+        guard flags.intersection([.command, .option, .control, .shift]) == .command else {
+            if isHeld { isHeld = false }
+            return
+        }
+        // Not at once: ⌘ goes down for every key it is pressed with.
+        let work = DispatchWorkItem { [weak self] in self?.isHeld = true }
+        waiting = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.3, execute: work)
+    }
+
+    /// A key was pressed with it: it was held for that, not to ask.
+    func used() {
+        waiting?.cancel()
+        waiting = nil
     }
 }
 #endif

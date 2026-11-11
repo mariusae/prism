@@ -35,27 +35,28 @@ extension NoteEditorView {
 
         // MARK: Folds
 
-        /// The rows folded, as the app last heard of them — or was last
-        /// heard from.
+        /// The rows folded, as the app last heard of them.
         private var knownFolds: [EditorFoldedRow] = []
-        /// What the app was told of the folds and has yet to say back:
-        /// said back, it is no news.
-        private var toldFolds: [[EditorFoldedRow]] = []
 
-        /// Folds the rows the app says are folded. Says whether what the
-        /// note shows changed, and so must be shown again. An app that
-        /// only now says back what it was told a moment ago — the rows
-        /// folded since, the words typed since — is not obeyed: the note
-        /// is ahead of it.
+        /// Which rows are folded is the note's own to remember, written
+        /// in its file; an app that says nothing of them (`nil`) leaves
+        /// them as the note has them. One that still holds folds from
+        /// before notes kept their own hands them over: they are folded
+        /// with the note's, and the app is told (`onFolds`) they were
+        /// taken. Says whether what the note shows changed, and so must
+        /// be shown again.
         func takeFolds(anew: Bool) -> Bool {
-            let rows = parent.foldedRows
-            if !anew, let echo = toldFolds.firstIndex(of: rows) {
-                toldFolds.removeFirst(echo + 1)
+            guard let rows = parent.foldedRows, !rows.isEmpty else {
+                knownFolds = editor.foldedRows()
                 return false
             }
-            toldFolds.removeAll()
-            let changed = editor.setFoldedRows(rows: rows)
+            let changed = editor.setFoldedRows(rows: editor.foldedRows() + rows)
             knownFolds = editor.foldedRows()
+            DispatchQueue.main.async { [weak self] in
+                guard let self else { return }
+                self.parent.onFolds(self.knownFolds)
+                if changed { self.parent.onChange() }
+            }
             return changed
         }
 
@@ -65,8 +66,6 @@ extension NoteEditorView {
             let now = editor.foldedRows()
             guard now != knownFolds else { return }
             knownFolds = now
-            toldFolds.append(now)
-            if toldFolds.count > 16 { toldFolds.removeFirst() }
             parent.onFolds(now)
         }
 
@@ -88,7 +87,7 @@ extension NoteEditorView {
         /// Dresses the text again, as the editor reads it.
         func restyle() {
             guard let view, let storage = view.noteStorage, let manager = view.noteLayout as? BodyLayoutManager else { return }
-            let styler = BodyStyler(theme: parent.theme, pageExists: parent.pageExists, linkLabel: parent.linkLabel)
+            let styler = BodyStyler(theme: parent.theme, pageExists: parent.pageExists, linkLabel: parent.linkLabel, linkIcon: parent.linkIcon)
             layout = editor.layout()
             let writing = view.isWriting
             revealed = writing ? BodyStyler.revealed(layout, selection: view.caret) : []
@@ -218,10 +217,13 @@ extension NoteEditorView {
             guard let manager = view.noteLayout, let container = view.noteContainer else { return [] }
             var replaced = Set<Int>()
             var used = Set<String>()
-            var placed: [(host: BlockHost, range: NSRange)] = []
+            var placed: [(host: BlockHost, range: NSRange, indent: CGFloat)] = []
             let width = max(view.bounds.width - view.sideInset * 2, 120)
             for (index, found) in blocks(in: storage.string as NSString).enumerated() {
                 var block = found.block
+                // A block in a row stands in from the margin as the row's words do.
+                let indent = found.range.location < storage.length ? ((storage.attribute(.paragraphStyle, at: found.range.location, effectiveRange: nil) as? NSParagraphStyle)?.headIndent ?? 0) : 0
+                let width = max(width - indent, 120)
                 block.room = width
                 block.resized = { [weak self] in self?.restyle() }
                 guard !found.lines.contains(where: revealed.contains), let content = parent.blockView(block) else { continue }
@@ -246,7 +248,7 @@ extension NoteEditorView {
                 let text = storage.string as NSString
                 let final = text.paragraphRange(for: NSRange(location: NSMaxRange(found.range), length: 0))
                 storage.addAttribute(.paragraphStyle, value: last, range: final.length > 0 ? final : found.range)
-                placed.append((host, found.range))
+                placed.append((host, found.range, indent))
             }
             for (key, host) in hosts where !used.contains(key) {
                 host.remove()
@@ -258,10 +260,10 @@ extension NoteEditorView {
             }
             manager.ensureLayout(for: container)
             var bottom: CGFloat = 0
-            for (host, range) in placed {
+            for (host, range, indent) in placed {
                 let glyph = manager.glyphIndexForCharacter(at: max(NSMaxRange(range) - 1, range.location))
                 let line = manager.lineFragmentUsedRect(forGlyphAt: glyph, effectiveRange: nil)
-                host.move(to: CGPoint(x: view.containerOrigin.x, y: view.containerOrigin.y + line.maxY + 4))
+                host.move(to: CGPoint(x: view.containerOrigin.x + indent, y: view.containerOrigin.y + line.maxY + 4))
                 bottom = max(bottom, host.bottom)
             }
             view.blocksBottom = bottom
@@ -325,14 +327,22 @@ extension NoteEditorView {
             }
             let typed = now.substring(with: NSRange(location: prefix, length: now.length - prefix - suffix))
             let edit = editor.replace(start: UInt32(prefix), end: UInt32(was.length - suffix), replacement: typed)
-            settle(edit)
+            settle(edit, typed: true)
         }
 
         /// After the editor took a change: the view is made to show what
         /// the editor now does, which is usually what it already shows.
-        func settle(_ edit: BodyEdit?) {
+        ///
+        /// `typed`: the change was the view's own. Then, where the editor
+        /// made no more of it, the caret is left where the view has it —
+        /// which is not always at the change's end: a word set right by
+        /// the keyboard, after the space that followed it, is changed
+        /// behind the caret, and the caret is not to go back to it.
+        func settle(_ edit: BodyEdit?, typed: Bool = false) {
             guard let view, let storage = view.noteStorage else { return }
             let text = editor.text()
+            var edit = edit
+            if typed, storage.string == text { edit = nil }
             if storage.string != text {
                 // The editor made more of it than was typed — `- ` became a bullet.
                 isApplying = true
@@ -372,6 +382,32 @@ extension NoteEditorView {
             guard let view, !layout.markersInText else { return nil }
             let caret = view.caret.location
             return layout.lines.lastIndex { Int($0.start) <= caret }
+        }
+
+        /// Whether a row of the outline is a list's: one that can have rows under it.
+        func isListRow(_ row: Int) -> Bool {
+            guard !layout.markersInText, layout.lines.indices.contains(row), case .item = layout.lines[row].kind else { return false }
+            return true
+        }
+
+        /// Asks the app to show a row — the caret's, if none is said — as a
+        /// note of its own: in this card, or (`apart`) in one of its own.
+        /// The row is given a name for it, if it had none, which is a
+        /// change to the note. Says whether it was asked: not for a row
+        /// that is no list's, nor of an app that shows no such thing.
+        @discardableResult
+        func zoom(row: Int? = nil, apart: Bool) -> Bool {
+            guard let ask = parent.onZoom, let view, !view.isComposing, let row = row ?? caretRow, let name = editor.rowName(row: UInt32(row)) else { return false }
+            parent.onChange()
+            ask(name, apart)
+            return true
+        }
+
+        /// Rows of the outline as they are written: their bullets and boxes with them.
+        func markdown(ofRows rows: [Int]) -> String? {
+            guard !rows.isEmpty else { return nil }
+            let written = editor.markdownOf(rows: rows.map { UInt32($0) })
+            return written.isEmpty ? nil : written
         }
 
         /// Carries out a command on some rows of an outline — lines of

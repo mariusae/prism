@@ -425,14 +425,36 @@ has that text, else the block with that text nearest to where the path
 would stand, one at the same depth first. `Engine::set_task(path, block,
 text, done)` is built on it.
 
-**A fold is not part of the note.** An outline can show a block without
-what is under it; which blocks are folded is kept by whoever shows the
-note — a river keeps it per card ([§11](#11-saved-rivers)) — and handed
-to the editing `Session`, which holds it on the tree while the note is
-open (`Block::folded`, never written, never set by reading) so that a
-block moved takes its fold with it. `Session::folded_rows` and
-`set_folded_rows` give and take folds as a river keeps them: a row's
-index among all the body's rows, and its text.
+**A fold is the note's own.** An outline can show a block without what
+is under it, and which blocks are folded is written in the note: a
+folded block's first line ends with the comment `<!-- folded -->`
+(`session::FOLDED`), which nothing shows. So a note is folded the same
+in every river and on every device, and a fold syncs and merges as any
+other edit does. The editing `Session` reads the marks into the tree
+(`Block::folded`) and out of the blocks' text — they are no part of
+what is typed, searched or shown — and writes them back for each folded
+block that still has blocks under it; a mark on a block with nothing
+under it is dropped. The block parser itself knows nothing of them: to
+anything but a session, a mark is a comment. `Session::folded_rows` and
+`set_folded_rows` give and take folds by a row's index among all the
+body's rows and its text — how rivers kept them before notes did, and
+how an app hands those over.
+
+**A row can have a name, and a view can show one row alone.** A list
+item is given a name when something needs to find it again: a few
+letters, written like a fold after its first line, `- Budget <!-- ^k3f9
+-->` (`Block::anchor`; with a fold, the name comes first). Names are read
+and written by the `Session` exactly as folds are, are no part of a
+row's words, survive the row being rewritten, moved or merged, and are
+not copied with it. `Session::anchor_row` names a row;
+`Session::set_focus(name)` then **focuses** the session on it: it shows
+and edits only the rows under that row, the first at the margin, as a
+note of their own — `focus_title`, `focus_trail` (the rows it is under)
+and `focus_out` (the name of one of those, to show more) describe where
+it is — while `markdown()` is still the whole file. Focus is a view's,
+not the note's: nothing in the note says what is focused on, only what
+each row is called. A river's card remembers it ([§11](#11-saved-rivers)),
+so a page can stand in a river as several cards, each one of its rows.
 
 **A time block is a list item that starts with a time**: `9:00–10:30
 Deep work`, `11am Standup`. A list whose every item starts so — two or
@@ -558,6 +580,11 @@ sort: -modified
 - [[Kept Here]] @ 1000 2026-11-03T10:00:00.000Z
 ````
 
+A card that shows only one row of its page names the row after the
+link — `- [[Atlas]] ^k3f9`, the name the row has in the page ([§8](#8-the-body-blocks))
+— and a page may have several cards so, each of a row of its own. The
+link is the page's as in any card, so a rename rewrites it the same.
+
 ```text
 River
 ├── cards: Vec<Card>      held by hand, in order
@@ -567,7 +594,7 @@ River
 ├── icon, color, place    how and where it shows among the rivers
 └── source                the file it was read from
 
-Card { title, folded_rows: [(index, text)], place: Option<(rank, sort key)> }
+Card { title, focus: Option<row name>, folded_rows: [(index, text)], place: Option<(rank, sort key)> }
 ```
 
 **A river's file is Markdown, and its cards are links.** That is the
@@ -824,6 +851,29 @@ Asks: `all`, `used_in` (the pages showing an asset), `shown_in` (the
 assets a page shows), `unused` (files nothing shows — private pages
 counted, whoever asks: a file only a private page shows is not one to
 clear out), `missing` (pictures shown that are not there).
+
+### Pictures' words — beside the indices
+
+```sql
+-- pictures.sqlite, next to the index database
+picture_words  (asset PRIMARY KEY, words)   -- every picture read; '' for one without words
+picture_search USING fts5(asset UNINDEXED, words)
+```
+
+What a picture says — a screenshot's text, a receipt's — is not in the
+graph's files, and the core cannot read it: an app does, with what its
+device has for it (Vision, on Apple's), and tells the engine.
+`Engine::pictures_unread(limit)` lists the pictures pages show that
+have not been read; `set_picture_words(asset, words)` keeps what one
+said. `Engine::search` then finds, after the pages that say the words
+typed, the pages showing a picture that says them, with the picture's
+words as the snippet. Private pages' pictures are as private as they
+are: a picture's words find only the pages the asking connection sees.
+
+This is a database of its own because the indices are rebuilt from the
+graph whenever they must be, and reading pictures is too slow to repeat.
+It is derived all the same — never synced; each device reads its own.
+A picture is known by its path, and read once.
 
 ### `times`
 

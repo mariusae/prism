@@ -43,7 +43,7 @@ struct PhoneCard: View {
         self.card = card
         _draft = State(initialValue: store.draft(path: card.path, title: card.title))
         // As it was when last seen: its height, and what stood at its foot.
-        _bodyHeight = State(initialValue: store.cardHeights[card.path] ?? 24)
+        _bodyHeight = State(initialValue: store.cardHeights[card.spot] ?? 24)
         if let foot = store.cardFeet[Self.footKey(card, in: river)] as? Foot {
             _backlinks = State(initialValue: foot.backlinks)
             _tags = State(initialValue: foot.tags)
@@ -68,7 +68,117 @@ struct PhoneCard: View {
     private var isWriting: Bool { river.writing == card.id }
     private var isDay: Bool { card.path.hasPrefix("daily/") || card.path.hasPrefix("weekly/") }
     private var isUntitled: Bool { !isDay && draft.isUntitled }
-    private var showsHeader: Bool { !isUntitled || isRenaming }
+    private var showsHeader: Bool { card.focus != nil || !isUntitled || isRenaming }
+
+    // MARK: A row, shown as a note of its own
+
+    /// The note as this card writes in it, when it shows only one row of it.
+    private var focused: NoteEditor? { card.focus.flatMap { draft.view(for: card.id, focus: $0) } }
+
+    /// The way to the row shown, from the note's top: the note, then
+    /// each row it is under. Each, tapped, is shown in its place.
+    private func trail(_ view: NoteEditor) -> some View {
+        let over = view.focusTrail()
+        return ScrollView(.horizontal, showsIndicators: false) {
+            HStack(spacing: 5) {
+                Button { widen(view, to: 0, of: over.count) } label: {
+                    HStack(spacing: 3) {
+                        if emblem.isShown { EmblemView(emblem, size: 12, style: .plain, quiet: Color.inkSecondary) }
+                        Text(emblem.caption(draft.label)).lineLimit(1)
+                    }
+                }
+                ForEach(Array(over.enumerated()), id: \.offset) { index, crumb in
+                    Image(systemName: "chevron.right").font(.system(size: 9, weight: .semibold)).foregroundStyle(Color.inkFaint)
+                    Button(crumb.isEmpty ? "…" : Days.shown(crumb)) { widen(view, to: index + 1, of: over.count) }.lineLimit(1)
+                }
+            }
+            .buttonStyle(.plain)
+            .font(.system(size: 13, design: TextSettings.design))
+            .foregroundStyle(Color.inkSecondary)
+            .padding(.vertical, 4)
+        }
+    }
+
+    private func focusLabel(_ view: NoteEditor) -> String {
+        let _ = draft.revision
+        // A row that is a link — a day's, say — is titled as the link reads.
+        let label = store.titled(view.focusLabel() ?? "", written: view.focusTitle() ?? "")
+        return label.isEmpty ? "Untitled" : label
+    }
+
+    private func focusHeader(_ view: NoteEditor) -> some View {
+        VStack(alignment: .leading, spacing: 2) {
+            trail(view)
+            if isRenaming {
+                TextField("Row", text: $newTitle)
+                    .font(titleFont)
+                    .focused($titleFocused)
+                    .submitLabel(.done)
+                    .onSubmit { finishRenaming() }
+                    .onChange(of: titleFocused) { _, focused in if !focused { finishRenaming() } }
+            } else {
+                Text(focusLabel(view))
+                    .font(titleFont)
+                    .foregroundStyle(Color.inkText)
+                    .lineLimit(2)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .contentShape(Rectangle())
+                    .onTapGesture(count: 2) { startRenaming() }
+                    .onTapGesture { fold() }
+            }
+        }
+    }
+
+    private func focusPeek(_ view: NoteEditor) -> some View {
+        Text("\(Text(focusLabel(view)).bold().foregroundStyle(Color.inkText))  \(Text(([draft.label] + view.focusTrail().map(Days.shown)).joined(separator: " › ")).foregroundStyle(Color.inkSecondary))")
+            .font(.system(size: TextSettings.size, design: TextSettings.design))
+            .lineLimit(2)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .contentShape(Rectangle())
+            .onTapGesture { fold() }
+    }
+
+    private func focusDrawer(_ view: NoteEditor) -> some View {
+        HStack(spacing: 0) {
+            drawerButton("arrow.down.right.and.arrow.up.left.circle", "Fold") { fold() }
+            drawerButton("arrow.up.left.circle", "Show the Row Above") { widen(view) }
+            drawerButton("arrow.up.left.and.arrow.down.right.circle", "Show the Whole Note") { widen(view, to: 0, of: 0) }
+            drawerButton("xmark.circle", "Close") { withAnimation(.snappy(duration: 0.28)) { store.close(card.id, in: river) } }
+        }
+        .foregroundStyle(.white)
+        .padding(.horizontal, 6)
+        .frame(height: 46)
+        .background(Capsule().fill(Color(Ink.pair(0x6189E0, 0x4B6BB5))))
+        .padding(.top, 12)
+        .padding(.horizontal, 24)
+    }
+
+    /// Shows more than the row shown: the row at a place on the way to
+    /// it — `0` the whole note, `count` the row right over it.
+    private func widen(_ view: NoteEditor, to place: Int, of count: Int) {
+        var name: String?
+        if place > 0 {
+            name = view.focusOut(levels: UInt32(count - place + 1))
+            // The row over it may have been named just now: that is the note's to keep.
+            draft.changed(from: card.id)
+        }
+        withAnimation(.snappy(duration: 0.22)) { river.setFocus(card.id, name) }
+        store.rememberRivers()
+    }
+
+    /// One row out; from the outermost, the whole note.
+    private func widen(_ view: NoteEditor) {
+        let count = view.focusTrail().count
+        widen(view, to: count, of: count)
+    }
+
+    /// Shows a row of what is shown as a note of its own: here, or in a card after this one.
+    private func zoom(_ name: String, apart: Bool) {
+        withAnimation(.snappy(duration: 0.24)) {
+            if apart { river.openFocus(name, of: card.id) } else { river.setFocus(card.id, name) }
+        }
+        store.rememberRivers()
+    }
     private var showsDrawer: Bool { isSelected && !card.folded }
     /// Its icon — or, holding a checklist and given none, how far along that is.
     private var emblem: Emblem {
@@ -82,12 +192,20 @@ struct PhoneCard: View {
         let _ = bodyHeight
         VStack(alignment: .leading, spacing: 0) {
             VStack(alignment: .leading, spacing: card.folded ? 0 : Measures.partGap) {
-                if card.folded {
+                if let focused {
+                    // One row of the note, as a note of its own: the way to it, its words, and what is under it.
+                    if card.folded {
+                        focusPeek(focused)
+                    } else {
+                        focusHeader(focused)
+                        editor(focused, isFocus: true)
+                    }
+                } else if card.folded {
                     peek
                 } else {
                     if showsHeader { header }
                     if draft.isConflicted { conflict }
-                    editor
+                    editor(draft.editor, isFocus: false)
                     if !tags.isEmpty || !backlinks.isEmpty { foot }
                 }
             }
@@ -105,13 +223,22 @@ struct PhoneCard: View {
             .contentShape(Rectangle())
             .simultaneousGesture(TapGesture().onEnded { river.selected = card.id })
             .modifier(CardSwipe(leading: leadingActions, trailing: trailingActions, enabled: !isWriting && !isRenaming))
-            if showsDrawer {
+            if showsDrawer, let focused {
+                focusDrawer(focused).transition(.scale(scale: 0.5, anchor: .top).combined(with: .opacity))
+            } else if showsDrawer {
                 drawer.transition(.scale(scale: 0.5, anchor: .top).combined(with: .opacity))
             }
         }
         .animation(.spring(response: 0.34, dampingFraction: 0.82), value: showsDrawer)
         .task(id: store.indexRevision) { refresh() }
-        .onChange(of: bodyHeight) { _, height in store.cardHeights[card.path] = height }
+        .onChange(of: bodyHeight) { _, height in store.cardHeights[card.spot] = height }
+        // The row it showed is in the note no more: it shows the note.
+        .task(id: "\(card.focus ?? "")|\(draft.revision)") {
+            if let focus = card.focus, draft.view(for: card.id, focus: focus) == nil {
+                river.setFocus(card.id, nil)
+                store.rememberRivers()
+            }
+        }
         .fullScreenCover(item: $linkShown) { link in
             BottomCard { PhoneLinkSheet(link: link, draft: draft) }
         }
@@ -179,7 +306,7 @@ struct PhoneCard: View {
             } else {
                 HStack(alignment: .firstTextBaseline, spacing: TextSettings.titleSize * 0.3) {
                     lead(size: TextSettings.titleSize)
-                    Text(emblem.caption(draft.title))
+                    Text(emblem.caption(isDay ? draft.label : draft.title))
                         .font(titleFont)
                         .italic(!draft.exists)
                         .strikethrough(draft.task == .done, color: Color.inkSecondary)
@@ -197,20 +324,21 @@ struct PhoneCard: View {
         }
     }
 
-    private var editor: some View {
+    private func editor(_ shown: NoteEditor, isFocus: Bool) -> some View {
         ZStack(alignment: .topLeading) {
-            if draft.isBlank, !isWriting {
-                Text(isDay ? "Nothing written on this day yet." : (draft.exists ? "Write here." : "No note has this title yet. Write here to make it."))
+            if isFocus ? shown.text().isEmpty : draft.isBlank, !isWriting {
+                Text(isFocus ? "Nothing under this row yet. Write here." : isDay ? "Nothing written on this day yet." : (draft.exists ? "Write here." : "No note has this title yet. Write here to make it."))
                     .font(.system(size: TextSettings.size, design: TextSettings.design))
                     .foregroundStyle(Color.inkFaint)
                     .padding(.top, 2)
                     .allowsHitTesting(false)
             }
             NoteEditorView(
-                editor: draft.editor, theme: Ink.editorTheme, isWriting: isWriting, height: $bodyHeight,
+                editor: shown, theme: Ink.editorTheme, isWriting: isWriting, height: $bodyHeight,
                 refresh: store.indexRevision,
                 pageExists: { name in store.leadsSomewhere(name) },
                     linkLabel: { name in store.linkLabel(name) },
+                    linkIcon: { name in store.linkIcon(name) },
                 blockView: { block in
                     // One picture, or several side by side: a carousel.
                     if block.info == EditorBlock.picture, let line = PictureLine(line: block.source) {
@@ -221,19 +349,23 @@ struct PhoneCard: View {
                         withAnimation(.snappy(duration: 0.28)) { store.open(page: page, after: card.id) }
                     })
                 },
-                lead: editorLead, onLead: { leadTapped() },
+                lead: isFocus ? nil : editorLead, onLead: { leadTapped() },
                 offers: { found in store.linkOffers(found.typed, this: card.path) },
-                offersTitle: isUntitled, onTitle: { withAnimation(.snappy(duration: 0.22)) { _ = draft.titleByFirstLine() } },
-                    // Which rows are folded is this river's to remember, card by card.
-                    foldedRows: card.foldedRows,
-                    onFolds: { rows in
-                        river.setFolds(card.id, rows)
+                offersTitle: !isFocus && isUntitled, onTitle: { withAnimation(.snappy(duration: 0.22)) { _ = draft.titleByFirstLine() } },
+                    // Which rows are folded is the note's own to remember. What a river
+                    // remembered of them, before notes did, is handed over once.
+                    foldedRows: isFocus || card.folds == nil ? nil : card.foldedRows,
+                    onFolds: { _ in
+                        guard river.card(card.id)?.folds != nil else { return }
+                        river.setFolds(card.id, [])
                         store.rememberRiversSoon()
                     },
                     onMoveRows: { markdown, moved in store.movingRows = GraphStore.MovingRows(markdown: markdown, from: card.path, moved: moved) },
                     savePictures: { pictures in pictures.compactMap { store.savePicture(data: $0.data, fileExtension: $0.fileExtension) } },
                     isToday: card.path == "daily/\(Days.name(Date())).md",
-                onChange: { draft.changed() },
+                onZoom: { name, apart in zoom(name, apart: apart) },
+                onZoomOut: isFocus ? { widen(shown) } : nil,
+                onChange: { if isFocus { draft.changed(from: card.id) } else { draft.changed() } },
                 onFocus: { focused in
                     if focused {
                         river.selected = card.id
@@ -246,7 +378,7 @@ struct PhoneCard: View {
                 onFollow: { follow($0) }
             )
             .fixedSize(horizontal: false, vertical: true)
-            .id(draft.mode)
+            .id(isFocus ? "focus" : "\(draft.mode)")
             .opacity(draft.task == .done ? 0.5 : 1)
         }
     }
@@ -514,7 +646,7 @@ struct PhoneCard: View {
 
     private func startRenaming() {
         if card.folded { river.toggleFold(card.id) }
-        newTitle = isUntitled ? "" : draft.title
+        newTitle = focused?.focusTitle() ?? (isUntitled ? "" : draft.title)
         isRenaming = true
         titleFocused = true
     }
@@ -522,6 +654,11 @@ struct PhoneCard: View {
     private func finishRenaming() {
         guard isRenaming else { return }
         isRenaming = false
+        if let focused {
+            // The row shown is rewritten, in the note.
+            focused.setFocusTitle(title: newTitle)
+            return draft.changed(from: card.id)
+        }
         // An untitled note's field, left empty and submitted, takes its first line.
         if isUntitled, newTitle.trimmingCharacters(in: .whitespaces).isEmpty { return }
         draft.rename(to: newTitle)

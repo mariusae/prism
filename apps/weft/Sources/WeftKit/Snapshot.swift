@@ -61,7 +61,8 @@ enum Snapshot {
         guard let path else { return }
         let environment = ProcessInfo.processInfo.environment
         let names = { (key: String) in (environment[key] ?? "").split(separator: "|").map(String.init) }
-        store.river.cards.removeAll()
+        // WEFT_SAVED=Work: that saved river, shown as its file has it; else a river with nothing in it yet.
+        if let saved = environment["WEFT_SAVED"] { store.openSaved(saved) } else { store.river.cards.removeAll() }
         for name in names("WEFT_OPEN").reversed() { store.open(name: name) }
         for name in names("WEFT_FOLD") {
             if let card = store.river.cards.first(where: { $0.title == name }) { store.river.toggleFold(card.id) }
@@ -114,7 +115,20 @@ enum Snapshot {
         window.setFrame(frame, display: false)
         window.layoutIfNeeded()
         self.window = window
+        // WEFT_NUMBERS: as with ⌘ held — the tabs say their numbers.
+        if environment["WEFT_NUMBERS"] != nil { CommandKey.shared.changed(.command) }
         if let select = environment["WEFT_SELECT"], let card = store.river.cards.first(where: { $0.title == select }) { store.river.selected = card.id }
+        // WEFT_READ_PICTURES: the pictures' words read first, as the app reads them in its own time.
+        if environment["WEFT_READ_PICTURES"] != nil {
+            let (engine, root) = (store.engine, store.root)
+            let done = DispatchSemaphore(value: 0)
+            Task.detached {
+                let count = await PictureWords.readAll(engine: engine, root: root)
+                FileHandle.standardError.write("read \(count) pictures\n".data(using: .utf8)!)
+                done.signal()
+            }
+            done.wait()
+        }
         if let typed = environment["WEFT_QUICK_OPEN"] {
             DispatchQueue.main.async {
                 actions.typed = typed == "1" ? "" : typed
@@ -130,6 +144,25 @@ enum Snapshot {
         DispatchQueue.main.asyncAfter(deadline: .now() + delay) {
             if let typed = environment["WEFT_TYPE"], let view = window.firstResponder as? NSTextView {
                 view.insertText(typed.replacingOccurrences(of: "\\n", with: "\n"), replacementRange: view.selectedRange())
+            }
+            // WEFT_KEYS="cancelOperation:|moveUpAndModifySelection:": those commands, as their keys give them.
+            if let view = window.firstResponder as? NSTextView {
+                for key in names("WEFT_KEYS") {
+                    // "cmd+]", "cmd+shift+]": a key held with ⌘, as the keyboard sends it; else a command by its name.
+                    let now = window.firstResponder as? NSTextView ?? view
+                    guard key.hasPrefix("cmd+") else {
+                        now.doCommand(by: Selector(key))
+                        continue
+                    }
+                    let shifted = key.hasPrefix("cmd+shift+")
+                    let character = String(key.suffix(1))
+                    if let event = NSEvent.keyEvent(
+                        with: .keyDown, location: .zero, modifierFlags: shifted ? [.command, .shift] : [.command], timestamp: 0, windowNumber: window.windowNumber, context: nil,
+                        characters: character, charactersIgnoringModifiers: character, isARepeat: false, keyCode: 0
+                    ) {
+                        _ = now.performKeyEquivalent(with: event)
+                    }
+                }
             }
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.8) {
                 guard let view = window.contentView?.superview ?? window.contentView, let bitmap = view.bitmapImageRepForCachingDisplay(in: view.bounds) else { exit(3) }

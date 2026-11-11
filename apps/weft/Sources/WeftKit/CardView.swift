@@ -31,7 +31,7 @@ struct CardView: View {
         self.card = card
         _draft = State(initialValue: store.draft(path: card.path, title: card.title))
         // As it was when last seen: its height, and what stood at its foot.
-        _bodyHeight = State(initialValue: store.cardHeights[card.path] ?? 24)
+        _bodyHeight = State(initialValue: store.cardHeights[card.spot] ?? 24)
         if let foot = store.cardFeet[Self.footKey(card, in: river)] as? Foot {
             _backlinks = State(initialValue: foot.backlinks)
             _tags = State(initialValue: foot.tags)
@@ -59,12 +59,20 @@ struct CardView: View {
         // Read, so that the card is laid out again when the text's height changes.
         let _ = bodyHeight
         VStack(alignment: .leading, spacing: card.folded ? 0 : Measures.partGap) {
-            if card.folded {
+            if let focused {
+                // One row of the note, as a note of its own: the way to it, its words, and what is under it.
+                if card.folded {
+                    focusPeek(focused)
+                } else {
+                    focusHeader(focused)
+                    editor(focused, isFocus: true)
+                }
+            } else if card.folded {
                 peek
             } else {
                 if showsHeader { header }
                 if draft.isConflicted { conflict }
-                editor
+                editor(draft.editor, isFocus: false)
                 if !tags.isEmpty || !backlinks.isEmpty { foot }
             }
         }
@@ -118,7 +126,14 @@ struct CardView: View {
         .onHover { isHovered = $0 }
         .contextMenu { menu }
         .task(id: store.indexRevision) { refresh() }
-        .onChange(of: bodyHeight) { _, height in store.cardHeights[card.path] = height }
+        .onChange(of: bodyHeight) { _, height in store.cardHeights[card.spot] = height }
+        // The row it showed is in the note no more: it shows the note.
+        .task(id: "\(card.focus ?? "")|\(draft.revision)") {
+            if let focus = card.focus, draft.view(for: card.id, focus: focus) == nil {
+                river.setFocus(card.id, nil)
+                store.rememberRivers()
+            }
+        }
     }
 
     private struct Source: Hashable {
@@ -200,7 +215,130 @@ struct CardView: View {
 
     /// Whether the card has no title to show: a note never given one.
     private var isUntitled: Bool { !isDay && draft.isUntitled }
-    private var showsHeader: Bool { !isUntitled || isRenaming }
+    private var showsHeader: Bool { card.focus != nil || !isUntitled || isRenaming }
+
+    // MARK: A row, shown as a note of its own
+
+    /// The note as this card writes in it, when it shows only one row of it.
+    private var focused: NoteEditor? { card.focus.flatMap { draft.view(for: card.id, focus: $0) } }
+
+    /// The way to the row shown, from the note's top: the note, then
+    /// each row it is under. Each, clicked, is shown in its place.
+    private func trail(_ view: NoteEditor) -> some View {
+        let over = view.focusTrail()
+        return HStack(spacing: 4) {
+            Button { widen(view, to: 0, of: over.count) } label: {
+                HStack(spacing: 3) {
+                    if emblem.isShown { EmblemView(emblem, size: 11, style: .plain, quiet: Color.inkSecondary) }
+                    Text(emblem.caption(draft.label)).lineLimit(1)
+                }
+            }
+            .buttonStyle(.plain)
+            .help("Show the Whole Note")
+            ForEach(Array(over.enumerated()), id: \.offset) { index, crumb in
+                Image(systemName: "chevron.right").font(.system(size: 8, weight: .semibold)).foregroundStyle(Color.inkFaint)
+                Button(crumb.isEmpty ? "…" : Days.shown(crumb)) { widen(view, to: index + 1, of: over.count) }
+                    .buttonStyle(.plain)
+                    .lineLimit(1)
+                    .frame(maxWidth: 220, alignment: .leading)
+                    .fixedSize(horizontal: true, vertical: false)
+            }
+        }
+        .font(.system(size: 11.5, design: TextSettings.design))
+        .foregroundStyle(Color.inkSecondary)
+        .pointerStyle(.link)
+    }
+
+    private func focusHeader(_ view: NoteEditor) -> some View {
+        row {
+            VStack(alignment: .leading, spacing: 1) {
+                HStack(alignment: .center, spacing: 10) {
+                    trail(view)
+                    Spacer(minLength: 8)
+                    focusActions(view)
+                }
+                .frame(minHeight: 24)
+                if isRenaming {
+                    TextField("Row", text: $newTitle)
+                        .textFieldStyle(.plain)
+                        .font(titleFont)
+                        .focused($titleFocused)
+                        .onSubmit { finishRenaming() }
+                        .onExitCommand { isRenaming = false }
+                        .onChange(of: titleFocused) { _, focused in if !focused { finishRenaming() } }
+                } else {
+                    Text(focusLabel(view))
+                        .font(titleFont)
+                        .foregroundStyle(Color.inkText)
+                        .lineLimit(2)
+                        .onTapGesture(count: 2) { startRenaming() }
+                        .onTapGesture { fold() }
+                        .help("Click to fold, double-click to rewrite")
+                }
+            }
+        }
+    }
+
+    private func focusLabel(_ view: NoteEditor) -> String {
+        let _ = draft.revision
+        // A row that is a link — a day's, say — is titled as the link reads.
+        let label = store.titled(view.focusLabel() ?? "", written: view.focusTitle() ?? "")
+        return label.isEmpty ? "Untitled" : label
+    }
+
+    private func focusPeek(_ view: NoteEditor) -> some View {
+        row {
+            HStack(alignment: .firstTextBaseline, spacing: 8) {
+                Text("\(Text(focusLabel(view)).bold().foregroundStyle(Color.inkText))  \(Text(([draft.label] + view.focusTrail().map(Days.shown)).joined(separator: " › ")).foregroundStyle(Color.inkSecondary))")
+                    .font(.system(size: TextSettings.size, design: TextSettings.design))
+                    .lineLimit(2)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .contentShape(Rectangle())
+                    .onTapGesture { fold() }
+                focusActions(view)
+            }
+        }
+    }
+
+    private func focusActions(_ view: NoteEditor) -> some View {
+        HStack(spacing: 1) {
+            if !card.folded {
+                CardButton("arrow.up.left", help: "Show the Row Above (⌘[)") { widen(view) }
+                CardButton("arrow.up.left.and.arrow.down.right", help: "Show the Whole Note") { widen(view, to: 0, of: 0) }
+            }
+            CardButton("xmark", help: "Close (⌘W)") { withAnimation(.snappy(duration: 0.28)) { close() } }
+        }
+        .opacity(showsActions ? 1 : 0)
+        .animation(.easeOut(duration: 0.12), value: showsActions)
+        .allowsHitTesting(showsActions)
+    }
+
+    /// Shows more than the row shown: the row at a place on the way to
+    /// it — `0` the whole note, `count` the row right over it.
+    private func widen(_ view: NoteEditor, to place: Int, of count: Int) {
+        var name: String?
+        if place > 0 {
+            name = view.focusOut(levels: UInt32(count - place + 1))
+            // The row over it may have been named just now: that is the note's to keep.
+            draft.changed(from: card.id)
+        }
+        withAnimation(.snappy(duration: 0.22)) { river.setFocus(card.id, name) }
+        store.rememberRivers()
+    }
+
+    /// One row out; from the outermost, the whole note.
+    private func widen(_ view: NoteEditor) {
+        let count = view.focusTrail().count
+        widen(view, to: count, of: count)
+    }
+
+    /// Shows a row of what is shown as a note of its own: here, or in a card after this one.
+    private func zoom(_ name: String, apart: Bool) {
+        withAnimation(.snappy(duration: 0.24)) {
+            if apart { river.openFocus(name, of: card.id) } else { river.setFocus(card.id, name) }
+        }
+        store.rememberRivers()
+    }
 
     private var header: some View {
         row {
@@ -217,7 +355,7 @@ struct CardView: View {
                     // The icon is the title's first character: on its line, at its edge.
                     HStack(alignment: .firstTextBaseline, spacing: TextSettings.titleSize * 0.3) {
                         lead(size: TextSettings.titleSize)
-                        Text(emblem.caption(draft.title))
+                        Text(emblem.caption(isDay ? draft.label : draft.title))
                             .font(titleFont)
                             .italic(!draft.exists)
                             .strikethrough(draft.task == .done, color: Color.inkSecondary)
@@ -273,11 +411,11 @@ struct CardView: View {
         .allowsHitTesting(showsActions)
     }
 
-    private var editor: some View {
+    private func editor(_ shown: NoteEditor, isFocus: Bool) -> some View {
         row {
             ZStack(alignment: .topLeading) {
-                if draft.isBlank, !isWriting {
-                    Text(isDay ? "Nothing written on this day yet." : (draft.exists ? "Write here." : "No note has this title yet. Write here to make it."))
+                if isFocus ? shown.text().isEmpty : draft.isBlank, !isWriting {
+                    Text(isFocus ? "Nothing under this row yet. Write here." : isDay ? "Nothing written on this day yet." : (draft.exists ? "Write here." : "No note has this title yet. Write here to make it."))
                         .font(.system(size: TextSettings.size, design: TextSettings.design))
                         .foregroundStyle(Color.inkFaint)
                         .padding(.top, 2)
@@ -286,10 +424,11 @@ struct CardView: View {
                 // The editor is the engine's note, shown: the same component
                 // in every app, as an outline or as text.
                 NoteEditorView(
-                    editor: draft.editor, theme: Ink.editorTheme, isWriting: isWriting, height: $bodyHeight,
+                    editor: shown, theme: Ink.editorTheme, isWriting: isWriting, height: $bodyHeight,
                     refresh: store.indexRevision,
                     pageExists: { name in store.leadsSomewhere(name) },
                     linkLabel: { name in store.linkLabel(name) },
+                    linkIcon: { name in store.linkIcon(name) },
                     blockView: { block in
                         // A line that is only a picture is shown as the picture.
                         if block.info == EditorBlock.picture, let pictures = EditorPicture.all(line: block.source), let first = pictures.first {
@@ -306,19 +445,23 @@ struct CardView: View {
                         })
                     },
                     linkPreview: { link in LinkCard.shows(link, in: store) ? AnyView(LinkCard(store: store, link: link, draft: draft)) : nil },
-                    lead: editorLead, onLead: { leadClicked() },
+                    lead: isFocus ? nil : editorLead, onLead: { leadClicked() },
                     offers: { found in store.linkOffers(found.typed, this: card.path) },
-                    offersTitle: isUntitled, onTitle: { withAnimation(.snappy(duration: 0.22)) { _ = draft.titleByFirstLine() } },
-                    // Which rows are folded is this river's to remember, card by card.
-                    foldedRows: card.foldedRows,
-                    onFolds: { rows in
-                        river.setFolds(card.id, rows)
+                    offersTitle: !isFocus && isUntitled, onTitle: { withAnimation(.snappy(duration: 0.22)) { _ = draft.titleByFirstLine() } },
+                    // Which rows are folded is the note's own to remember. What a river
+                    // remembered of them, before notes did, is handed over once.
+                    foldedRows: isFocus || card.folds == nil ? nil : card.foldedRows,
+                    onFolds: { _ in
+                        guard river.card(card.id)?.folds != nil else { return }
+                        river.setFolds(card.id, [])
                         store.rememberRiversSoon()
                     },
                     onMoveRows: { markdown, moved in store.movingRows = GraphStore.MovingRows(markdown: markdown, from: card.path, moved: moved) },
                     savePictures: { pictures in pictures.compactMap { store.savePicture(data: $0.data, fileExtension: $0.fileExtension) } },
                     isToday: card.path == "daily/\(Days.name(Date())).md",
-                    onChange: { draft.changed() },
+                    onZoom: { name, apart in zoom(name, apart: apart) },
+                    onZoomOut: isFocus ? { widen(shown) } : nil,
+                    onChange: { if isFocus { draft.changed(from: card.id) } else { draft.changed() } },
                     onFocus: { focused in
                         if focused {
                             river.selected = card.id
@@ -334,7 +477,7 @@ struct CardView: View {
                 // out — not a number that arrives a frame later and moves
                 // everything under it.
                 .fixedSize(horizontal: false, vertical: true)
-                .id(draft.mode)
+                .id(isFocus ? "focus" : "\(draft.mode)")
                 // A to-do done is set back: there, and no longer asking.
                 .opacity(draft.task == .done ? 0.5 : 1)
             }
@@ -400,19 +543,9 @@ struct CardView: View {
         row {
             HStack(alignment: .firstTextBaseline, spacing: TextSettings.size * 0.35) {
                 lead(size: TextSettings.size * 1.1)
-                // A picture in it, small: often all there is to know it by.
-                let thumb = draft.firstPicture.flatMap { Pictures.image(at: $0.address, in: store) }
-                if let thumb {
-                    // As tall as two lines and a bit, and as wide as that makes it — within reason.
-                    let tall: CGFloat = 64
-                    let wide = min(max(tall * thumb.size.width / max(thumb.size.height, 1), 24), 200)
-                    Image(nsImage: thumb).resizable().aspectRatio(contentMode: .fill)
-                        .frame(width: wide, height: tall)
-                        .clipShape(RoundedRectangle(cornerRadius: 4, style: .continuous))
-                        .overlay(RoundedRectangle(cornerRadius: 4, style: .continuous).strokeBorder(Color.inkRule, lineWidth: 0.5))
-                        .alignmentGuide(.firstTextBaseline) { $0[VerticalAlignment.center] + TextSettings.size * 0.35 }
-                        .padding(.trailing, 6)
-                }
+                // Its pictures, small, at its end: often all there is to know it by.
+                let thumbs = draft.pictures.compactMap { Pictures.image(at: $0.address, in: store) }
+                let thumb = thumbs.first
                 // Called by its title — or, never given one, by its first words;
                 // a note that is only a picture is called nothing, and shown by it.
                 let named = !(thumb != nil && draft.isUntitled && draft.label == "Untitled")
@@ -422,6 +555,17 @@ struct CardView: View {
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .contentShape(Rectangle())
                     .onTapGesture { fold() }
+                ForEach(Array(thumbs.enumerated()), id: \.offset) { _, picture in
+                    // As tall as two lines and a bit, and as wide as that makes it — within reason.
+                    let tall: CGFloat = 52
+                    let wide = min(max(tall * picture.size.width / max(picture.size.height, 1), 24), 120)
+                    Image(nsImage: picture).resizable().aspectRatio(contentMode: .fill)
+                        .frame(width: wide, height: tall)
+                        .clipShape(RoundedRectangle(cornerRadius: 4, style: .continuous))
+                        .overlay(RoundedRectangle(cornerRadius: 4, style: .continuous).strokeBorder(Color.inkRule, lineWidth: 0.5))
+                        .alignmentGuide(.firstTextBaseline) { $0[VerticalAlignment.center] + TextSettings.size * 0.35 }
+                        .onTapGesture { fold() }
+                }
                 actions
             }
         }
@@ -507,7 +651,7 @@ struct CardView: View {
 
     private func startRenaming() {
         if card.folded { river.toggleFold(card.id) }
-        newTitle = isUntitled ? "" : draft.title
+        newTitle = focused?.focusTitle() ?? (isUntitled ? "" : draft.title)
         isRenaming = true
         titleFocused = true
     }
@@ -515,6 +659,11 @@ struct CardView: View {
     private func finishRenaming() {
         guard isRenaming else { return }
         isRenaming = false
+        if let focused {
+            // The row shown is rewritten, in the note.
+            focused.setFocusTitle(title: newTitle)
+            return draft.changed(from: card.id)
+        }
         draft.rename(to: newTitle)
         if let index = river.cards.firstIndex(where: { $0.id == card.id }) { river.cards[index].title = draft.title }
         store.rememberRivers()
@@ -561,8 +710,55 @@ struct CardButton: View {
     var body: some View {
         Button(action: action) { CardButtonFace(symbol: symbol, isOn: isOn) }
             .buttonStyle(.plain)
-            .help(help)
+            .hint(help)
+            .accessibilityLabel(help)
     }
+}
+
+/// What a control does, said under it once the pointer has rested on it
+/// a moment. The system's own tip is not shown over a card's text, whose
+/// view takes the pointer for itself: this one is the app's, and is.
+private struct Hint: ViewModifier {
+    let text: String
+    @State private var isShown = false
+    @State private var waiting: DispatchWorkItem?
+
+    func body(content: Content) -> some View {
+        content
+            .onHover { inside in
+                waiting?.cancel()
+                waiting = nil
+                guard inside else { return isShown = false }
+                let work = DispatchWorkItem { isShown = true }
+                waiting = work
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.6, execute: work)
+            }
+            .overlay(alignment: .bottom) {
+                if isShown {
+                    Text(text)
+                        .font(.system(size: 11.5))
+                        .foregroundStyle(Color.inkText)
+                        .lineLimit(1)
+                        .fixedSize()
+                        .padding(.horizontal, 8)
+                        .padding(.vertical, 4)
+                        .background(RoundedRectangle(cornerRadius: 6, style: .continuous).fill(.regularMaterial))
+                        .overlay(RoundedRectangle(cornerRadius: 6, style: .continuous).strokeBorder(Color.inkRule, lineWidth: 0.5))
+                        .shadow(color: .black.opacity(0.25), radius: 6, y: 2)
+                        // Under the control, and never under the pointer: it takes no clicks.
+                        .alignmentGuide(.bottom) { $0[.top] - 6 }
+                        .allowsHitTesting(false)
+                        .transition(.opacity)
+                }
+            }
+            .animation(.easeOut(duration: 0.12), value: isShown)
+            .zIndex(isShown ? 10 : 0)
+    }
+}
+
+extension View {
+    /// Says what a control does, under it, once the pointer has rested on it.
+    func hint(_ text: String) -> some View { modifier(Hint(text: text)) }
 }
 
 struct CardButtonFace: View {

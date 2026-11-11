@@ -1,7 +1,7 @@
 //! The engine, for an app.
 
 use crate::PrismError;
-use prism::index::{rusqlite::Connection, Catalog, Links, NoteRow, Resolved, Search, Tasks};
+use prism::index::{rusqlite::Connection, Catalog, Links, NoteRow, Resolved, Tasks};
 use prism::markup::{river, FieldKind, NoteKind, River};
 use prism::sync::{Auth, Config, Identity, Mode, Report, Schedule};
 use prism::{Engine, EngineConfig, Event, Status};
@@ -310,6 +310,9 @@ pub struct RiverFoldedRow {
 #[derive(Debug, Clone, PartialEq, Eq, uniffi::Record)]
 pub struct RiverCard {
     pub title: String,
+    /// The row of the page it shows, by that row's name, when it shows
+    /// only what is under one (`NoteEditor::set_focus`).
+    pub focus: Option<String>,
     pub folded_rows: Vec<RiverFoldedRow>,
     /// For a card placed by hand among what a query finds.
     pub place_rank: Option<i64>,
@@ -333,6 +336,7 @@ pub struct SavedRiver {
 
 fn page(row: NoteRow) -> PageInfo {
     PageInfo {
+        label: crate::shown_label(&row.path, row.label),
         path: row.path,
         title: row.title,
         kind: row.kind,
@@ -341,7 +345,6 @@ fn page(row: NoteRow) -> PageInfo {
         is_blank: row.blank,
         created: row.created,
         modified: row.modified,
-        label: row.label,
         is_untitled: row.untitled,
     }
 }
@@ -408,6 +411,7 @@ fn event(event: Event) -> EngineEvent {
 fn card(card: &river::Card) -> RiverCard {
     RiverCard {
         title: card.title.clone(),
+        focus: card.focus.clone(),
         folded_rows: card.folded_rows.iter().map(|row| RiverFoldedRow { index: row.index as u32, text: row.text.clone() }).collect(),
         place_rank: card.place.as_ref().map(|(rank, _)| *rank),
         place_key: card.place.as_ref().map(|(_, key)| key.clone()),
@@ -417,6 +421,7 @@ fn card(card: &river::Card) -> RiverCard {
 fn to_card(card: RiverCard) -> river::Card {
     river::Card {
         title: card.title,
+        focus: card.focus,
         folded_rows: card.folded_rows.into_iter().map(|row| river::FoldedRow { index: row.index as usize, text: row.text }).collect(),
         place: card.place_rank.map(|rank| (rank, card.place_key.unwrap_or_default())),
     }
@@ -813,10 +818,25 @@ impl PrismEngine {
     /// The pages with every word typed, best first; the last word
     /// matches as a prefix.
     pub fn search(&self, typed: String, limit: u32) -> Result<Vec<SearchHit>> {
-        Ok(Search::search(&self.db(), &typed, limit as usize)?
+        Ok(self
+            .engine
+            .search(&self.db(), &typed, limit as usize)?
             .into_iter()
-            .map(|hit| SearchHit { path: hit.path, title: hit.title, snippet: hit.snippet })
+            .map(|hit| SearchHit { title: crate::shown_label(&hit.path, hit.title), path: hit.path, snippet: hit.snippet })
             .collect())
+    }
+
+    /// The pictures pages show whose words have not been read: at most
+    /// `limit`, as paths in the graph. The app reads each — with the
+    /// device's own means — and says what it found with `set_picture_words`.
+    pub fn pictures_unread(&self, limit: u32) -> Result<Vec<String>> {
+        Ok(self.engine.pictures_unread(limit as usize)?)
+    }
+
+    /// Keeps the words read in a picture — none, for one without any:
+    /// search then finds the pages showing it by them.
+    pub fn set_picture_words(&self, asset: String, words: String) -> Result<()> {
+        Ok(self.engine.set_picture_words(&asset, &words)?)
     }
 
     /// The pages left holding a conflict for a person to settle.
