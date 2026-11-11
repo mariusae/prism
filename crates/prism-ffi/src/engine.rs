@@ -566,7 +566,7 @@ impl PrismEngine {
 
     /// The path a new page of this title would take.
     pub fn path_for_title(&self, title: String) -> String {
-        self.engine.graph().path_for_title(&title)
+        self.engine.path_for_title(&title)
     }
 
     /// Keeps a file in `assets/` under a readable name, never over
@@ -785,11 +785,13 @@ impl PrismEngine {
     /// The links to a page, by every name it answers to.
     pub fn backlinks(&self, path: String) -> Result<Vec<PageLink>> {
         let db = self.db();
-        let mut names = Catalog::names(&db, &path)?;
-        if names.is_empty() {
-            // Not written yet, or a day: linked to by what it would be called.
-            names.push(NoteKind::fallback_title(&path));
+        // Only the links that lead here: of two pages with one title, a link by it is one page's.
+        if Catalog::get(&db, &path)?.is_some() {
+            return Ok(Links::leading_to(&db, &path)?.into_iter().map(link).collect());
         }
+        // Not written yet, or a day: linked to by what it would be called.
+        let mut names: Vec<String> = NoteKind::link_name(&path).map(str::to_owned).into_iter().collect();
+        names.push(NoteKind::fallback_title(&path));
         Ok(Links::backlinks(&db, &names)?.into_iter().map(link).collect())
     }
 

@@ -43,9 +43,42 @@ final class KeychainVault: TokenVault, @unchecked Sendable {
         var found: AnyObject?
         var query = query
         query[kSecReturnData as String] = true
-        guard SecItemCopyMatching(query as CFDictionary, &found) == errSecSuccess, let data = found as? Data else { return nil }
-        return String(data: data, encoding: .utf8)
+        if SecItemCopyMatching(query as CFDictionary, &found) == errSecSuccess, let data = found as? Data { return String(data: data, encoding: .utf8) }
+        #if os(iOS)
+        // Nothing of this app's own: what the Weft it replaces kept, taken
+        // over — so that an update over it is still signed in.
+        if let taken = Self.inherited() {
+            save(tokens: taken)
+            return taken
+        }
+        #endif
+        return nil
     }
+
+    #if os(iOS)
+    /// The tokens the earlier Weft kept, as the engine keeps them. That
+    /// app is this one to the keychain — the same identifier, the same
+    /// team — so what it stored can be read.
+    private static func inherited() -> String? {
+        struct Old: Decodable {
+            var access: String
+            var accessExpires: Date?
+            var refresh: String?
+            var refreshExpires: Date?
+        }
+        let query: [String: Any] = [
+            kSecClass as String: kSecClassGenericPassword, kSecAttrService as String: "com.mariusae.Reflect.github",
+            kSecAttrAccount as String: "github.tokens", kSecReturnData as String: true,
+        ]
+        var found: AnyObject?
+        guard SecItemCopyMatching(query as CFDictionary, &found) == errSecSuccess, let data = found as? Data, let old = try? JSONDecoder().decode(Old.self, from: data) else { return nil }
+        var kept: [String: Any] = ["access_token": old.access]
+        if let at = old.accessExpires { kept["expires_at"] = UInt64(max(at.timeIntervalSince1970, 0)) }
+        if let refresh = old.refresh { kept["refresh_token"] = refresh }
+        if let at = old.refreshExpires { kept["refresh_expires_at"] = UInt64(max(at.timeIntervalSince1970, 0)) }
+        return (try? JSONSerialization.data(withJSONObject: kept)).flatMap { String(data: $0, encoding: .utf8) }
+    }
+    #endif
 
     func save(tokens: String?) {
         SecItemDelete(query as CFDictionary)

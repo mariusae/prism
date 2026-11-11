@@ -45,6 +45,17 @@ impl NoteKind {
         (stem.starts_with("notes/") && !stem.ends_with('/')).then_some(NoteKind::Note)
     }
 
+    /// What a link to the page at a path is written with: its file's name
+    /// — `project-atlas` for `notes/project-atlas.md`, the date for a
+    /// day's or a week's page. It is the page's own, as no title is: two
+    /// pages may share a title, and a title may change. `None` for a file
+    /// that is no page.
+    pub fn link_name(path: &str) -> Option<&str> {
+        NoteKind::of(path)?;
+        let stem = path.strip_suffix(".md")?;
+        ["notes/", "daily/", "weekly/"].iter().find_map(|folder| stem.strip_prefix(folder))
+    }
+
     /// Whether a file's name is one a note is given when it is given no
     /// name: only an id, or `untitled`, or `untitled-` and a stamp. Such
     /// a name titles nothing: see [`Note::is_untitled`].
@@ -441,18 +452,34 @@ impl Note {
     /// Names are compared as links are resolved: case and spacing aside.
     /// Returns how many places were rewritten; only those lines change.
     pub fn relink(&mut self, from: &str, to: &str) -> usize {
+        self.relink_where(from, to, None, true)
+    }
+
+    /// Writes every *link* to `from` as a link to `to`, and leaves tags
+    /// as they are: how a link written with a title is pinned to its
+    /// page's own name — its file's — when the title comes to mean
+    /// something else. A tag is a word, not a pointer to a file: it goes
+    /// on saying what it said. Left alone too is what is written exactly
+    /// as `except`: another file's own name, which leads to that file
+    /// whatever else is called the same (see `Catalog::resolve`).
+    pub fn pin(&mut self, from: &str, to: &str, except: Option<&str>) -> usize {
+        self.relink_where(from, to, except, false)
+    }
+
+    fn relink_where(&mut self, from: &str, to: &str, except: Option<&str>, tags: bool) -> usize {
         let key = name_key(from);
+        let key = |written: &str| name_key(written) == key && except.is_none_or(|own| written.trim() != own);
         let mut count = 0;
-        fn visit(blocks: &mut [Block], key: &str, to: &str, count: &mut usize) {
+        fn visit(blocks: &mut [Block], key: &dyn Fn(&str) -> bool, to: &str, tags: bool, count: &mut usize) {
             for block in blocks {
                 if block.has_inline_content() {
                     let spans = inline::parse(&block.text);
-                    let as_tag = tag_writable(to);
+                    let as_tag = tags && tag_writable(to);
                     let mut ranges: Vec<_> = inline::walk(&spans)
                         .filter_map(|span| match &span.kind {
-                            SpanKind::WikiLink { target, .. } if name_key(target) == key => inline::wiki_target_range(&block.text, span),
+                            SpanKind::WikiLink { target, .. } if key(target) => inline::wiki_target_range(&block.text, span),
                             // The name, after its `#`.
-                            SpanKind::Tag(name) if as_tag && name_key(name) == key => Some(span.range.start + 1..span.range.end),
+                            SpanKind::Tag(name) if as_tag && key(name) => Some(span.range.start + 1..span.range.end),
                             _ => None,
                         })
                         .collect();
@@ -468,8 +495,12 @@ impl Note {
                         .split('\n')
                         .map(|line| match line.split_once(':') {
                             Some((clause, value))
-                                if name_key(value) == key
-                                    && matches!(clause.trim().to_ascii_lowercase().as_str(), "tag" | "not tag" | "links to" | "linked from" | "listed in") =>
+                                if key(value)
+                                    && match clause.trim().to_ascii_lowercase().as_str() {
+                                        "tag" | "not tag" => tags,
+                                        "links to" | "linked from" | "listed in" => true,
+                                        _ => false,
+                                    } =>
                             {
                                 *count += 1;
                                 format!("{clause}: {to}")
@@ -479,10 +510,10 @@ impl Note {
                         .collect();
                     block.text = lines.join("\n");
                 }
-                visit(&mut block.children, key, to, count);
+                visit(&mut block.children, key, to, tags, count);
             }
         }
-        visit(&mut self.body.blocks, &key, to, &mut count);
+        visit(&mut self.body.blocks, &key, to, tags, &mut count);
 
         if let Some(front) = &mut self.frontmatter {
             let rename = |item: &str| -> Option<String> {
@@ -490,18 +521,18 @@ impl Note {
                 match trimmed.strip_prefix("[[").and_then(|inner| inner.strip_suffix("]]")) {
                     Some(inner) => {
                         let (target, shown) = inner.split_once('|').map_or((inner, None), |(t, s)| (t, Some(s)));
-                        (name_key(target) == key).then(|| match shown {
+                        key(target).then(|| match shown {
                             Some(shown) => format!("[[{to}|{shown}]]"),
                             None => format!("[[{to}]]"),
                         })
                     }
-                    None => (name_key(trimmed.trim_start_matches('#')) == key).then(|| to.to_owned()),
+                    None => key(trimmed.trim_start_matches('#')).then(|| to.to_owned()),
                 }
             };
             let entries: Vec<(String, Value)> = front.iter().map(|(k, v)| (k.to_owned(), v.clone())).collect();
             for (name, value) in entries {
                 // What the page calls itself is not a link to another.
-                if matches!(name.as_str(), "aliases" | "caption") {
+                if matches!(name.as_str(), "aliases" | "caption") || (!tags && name == "tags") {
                     continue;
                 }
                 let renamed = match &value {

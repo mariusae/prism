@@ -172,14 +172,15 @@ pub fn run(db: &Connection, query: &Query, options: &QueryOptions<'_>) -> Result
             },
             Clause::LinksTo(name) => {
                 let name = fill(name);
-                // Every name the page answers to; a page not written yet
+                // The links that lead to the page; a page not written yet
                 // is still linked to by the name asked for.
-                let names = match resolve(&name)? {
-                    Some(path) => Catalog::names(db, &path)?,
-                    None => vec![name],
-                };
-                let marks = vec!["?"; names.len()].join(", ");
-                statement.condition(format!("notes.path IN (SELECT source FROM links WHERE key IN ({marks}))"), names.iter().map(|name| name_key(name)));
+                match resolve(&name)? {
+                    Some(path) => statement.condition(
+                        format!("notes.path IN (SELECT source FROM links WHERE key IN (SELECT key FROM note_names WHERE path = ?) AND {LEADS_TO} = ?)"),
+                        [path.clone(), path],
+                    ),
+                    None => statement.condition("notes.path IN (SELECT source FROM links WHERE key = ?)".to_owned(), [name_key(&name)]),
+                }
             }
             Clause::LinkedFrom(name) => match resolve(&fill(name))? {
                 Some(path) => statement.condition(format!("notes.path IN (SELECT {LEADS_TO} FROM links WHERE source = ? AND kind != 'tag')"), [path]),

@@ -56,7 +56,10 @@ public extension Color {
 public extension Ink {
     /// The editor, in Weft's colours and at the size cards are set in.
     @MainActor static var editorTheme: EditorTheme {
-        EditorTheme(text: text, secondary: secondary, faint: faint, accent: accent, codeBackground: hover, highlight: marked, size: TextSettings.size, face: TextSettings.face)
+        var theme = EditorTheme(text: text, secondary: secondary, faint: faint, accent: accent, codeBackground: hover, highlight: marked, size: TextSettings.size, face: TextSettings.face)
+        // What a row lifted out of its outline is drawn on: the card's own colour.
+        theme.background = card
+        return theme
     }
 }
 

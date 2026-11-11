@@ -191,6 +191,66 @@ pub fn toggle(text: &str, range: Range<usize>, style: Style) -> (String, Range<u
     (out, range.start + delimiter.len()..range.end + delimiter.len())
 }
 
+/// The picture that ends just before a place in a text, if one does: all
+/// of its markup, with the size written after it — straight after, or a
+/// space on, as an editor writes it. What Delete there takes out whole.
+pub fn picture_before(text: &str, at: usize) -> Option<Range<usize>> {
+    let spans = parse(text);
+    let before = spans.iter().position(|span| span.range.end == at)?;
+    match &spans[before].kind {
+        SpanKind::Image { .. } => Some(spans[before].range.clone()),
+        // A size parted from its picture by spaces is still the picture's.
+        SpanKind::Comment if text[spans[before].range.clone()].contains('{') => {
+            let picture = spans[..before].last().filter(|span| matches!(span.kind, SpanKind::Image { .. }))?;
+            text[picture.range.end..spans[before].range.start].trim().is_empty().then_some(picture.range.start..at)
+        }
+        _ => None,
+    }
+}
+
+/// A text that is a web or mail address and nothing else, trimmed: what,
+/// pasted onto words, links them.
+pub fn address(text: &str) -> Option<&str> {
+    let text = text.trim();
+    if text.is_empty() || text.contains(char::is_whitespace) {
+        return None;
+    }
+    let (scheme, rest) = text.split_once(':')?;
+    let host = |rest: &str| rest.strip_prefix("//").is_some_and(|after| !after.split(['/', '?', '#']).next().unwrap_or("").is_empty());
+    match scheme.to_ascii_lowercase().as_str() {
+        "http" | "https" if host(rest) => Some(text),
+        "mailto" if !rest.is_empty() => Some(text),
+        _ => None,
+    }
+}
+
+/// Links a range of a text to an address: `[words](address)` — or, when
+/// the words are a link's already, points that link there. Gives the new
+/// text, and where the link ends in it. `None` when the range is empty,
+/// spans lines, or is itself an address.
+pub fn link_to(text: &str, range: Range<usize>, target: &str) -> Option<(String, usize)> {
+    if range.is_empty() || range.end > text.len() || !text.is_char_boundary(range.start) || !text.is_char_boundary(range.end) {
+        return None;
+    }
+    let words = &text[range.clone()];
+    if words.contains(['\n', '\u{2028}']) || address(words).is_some() {
+        return None;
+    }
+    // Brackets and spaces in an address would end its Markdown early.
+    let target = target.trim().replace(' ', "%20").replace('(', "%28").replace(')', "%29");
+    let spans = parse(text);
+    let inside = |span: &&Span| matches!(span.kind, SpanKind::Link { .. }) && span.content.start <= range.start && range.end <= span.content.end;
+    if let Some(span) = walk(&spans).find(inside) {
+        // Already a link's words: only where it goes changes.
+        let old = span.content.end + 2..span.range.end - 1;
+        let end = span.range.end - old.len() + target.len();
+        return Some((format!("{}{target}{}", &text[..old.start], &text[old.end..]), end));
+    }
+    let linked = format!("[{}]({target})", words.replace('[', "\\[").replace(']', "\\]"));
+    let end = range.start + linked.len();
+    Some((format!("{}{linked}{}", &text[..range.start], &text[range.end..]), end))
+}
+
 // --- The scanner -----------------------------------------------------------
 
 fn parse_range(text: &str, start: usize, end: usize) -> Vec<Span> {

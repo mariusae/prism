@@ -1,3 +1,4 @@
+#if os(macOS)
 import Prism
 import PrismEmblem
 import SwiftUI
@@ -20,6 +21,23 @@ public final class WindowActions {
 /// from — a click on it, ⌘O, or simply starting to type, finds a page or
 /// names a new one. The sidebar is there for who wants a list beside the
 /// river, and out of the way until asked for.
+/// Takes the window's own bar from behind its buttons: no fill, and no
+/// line under it, so what scrolls passes straight behind.
+private struct ClearTitleBar: NSViewRepresentable {
+    final class Watcher: NSView {
+        override func viewDidMoveToWindow() {
+            super.viewDidMoveToWindow()
+            guard let window else { return }
+            window.titlebarAppearsTransparent = true
+            window.titlebarSeparatorStyle = .none
+            window.styleMask.insert(.fullSizeContentView)
+        }
+    }
+
+    func makeNSView(context: Context) -> Watcher { Watcher() }
+    func updateNSView(_ view: Watcher, context: Context) {}
+}
+
 public struct ContentView: View {
     let store: GraphStore
     let actions: WindowActions
@@ -53,6 +71,10 @@ public struct ContentView: View {
                     }
                 }
                 .animation(.easeOut(duration: 0.12), value: showsQuickOpen)
+                .overlay(alignment: .bottom) { UndoToast(store: store).padding(.bottom, 16) }
+                // The bar is only its buttons: the river shows through behind them.
+                .toolbarBackgroundVisibility(.hidden, for: .windowToolbar)
+                .background(ClearTitleBar())
                 .toolbar {
                     ToolbarItem(placement: .principal) { RiverBar(store: store, room: min(max(detailWidth - 330, 220), 860), onFind: { show("") }) }
                     ToolbarItemGroup(placement: .primaryAction) {
@@ -61,6 +83,15 @@ public struct ContentView: View {
                                 for page in store.conflicted { store.open(page: page) }
                             } label: { Label("\(store.conflicted.count) to Review", systemImage: "exclamationmark.triangle") }
                             .tint(.orange)
+                        }
+                        // Turning while a sync is under way; pressed, it syncs now.
+                        Syncing(store: store) { syncing in
+                            Button { store.syncNow() } label: {
+                                Label(syncing ? "Syncing…" : "Sync Now", systemImage: "arrow.triangle.2.circlepath")
+                                    .symbolEffect(.rotate, options: .repeat(.continuous), isActive: syncing)
+                                    .foregroundStyle(syncing ? Color.inkAccent : Color.inkSecondary)
+                            }
+                            .help(syncing ? "Syncing…" : (store.syncNote.map { "\($0) — Sync Now (⌘R)" } ?? "Sync Now (⌘R)"))
                         }
                         Button { withAnimation(.snappy(duration: 0.28)) { store.open(name: QuickOpen.day(Date()), after: store.river.selected) } } label: {
                             Label("Today", systemImage: "calendar")
@@ -72,8 +103,10 @@ public struct ContentView: View {
                 }
         }
         .sheet(item: Binding(get: { store.queryAsk }, set: { store.queryAsk = $0 })) { ask in QueryRiverEditor(store: store, ask: ask) }
+        .sheet(item: Binding(get: { store.movingRows }, set: { store.movingRows = $0 })) { moving in MoveRowsSheet(store: store, moving: moving) }
         .navigationTitle(store.title(of: store.river))
         .toolbar(removing: .title)
+
         .foregroundStyle(Color.inkText)
         .tint(Color.inkAccent)
         .onChange(of: actions.quickOpen) { _, _ in
@@ -238,3 +271,34 @@ struct RiverLook: View {
         .onDisappear { store.rename(river, to: name) }
     }
 }
+
+/// At the river's foot, a moment: what was just done, and Undo. Whatever
+/// closes, removes or deletes is done at once, and taken back from here.
+struct UndoToast: View {
+    let store: GraphStore
+
+    var body: some View {
+        Group {
+            if let offer = store.undoOffer {
+                HStack(spacing: 12) {
+                    Text(offer.said).lineLimit(1).truncationMode(.middle).foregroundStyle(Color.inkSecondary)
+                    Button("Undo") { withAnimation(.snappy(duration: 0.28)) { _ = store.takeUndo() } }
+                        .buttonStyle(.plain)
+                        .fontWeight(.semibold)
+                        .foregroundStyle(Color.inkAccent)
+                }
+                .font(.callout)
+                .padding(.horizontal, 16)
+                .padding(.vertical, 10)
+                .frame(maxWidth: 420)
+                .fixedSize()
+                .glassEffect(.regular.interactive(), in: .capsule)
+                .id(offer.id)
+                .transition(.move(edge: .bottom).combined(with: .opacity))
+                .help("Undo (⌘Z)")
+            }
+        }
+        .animation(.snappy(duration: 0.25), value: store.undoOffer?.id)
+    }
+}
+#endif

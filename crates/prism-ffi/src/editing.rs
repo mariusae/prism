@@ -6,8 +6,10 @@
 //! made in it back to the session; the session, not the view, is the note.
 
 use crate::document::{FrontmatterField, NoteMeta};
-use prism::markup::editor::{self, Command, CompletionKind, Layout, LineKind, RunKind};
-use prism::markup::{Mode, Note, Session, Style, Value};
+use crate::engine::RiverFoldedRow;
+use prism::markup::editor::{self, Command, CompletionKind, Layout, LineKind, RowKind, RunKind};
+use prism::markup::river::FoldedRow;
+use prism::markup::{inline, Mode, Note, Session, Style, Value};
 use std::sync::{Arc, Mutex, MutexGuard};
 
 /// Byte offsets of a text as UTF-16 offsets, and back, each in one pass.
@@ -78,6 +80,11 @@ pub struct BodyLine {
     pub content: u32,
     /// How many list items it is inside.
     pub depth: u32,
+    /// In an outline: whether the row is folded — the rows under it are
+    /// not shown, and so are no lines of the body.
+    pub is_folded: bool,
+    /// In an outline: whether the row has rows under it, shown or not.
+    pub has_children: bool,
 }
 
 /// What a stretch of a line means.
@@ -147,16 +154,19 @@ pub struct BodyLayout {
 /// of it means.
 #[uniffi::export]
 pub fn body_layout(body: String) -> BodyLayout {
-    layout_of(editor::layout(&body), &body)
+    layout_of(editor::layout(&body), &body, &[])
 }
 
-fn layout_of(read: Layout, body: &str) -> BodyLayout {
+/// A layout in the view's own offsets. `folds` says of each line of an
+/// outline whether it is folded, and whether it has rows under it.
+fn layout_of(read: Layout, body: &str, folds: &[(bool, bool)]) -> BodyLayout {
     let offsets = Offsets::of(body);
     let markers_in_text = read.markers_in_text;
     let lines = read
         .lines
         .into_iter()
-        .map(|line| BodyLine {
+        .enumerate()
+        .map(|(index, line)| BodyLine {
             start: offsets.to16(line.range.start),
             end: offsets.to16(line.range.end),
             kind: match line.kind {
@@ -173,6 +183,8 @@ fn layout_of(read: Layout, body: &str) -> BodyLayout {
             indent: line.indent as u32,
             content: offsets.to16(line.content),
             depth: line.depth as u32,
+            is_folded: folds.get(index).is_some_and(|fold| fold.0),
+            has_children: folds.get(index).is_some_and(|fold| fold.1),
         })
         .collect();
     let runs = read
@@ -233,6 +245,36 @@ pub enum EditCommand {
     Bullet,
     Numbered,
     Quote,
+    /// The rows above every sibling before them; below every one after.
+    /// These, and the commands after them, are an outline's.
+    MoveToTop,
+    MoveToBottom,
+    /// The rows under each row put out of sight; shown again.
+    Fold,
+    Unfold,
+    ToggleFold,
+    /// Each row folded, with every row under it that has rows of its own.
+    FoldCompletely,
+    UnfoldCompletely,
+    /// Every row of the note that has rows under it, folded.
+    FoldAll,
+    UnfoldAll,
+    /// The open tasks and checklist items among the rows, checked.
+    MarkDone,
+    /// The checked rows right under each row, put after the rest.
+    MoveDoneToBottom,
+    /// Made a row of this kind, whatever it was.
+    TurnParagraph,
+    TurnBullet,
+    /// `- [ ]`: a checklist item.
+    TurnCheckbox,
+    /// `+ [ ]`: a task.
+    TurnTask,
+    TurnNumbered,
+    TurnHeading1,
+    TurnHeading2,
+    TurnHeading3,
+    TurnQuote,
 }
 
 /// What a command comes to: text to replace, and where the selection
@@ -271,7 +313,118 @@ fn command(command: EditCommand) -> Command {
         EditCommand::Bullet => Command::Bullet,
         EditCommand::Numbered => Command::Numbered,
         EditCommand::Quote => Command::Quote,
+        EditCommand::MoveToTop => Command::MoveToTop,
+        EditCommand::MoveToBottom => Command::MoveToBottom,
+        EditCommand::Fold => Command::Fold,
+        EditCommand::Unfold => Command::Unfold,
+        EditCommand::ToggleFold => Command::ToggleFold,
+        EditCommand::FoldCompletely => Command::FoldCompletely,
+        EditCommand::UnfoldCompletely => Command::UnfoldCompletely,
+        EditCommand::FoldAll => Command::FoldAll,
+        EditCommand::UnfoldAll => Command::UnfoldAll,
+        EditCommand::MarkDone => Command::MarkDone,
+        EditCommand::MoveDoneToBottom => Command::MoveDoneToBottom,
+        EditCommand::TurnParagraph => Command::Turn(RowKind::Paragraph),
+        EditCommand::TurnBullet => Command::Turn(RowKind::Bullet),
+        EditCommand::TurnCheckbox => Command::Turn(RowKind::Checkbox),
+        EditCommand::TurnTask => Command::Turn(RowKind::Task),
+        EditCommand::TurnNumbered => Command::Turn(RowKind::Numbered),
+        EditCommand::TurnHeading1 => Command::Turn(RowKind::Heading(1)),
+        EditCommand::TurnHeading2 => Command::Turn(RowKind::Heading(2)),
+        EditCommand::TurnHeading3 => Command::Turn(RowKind::Heading(3)),
+        EditCommand::TurnQuote => Command::Turn(RowKind::Quote),
     }
+}
+
+/// What can be done to a row of an outline: what a menu for it offers.
+#[derive(Debug, Clone, PartialEq, Eq, uniffi::Record)]
+pub struct BodyRowInfo {
+    pub is_folded: bool,
+    /// Whether it has rows under it, shown or folded away.
+    pub has_children: bool,
+    /// How many rows its fold hides.
+    pub hidden: u32,
+    /// How many rows are shown under it: the lines after its own that go
+    /// where it goes.
+    pub shown: u32,
+    /// Whether a row under it, however deep, is folded: Unfold
+    /// Completely has something to do.
+    pub folds_inside: bool,
+    /// Whether it is unfolded and a row under it could be folded: Fold
+    /// Completely has something to do.
+    pub open_inside: bool,
+    /// Its checkbox: open, or done. `nil` for a row without one.
+    pub done: Option<bool>,
+    /// Whether it is a plain bullet with checkboxes among the rows under it.
+    pub has_checklist: bool,
+    /// Whether Move Done to Bottom has something to do under it.
+    pub done_to_move: bool,
+    /// Whether it has a row before it at its level, and one after it.
+    pub can_move_up: bool,
+    pub can_move_down: bool,
+}
+
+/// A time block starting at a row of an outline: what is drawn there.
+/// See `prism_markup::time`.
+#[derive(Debug, Clone, PartialEq, uniffi::Record)]
+pub struct BodyTimeHead {
+    /// Which timeline, and which of its blocks.
+    pub timeline: u32,
+    pub index: u32,
+    /// How deep its timeline is within others.
+    pub level: u32,
+    /// Minutes from midnight.
+    pub start: u32,
+    pub end: u32,
+    /// `9:00 – 10:30 · 1h 30m`.
+    pub label: String,
+    /// `overlaps Offsite 30m`, when it starts before an earlier one
+    /// ends; and, where that is too long, `30m overlap`.
+    pub overlap: Option<String>,
+    pub overlap_short: Option<String>,
+    /// Where its time is written in what the view shows, with what
+    /// parts it from the words, in UTF-16: hidden where the label is
+    /// drawn instead.
+    pub stamp_start: u32,
+    pub stamp_end: u32,
+    /// The block's last row, and the next block's first.
+    pub last_row: u32,
+    pub next_row: Option<u32>,
+    pub is_done: bool,
+}
+
+/// A time block ending at a row: the room after it.
+#[derive(Debug, Clone, PartialEq, uniffi::Record)]
+pub struct BodyTimeFoot {
+    pub timeline: u32,
+    pub index: u32,
+    pub level: u32,
+    /// Room for its length, in rows.
+    pub length: f64,
+    /// Free time after it, before the next: its minutes, its room in
+    /// rows, and what it says — `2h free`.
+    pub free: u32,
+    pub free_length: f64,
+    pub free_label: Option<String>,
+    /// Whether it is its timeline's last: there the line ends.
+    pub is_last: bool,
+}
+
+/// What an outline draws of a timeline at one of its rows.
+#[derive(Debug, Clone, PartialEq, uniffi::Record)]
+pub struct BodyTimeMark {
+    /// The row, counted among the body's lines.
+    pub row: u32,
+    pub head: Option<BodyTimeHead>,
+    /// Innermost first.
+    pub feet: Vec<BodyTimeFoot>,
+}
+
+/// A text that is a web or mail address and nothing else, trimmed: what,
+/// pasted onto words, links them. `nil` for any other text.
+#[uniffi::export]
+pub fn web_address(text: String) -> Option<String> {
+    inline::address(&text).map(str::to_owned)
 }
 
 /// How an editor shows a note's body.
@@ -357,7 +510,7 @@ impl NoteEditor {
     /// What the view shows, read for drawing.
     pub fn layout(&self) -> BodyLayout {
         let session = self.session();
-        layout_of(session.layout(), session.text())
+        layout_of(session.layout(), session.text(), &session.row_folds())
     }
 
     /// What was typed, pasted or deleted in the view: a range of what it
@@ -372,6 +525,147 @@ impl NoteEditor {
     /// the view should do what it would have done.
     pub fn perform(&self, selection_start: u32, selection_end: u32, command: EditCommand) -> Option<BodyEdit> {
         self.changing(|session, offsets| session.perform(offsets.to8(selection_start)..offsets.to8(selection_end.max(selection_start)), self::command(command)))
+    }
+
+    /// Carries out a command on some rows of an outline — lines of the
+    /// body, counted from the first — wherever the caret is: the rows a
+    /// finger is on, or those chosen together. Each takes what is under
+    /// it along. The selection given is the view's own, and the answer
+    /// says where it then is. For the commands done to rows; `nil` for one
+    /// done at the caret, and as text.
+    pub fn perform_on(&self, rows: Vec<u32>, selection_start: u32, selection_end: u32, command: EditCommand) -> Option<BodyEdit> {
+        let rows: Vec<usize> = rows.into_iter().map(|row| row as usize).collect();
+        self.changing(|session, offsets| {
+            session.perform_on(&rows, offsets.to8(selection_start)..offsets.to8(selection_end.max(selection_start)), self::command(command))
+        })
+    }
+
+    /// Puts rows of an outline, with what is under them, before another
+    /// row — one past the last for the end — at a depth: what carrying a
+    /// row and letting go does. The depth counts the rows a row is under,
+    /// and is held to what can be there (`drop_depth`). `nil` when that
+    /// is where they already are.
+    pub fn move_rows(&self, rows: Vec<u32>, before: u32, depth: u32, selection_start: u32, selection_end: u32) -> Option<BodyEdit> {
+        let rows: Vec<usize> = rows.into_iter().map(|row| row as usize).collect();
+        self.changing(|session, offsets| {
+            session.move_rows(&rows, before as usize, depth as usize, offsets.to8(selection_start)..offsets.to8(selection_end.max(selection_start)))
+        })
+    }
+
+    /// How deep rows carried would lie, put down before a row at a depth
+    /// asked for: what `move_rows` would give them. `nil` where they
+    /// cannot be put down: among the rows under one of them.
+    pub fn drop_depth(&self, rows: Vec<u32>, before: u32, depth: u32) -> Option<u32> {
+        let rows: Vec<usize> = rows.into_iter().map(|row| row as usize).collect();
+        self.session().drop_depth(&rows, before as usize, depth as usize).map(|depth| depth as u32)
+    }
+
+    /// What can be done to a row of an outline. `nil` for no such row.
+    pub fn row_info(&self, row: u32) -> Option<BodyRowInfo> {
+        let info = self.session().row_info(row as usize)?;
+        Some(BodyRowInfo {
+            is_folded: info.folded,
+            has_children: info.has_children,
+            hidden: info.hidden as u32,
+            shown: info.shown as u32,
+            folds_inside: info.folds_inside,
+            open_inside: info.open_inside,
+            done: info.task,
+            has_checklist: info.has_checklist,
+            done_to_move: info.done_to_move,
+            can_move_up: info.can_move_up,
+            can_move_down: info.can_move_down,
+        })
+    }
+
+    /// Some rows of an outline, with what is under them, as Markdown of
+    /// their own: what copying them puts on the pasteboard, and what goes
+    /// with them to another note.
+    pub fn markdown_of(&self, rows: Vec<u32>) -> String {
+        let rows: Vec<usize> = rows.into_iter().map(|row| row as usize).collect();
+        self.session().markdown_of(&rows)
+    }
+
+    /// A new time block where the caret is: from `now` — minutes from
+    /// midnight, on the clock of whoever asks — for a quarter of an hour,
+    /// put where its time goes among those there. The caret is left after
+    /// its time. `nil` as text.
+    pub fn new_time_block(&self, selection_start: u32, selection_end: u32, now: u32) -> Option<BodyEdit> {
+        self.changing(|session, offsets| {
+            session.perform(offsets.to8(selection_start)..offsets.to8(selection_end.max(selection_start)), Command::NewTimeBlock { now: now % (24 * 60) })
+        })
+    }
+
+    /// What an outline draws of its timelines — lists whose every item
+    /// starts with a time — row by row. `twelve_hour` says how the labels
+    /// tell the time. Empty as text.
+    pub fn time_marks(&self, twelve_hour: bool) -> Vec<BodyTimeMark> {
+        let session = self.session();
+        let marks = session.time_marks(twelve_hour);
+        if marks.is_empty() {
+            return Vec::new();
+        }
+        let offsets = Offsets::of(session.text());
+        marks
+            .into_iter()
+            .map(|mark| BodyTimeMark {
+                row: mark.row as u32,
+                head: mark.head.map(|head| BodyTimeHead {
+                    timeline: head.timeline as u32,
+                    index: head.index as u32,
+                    level: head.level as u32,
+                    start: head.start,
+                    end: head.end,
+                    label: head.label,
+                    overlap: head.overlap,
+                    overlap_short: head.overlap_short,
+                    stamp_start: offsets.to16(head.stamp.start),
+                    stamp_end: offsets.to16(head.stamp.end),
+                    last_row: head.last_row as u32,
+                    next_row: head.next_row.map(|row| row as u32),
+                    is_done: head.done,
+                }),
+                feet: mark
+                    .feet
+                    .into_iter()
+                    .map(|foot| BodyTimeFoot {
+                        timeline: foot.timeline as u32,
+                        index: foot.index as u32,
+                        level: foot.level as u32,
+                        length: foot.length,
+                        free: foot.free,
+                        free_length: foot.free_length,
+                        free_label: foot.free_label,
+                        is_last: foot.is_last,
+                    })
+                    .collect(),
+            })
+            .collect()
+    }
+
+    /// Links the words selected to an address — `[words](address)` — or
+    /// points the link they are the words of there: what pasting an
+    /// address onto words does. `nil` when nothing is selected, when the
+    /// selection spans lines, or when the address is none (`web_address`).
+    pub fn link(&self, selection_start: u32, selection_end: u32, address: String) -> Option<BodyEdit> {
+        self.changing(|session, offsets| session.link(offsets.to8(selection_start)..offsets.to8(selection_end.max(selection_start)), &address))
+    }
+
+    /// The rows folded: each by its place among all the body's rows —
+    /// shown or not — and its words. The form a river keeps them in, for
+    /// an app to save and hand back.
+    pub fn folded_rows(&self) -> Vec<RiverFoldedRow> {
+        self.session().folded_rows().into_iter().map(|row| RiverFoldedRow { index: row.index as u32, text: row.text }).collect()
+    }
+
+    /// Folds these rows, and no others: as the app remembers them. A row
+    /// is found by its words, at its place or nearest to it; one no
+    /// longer there, or with nothing under it, is passed over. Says
+    /// whether anything changed: if it did, the view shows other text,
+    /// and what was done before cannot be undone after.
+    pub fn set_folded_rows(&self, rows: Vec<RiverFoldedRow>) -> bool {
+        let rows: Vec<FoldedRow> = rows.into_iter().map(|row| FoldedRow { index: row.index as usize, text: row.text }).collect();
+        self.session().set_folded_rows(&rows)
     }
 
     /// Takes the last change back, structure and all.
@@ -406,6 +700,17 @@ impl NoteEditor {
     /// title, or — untitled — its first words.
     pub fn label(&self, path: String) -> String {
         self.session().label(&path)
+    }
+
+    /// The words an untitled note could be titled by: its first line's.
+    pub fn first_line(&self) -> Option<String> {
+        self.session().first_line()
+    }
+
+    /// Takes the first line out of the body and gives its words: to
+    /// title the note by. What it held under it moves up into its place.
+    pub fn take_first_line(&self) -> Option<String> {
+        self.session().take_first_line()
     }
 
     /// The title the note's first heading gives.
@@ -544,5 +849,34 @@ mod tests {
         assert_eq!(editor.markdown(), "---\npinned: true\n---\n# Atlas\n\n- one 🚀!\n- \n- two\n");
         assert_eq!(editor.meta("notes/atlas.md".into()).title, "Atlas");
         assert_eq!(editor.fields().len(), 1);
+    }
+
+    #[test]
+    fn rows_fold_move_and_tell_the_time_in_the_views_own_offsets() {
+        let editor = NoteEditor::open("- 🚀 one\n  - 9:00–9:30 two\n  - 10:00 three\n- last\n".into(), EditorMode::Outline);
+        // Folded from elsewhere: the caret, in "last", stays in its word.
+        let caret = editor.text().encode_utf16().count() as u32 - 2;
+        let edit = editor.perform_on(vec![0], caret, caret, EditCommand::Fold).unwrap();
+        assert_eq!((editor.text().as_str(), edit.selection_start), ("🚀 one\nlast", caret - 26));
+        let lines = editor.layout().lines;
+        assert_eq!((lines[0].is_folded, lines[0].has_children, lines[1].is_folded), (true, true, false));
+        assert_eq!(editor.folded_rows(), [RiverFoldedRow { index: 0, text: "🚀 one".into() }]);
+        assert_eq!(editor.row_info(0).map(|info| (info.is_folded, info.hidden, info.can_move_down)), Some((true, 2, true)));
+        assert!(!editor.set_folded_rows(editor.folded_rows()) && editor.set_folded_rows(Vec::new()));
+        assert_eq!(editor.text().lines().count(), 4);
+        // A timeline's marks, where the time is written in UTF-16: after the rocket's two units.
+        let marks = editor.time_marks(false);
+        let head = marks[0].head.clone().unwrap();
+        assert_eq!((marks[0].row, head.label.as_str(), head.stamp_start, head.stamp_end), (1, "9:00 – 9:30 · 30m", 7, 17));
+        // Carried to the top; copied; a time block made; an address pasted on a word.
+        assert_eq!(editor.drop_depth(vec![3], 0, 4), Some(0));
+        editor.move_rows(vec![3], 0, 0, 0, 0).unwrap();
+        assert_eq!(editor.markdown_of(vec![0, 1]), "- last\n- 🚀 one\n  - 9:00–9:30 two\n  - 10:00 three\n");
+        let end = editor.text().encode_utf16().count() as u32;
+        editor.new_time_block(end, end, 12 * 60 + 3).unwrap();
+        assert!(editor.markdown().ends_with("  - 10:00 three\n  - 12:00–12:15 \n"), "{}", editor.markdown());
+        assert_eq!(web_address(" https://example.com ".into()).as_deref(), Some("https://example.com"));
+        let edit = editor.link(0, 4, "https://example.com".into()).unwrap();
+        assert!(editor.text().starts_with("[last](https://example.com)\n") && edit.selection_start == 27);
     }
 }

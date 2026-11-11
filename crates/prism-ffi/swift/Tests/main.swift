@@ -51,6 +51,19 @@ expect(open.markdown() == "# Atlas\n\n- one!\n- two\n" && open.canRedo(), "undo 
 open.setMode(mode: .text)
 expect(open.text() == "- one!\n- two\n" && open.layout().markersInText, "the same note as text is its Markdown")
 
+// Rows fold, are carried, and tell the time: an outline's own, wherever the caret is.
+let outline = NoteEditor.open(source: "- one\n  - 9:00–9:30 two\n  - 10:00 three\n- last\n", mode: .outline)
+let foldedRow = outline.performOn(rows: [0], selectionStart: 0, selectionEnd: 0, command: .fold)
+expect(foldedRow != nil && outline.text() == "one\nlast" && outline.markdown().contains("three"), "a folded row shows none of what is under it, and the note keeps it")
+expect(outline.layout().lines[0].isFolded && outline.foldedRows() == [RiverFoldedRow(index: 0, text: "one")], "a fold is told as a river keeps it")
+expect(outline.rowInfo(row: 0)?.hidden == 2 && outline.setFoldedRows(rows: []) && !outline.setFoldedRows(rows: []), "and set as an app remembers it")
+expect(outline.timeMarks(twelveHour: false).first?.head?.label == "9:00 – 9:30 · 30m", "a list of times is a timeline")
+expect(outline.dropDepth(rows: [3], before: 1, depth: 9) == 1 && outline.moveRows(rows: [3], before: 1, depth: 9, selectionStart: 0, selectionEnd: 0) != nil, "a row is carried to a place and a depth")
+expect(outline.markdown() == "- one\n  - last\n  - 9:00–9:30 two\n  - 10:00 three\n" && outline.markdownOf(rows: [1]) == "- last\n", "and copied as Markdown of its own")
+expect(outline.newTimeBlock(selectionStart: 0, selectionEnd: 0, now: 615) != nil && outline.markdown().hasSuffix("  - 10:15–10:30 \n"), "a new time block goes where its time does")
+expect(outline.link(selectionStart: 0, selectionEnd: 3, address: " https://example.com ") != nil && outline.text().hasPrefix("[one](https://example.com)"), "an address pasted on words links them")
+expect(webAddress(text: "not one") == nil && outline.perform(selectionStart: 0, selectionEnd: 0, command: .turnTask) != nil && outline.markdown().hasPrefix("+ [ ] [one]"), "a row is turned into another kind")
+
 // --- A document, edited ------------------------------------------------------
 
 let source = "---\ntags: [Projects]\n---\n# Atlas 🚀\n\n*   Kick-off with [[Ada Lovelace]] #planning\n*   Budget 💰 and **scope**\n"
@@ -111,7 +124,8 @@ expect(found.pages.map(\.title) == ["Ada Lovelace"] && found.show == .table && f
 // A rename relinks.
 let renamed = try engine.renameNote(path: atlas, newTitle: "Atlas Reborn")
 expect(renamed.rewritten == [atlas, "notes/ada.md"], "a rename rewrites the page and its backlinks")
-expect(try engine.read(path: "notes/ada.md")!.hasSuffix("Works on [[Atlas Reborn]].\n"), "the link names the new title")
+expect(try engine.read(path: "notes/ada.md")!.hasSuffix("Works on [[\(linkName(path: atlas)!)]].\n"), "the link names the page's file, which no rename changes")
+expect(try engine.backlinks(path: atlas).map(\.source) == ["notes/ada.md"], "and still leads to it")
 
 // What an index listed is found again after the page changed.
 engine.settle()
@@ -121,17 +135,23 @@ expect(try engine.write(path: atlas, content: page.replacingOccurrences(of: "+ [
 expect(try engine.setTask(path: atlas, row: listed.row, text: listed.text, done: true) != nil, "a task is found by its text")
 expect(try engine.read(path: atlas)!.contains("+ [x] Book a room"), "and checked off")
 engine.settle()
-expect(try engine.backlinks(path: atlas).first?.context == "Works on [[Atlas Reborn]].", "a backlink comes with its row's text")
+expect(try engine.backlinks(path: atlas).first?.context == "Works on [[\(linkName(path: atlas)!)]].", "a backlink comes with its row's text")
 
-// Aliases relink; a name is not given to two pages.
+// An alias changed: its links are written with the page's own name. Two notes may have one title.
 expect(try engine.write(path: "notes/ada.md", content: "---\ntags: [Person]\naliases: [Countess]\nbirthday: 1815-12-10\n---\n# Ada Lovelace\n\nWorks on [[Atlas Reborn]].\n"), "an alias")
 expect(try engine.write(path: "notes/log.md", content: "# Log\n\n[[countess]] called.\n"), "a link by alias")
 let realiased = try engine.renameAlias(path: "notes/ada.md", alias: "Countess", newAlias: "AAL")
 expect(realiased.rewritten == ["notes/ada.md", "notes/log.md"], "an alias renamed rewrites its links")
-expect(try engine.read(path: "notes/log.md")! == "# Log\n\n[[AAL]] called.\n", "the link names the new alias")
-expect(try engine.createNote(title: "aal") == "notes/ada.md", "a new note of a name already taken is the page there is")
+expect(try engine.read(path: "notes/log.md")! == "# Log\n\n[[ada]] called.\n", "the link names the page's file")
 engine.settle()
-expect(try engine.duplicateNames().isEmpty, "no name is claimed twice")
+let twin = try engine.createNote(title: "Ada Lovelace")
+expect(twin == "notes/ada-lovelace.md" && linkName(path: twin) == "ada-lovelace", "a new note of a title already taken is a new file")
+engine.settle()
+expect(try engine.duplicateNames().map(\.name) == ["Ada Lovelace"], "two notes of one title are told of")
+expect(try engine.resolve(name: "ada")?.path == "notes/ada.md" && engine.resolve(name: "ada-lovelace")?.path == twin, "a file's name leads to its file")
+expect(try engine.backlinks(path: twin).isEmpty && engine.backlinks(path: "notes/ada.md").contains { $0.source == "notes/log.md" }, "and the new note has none of the other's backlinks")
+expect(try engine.delete(path: twin), "the second is deleted")
+engine.settle()
 expect(try engine.page(path: atlas)?.modified != nil, "a page is dated without saying so itself")
 
 // A private page is seen only where it is asked for; a tag is a link.

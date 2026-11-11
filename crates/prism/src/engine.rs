@@ -7,6 +7,7 @@ use crate::graph::{Graph, Renamed, Saved};
 use crate::note_merge::NoteMergeDriver;
 use crate::{Error, Result};
 use prism_index::{Catalog, History, Indexer, Links, Times};
+use prism_markup::NoteKind;
 use prism_sync::{Auth, Mode, Oid, Report, Repository, Schedule, Scheduler, SnapshotOptions, StopHandle, Syncer};
 use std::path::{Path, PathBuf};
 use std::sync::mpsc::{self, RecvTimeoutError};
@@ -172,18 +173,6 @@ pub struct Engine {
     watcher: Mutex<Option<notify::RecommendedWatcher>>,
 }
 
-/// The files that point at a page by one of its names — pages and saved
-/// rivers — when that name leads to this page; `None` when it leads to
-/// another (of two pages with one name, the links are the first's).
-fn pointing_at(db: &prism_index::rusqlite::Connection, path: &str, name: &str) -> Result<Option<Vec<String>>> {
-    if Catalog::answering(db, name)?.first().is_none_or(|(first, _)| first != path) {
-        return Ok(None);
-    }
-    let mut sources: Vec<String> = Links::backlinks(db, &[name.to_owned()])?.into_iter().map(|link| link.source).collect();
-    sources.dedup();
-    Ok(Some(sources))
-}
-
 /// A path a watcher reports, as the graph's own: `None` for git's
 /// bookkeeping, a file half-written on its way in, or a file outside.
 #[cfg(feature = "watch")]
@@ -292,19 +281,74 @@ impl Engine {
         Ok(saved)
     }
 
-    /// Makes a new note — or answers the page that already has the
-    /// title, or answers to it as an alias: a graph is not given two
-    /// pages of one name by asking twice. A new note is `notes/<slug>.md`
-    /// with the title as its first heading; a date's or a week's title
-    /// makes that day's or week's page.
+    /// Makes a new note with a title, its first heading — a new one
+    /// always: two notes may have one title, and are told apart by their
+    /// files. It is `notes/<slug>.md`, or `notes/<slug>-2.md` when that
+    /// name is taken ([`path_for_title`](Self::path_for_title)). Links
+    /// written with the title, which led to the note that had it, are
+    /// first written with that note's own name, so that they still do
+    /// (`pin`). A date's or a week's title makes — or
+    /// answers — that day's or week's page.
     pub fn create_note(&self, title: &str) -> Result<String> {
         self.settle();
-        if let Some((existing, _)) = Catalog::answering(&self.everything()?, title)?.into_iter().next() {
-            return Ok(existing);
+        let db = self.everything()?;
+        let path = self.path_for(&db, title)?;
+        if NoteKind::of(&path) != Some(NoteKind::Note) {
+            let path = self.graph.create_note_at(&path, title)?;
+            self.wrote([path.as_str()]);
+            return Ok(path);
         }
-        let path = self.graph.create_note(title)?;
-        self.wrote([path.as_str()]);
+        let mut written = self.pin(&db, title)?;
+        written.push(self.graph.create_note_at(&path, title)?);
+        self.wrote(written.iter().map(String::as_str));
         Ok(path)
+    }
+
+    /// Where a new note with this title would be kept: `notes/<slug>.md`,
+    /// or the first of `-2`, `-3`, … whose name no file has and no other
+    /// page is called by — a new file never takes a name that links
+    /// already lead elsewhere by. A date's or a week's title is that
+    /// day's or week's page.
+    pub fn path_for_title(&self, title: &str) -> String {
+        self.settle();
+        match self.everything().and_then(|db| self.path_for(&db, title)) {
+            Ok(path) => path,
+            Err(_) => self.graph.path_for_title(title),
+        }
+    }
+
+    fn path_for(&self, db: &prism_index::rusqlite::Connection, title: &str) -> Result<String> {
+        let first = self.graph.path_for_title(title);
+        if NoteKind::of(&first) != Some(NoteKind::Note) {
+            return Ok(first);
+        }
+        let slug = crate::graph::slug(title.trim());
+        for attempt in 1.. {
+            let name = if attempt == 1 { slug.clone() } else { format!("{slug}-{attempt}") };
+            let path = format!("notes/{name}.md");
+            if !self.graph.exists(&path) && Catalog::answering(db, &name)?.is_empty() {
+                return Ok(path);
+            }
+        }
+        Ok(first)
+    }
+
+    /// Writes every link written with a name — a title, an alias — with
+    /// the own name of the page it leads to: its file's
+    /// ([`NoteKind::link_name`]). Done before the name comes to mean
+    /// something else — another page takes it, or its page gives it up —
+    /// so that no link changes where it leads. Returns the files
+    /// rewritten; nothing is, where the name leads nowhere or is already
+    /// a page's own.
+    fn pin(&self, db: &prism_index::rusqlite::Connection, name: &str) -> Result<Vec<String>> {
+        // The page the name is called by. A link written exactly as a
+        // file's own name is that file's already, and is left as it is.
+        let Some((holder, _)) = Catalog::called(db, name)?.into_iter().next() else { return Ok(Vec::new()) };
+        let Some(own) = NoteKind::link_name(&holder) else { return Ok(Vec::new()) };
+        let exact = Catalog::own_name(db, name)?.map(|(written, _)| written);
+        let mut sources: Vec<String> = Links::backlinks(db, &[name.to_owned()])?.into_iter().map(|link| link.source).collect();
+        sources.dedup();
+        self.graph.relink(name, own, exact.as_deref(), &sources)
     }
 
     /// Checks a task off, or opens it again, as a list of tasks shows it:
@@ -334,15 +378,16 @@ impl Engine {
         Ok(deleted)
     }
 
-    /// Renames a page, and relinks the graph: every file that pointed at
-    /// the old title — by link, embed or tag, in a page or as a card of a
-    /// saved river — names the new one. The page's file stays where it
-    /// is. See [`Note::relink`](prism_markup::Note::relink) for what is
-    /// rewritten.
+    /// Renames a page: rewrites its first heading. Its file stays where
+    /// it is, and so does every link written with its file's name. A link
+    /// written with the old title — by hand, or by an earlier app — is
+    /// first written with the file's name (`pin`), so none is
+    /// left leading nowhere; and where the new title is another page's,
+    /// the links written with it are pinned to that page, so none comes
+    /// to lead here. Two pages may have one title.
     ///
-    /// Only links that led to *this* page are rewritten. Of two pages
-    /// with one title, links lead to the first; renaming the other
-    /// retitles it and touches nothing else.
+    /// Refused for a title that is a date (`TitleTaken`: it would name a
+    /// day's page), and for a day's or week's page (`NotRenamable`).
     pub fn rename_note(&self, path: &str, new_title: &str) -> Result<Renamed> {
         // The index must have seen everything written so far.
         self.settle();
@@ -352,28 +397,37 @@ impl Engine {
             Some(note) => note.title(path),
             None => return Err(Error::NotRenamable(path.to_owned())),
         };
-        let dated = prism_markup::Day::parse(new_title).is_some() || prism_markup::Week::parse(new_title).is_some();
-        if dated || Catalog::answering(&db, new_title)?.iter().any(|(other, _)| other != path) {
+        if prism_markup::Day::parse(new_title).is_some() || prism_markup::Week::parse(new_title).is_some() {
             return Err(Error::TitleTaken(new_title.to_owned()));
         }
-        let renamed = match pointing_at(&db, path, &old_title)? {
-            Some(linking) => self.graph.rename_note(path, new_title, &linking)?,
-            None => self.graph.retitle(path, new_title)?,
-        };
+        let mut renamed = self.graph.retitle(path, new_title)?;
+        if prism_markup::name_key(&old_title) != prism_markup::name_key(new_title) {
+            // The index is as it was before the heading changed: each name leads where it led.
+            // The old title's links, if they were this page's; the new title's, if they are another's.
+            let own = Catalog::called(&db, &old_title)?.first().is_some_and(|(holder, _)| holder == path);
+            for name in [own.then_some(old_title.as_str()), Some(new_title)].into_iter().flatten() {
+                for rewritten in self.pin(&db, name)? {
+                    if !renamed.rewritten.contains(&rewritten) {
+                        renamed.rewritten.push(rewritten);
+                    }
+                }
+            }
+        }
         self.wrote(renamed.rewritten.iter().map(String::as_str));
         Ok(renamed)
     }
 
-    /// Changes one of a page's aliases, and relinks the graph: every
-    /// link written with the old alias is written with the new one. In
-    /// the answer, the "titles" are the alias before and after.
+    /// Changes one of a page's aliases. Links written with the old alias
+    /// are first written with the page's own name, and links written with
+    /// the new one — if another page is called by it — with that page's.
+    /// In the answer, the "titles" are the alias before and after.
     pub fn rename_alias(&self, path: &str, alias: &str, new_alias: &str) -> Result<Renamed> {
         self.change_alias(path, alias, Some(new_alias))
     }
 
-    /// Takes one of a page's aliases away, and relinks the graph: every
-    /// link written with it is written with the page's title, so none is
-    /// left leading nowhere.
+    /// Takes one of a page's aliases away. Links written with it are
+    /// first written with the page's own name, so none is left leading
+    /// nowhere.
     pub fn remove_alias(&self, path: &str, alias: &str) -> Result<Renamed> {
         self.change_alias(path, alias, None)
     }
@@ -381,19 +435,15 @@ impl Engine {
     fn change_alias(&self, path: &str, alias: &str, to: Option<&str>) -> Result<Renamed> {
         self.settle();
         let db = self.everything()?;
+        let mut rewritten = self.pin(&db, alias)?;
         if let Some(to) = to {
-            if Catalog::answering(&db, to)?.iter().any(|(other, _)| other != path) {
-                return Err(Error::TitleTaken(to.trim().to_owned()));
-            }
+            rewritten.extend(self.pin(&db, to)?);
         }
-        let linking = pointing_at(&db, path, alias)?;
         let Some(now) = self.graph.change_alias(path, alias, to)? else { return Err(Error::NoSuchAlias(alias.to_owned())) };
-        let mut renamed = Renamed { old_title: alias.to_owned(), new_title: now.clone(), rewritten: vec![path.to_owned()] };
-        if let Some(linking) = linking.filter(|_| prism_markup::name_key(alias) != prism_markup::name_key(&now)) {
-            for rewritten in self.graph.relink(alias, &now, &linking)? {
-                if !renamed.rewritten.contains(&rewritten) {
-                    renamed.rewritten.push(rewritten);
-                }
+        let mut renamed = Renamed { old_title: alias.to_owned(), new_title: now, rewritten: vec![path.to_owned()] };
+        for file in rewritten {
+            if !renamed.rewritten.contains(&file) {
+                renamed.rewritten.push(file);
             }
         }
         self.wrote(renamed.rewritten.iter().map(String::as_str));

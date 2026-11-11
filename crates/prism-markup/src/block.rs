@@ -153,6 +153,11 @@ pub struct Block {
     /// Markdown has no other way to nest.
     pub children: Vec<Block>,
     pub layout: Layout,
+    /// Whether an outline shows the block without what is under it. Not
+    /// part of the note: never written, and never set by reading — it is
+    /// an editing [`Session`](crate::Session)'s, which keeps it here so
+    /// that a block moved takes its fold with it.
+    pub folded: bool,
 }
 
 /// A fenced code block's parts.
@@ -175,7 +180,7 @@ pub struct Callout<'a> {
 
 impl Block {
     pub fn new(kind: BlockKind, text: impl Into<String>) -> Block {
-        Block { kind, text: text.into(), children: Vec::new(), layout: Layout::default() }
+        Block { kind, text: text.into(), children: Vec::new(), layout: Layout::default(), folded: false }
     }
 
     pub fn paragraph(text: impl Into<String>) -> Block {
@@ -251,6 +256,13 @@ impl Block {
     /// Whether Markdown can nest blocks under this one: only a list item.
     pub fn can_have_children(&self) -> bool {
         self.is_item()
+    }
+
+    /// Whether Return in the block's words makes two blocks of it: a
+    /// paragraph, a heading, a list item, a quote. In any other — code, a
+    /// table — a line break stays inside it.
+    pub fn splits(&self) -> bool {
+        matches!(self.kind, BlockKind::Paragraph | BlockKind::Heading(_) | BlockKind::Item(_) | BlockKind::Quote)
     }
 
     /// Whether the block has inline Markdown in its text: emphasis, links,

@@ -73,6 +73,7 @@ public struct WeftMacApp: App {
                 Button("Close") { closeFront() }.keyboardShortcut("w")
                 Button("Close River") { closeTab() }.keyboardShortcut("w", modifiers: [.command, .option])
                 Button("Sync Now") { store?.syncNow() }.keyboardShortcut("r")
+                OpenDiagnostics()
                 if Account.shared.isAvailable {
                     Divider()
                     if Account.shared.isSignedIn {
@@ -92,6 +93,7 @@ public struct WeftMacApp: App {
             CommandMenu("Story") {
                 Button("Today") { today() }.keyboardShortcut("d", modifiers: [.command, .shift])
                 Button("Close All Cards") { closeAll() }.keyboardShortcut("w", modifiers: [.command, .shift])
+                Button("Reopen Closed Note") { withAnimation(.snappy(duration: 0.28)) { _ = store?.reopenClosed() } }.keyboardShortcut("t", modifiers: [.command, .shift])
                 Divider()
                 Button("Fold or Unfold Card") { toggleFold() }.keyboardShortcut(.return, modifiers: .control)
                 Button("Fold Card") { fold(true) }.keyboardShortcut(.upArrow, modifiers: [.command, .control])
@@ -102,6 +104,7 @@ public struct WeftMacApp: App {
                 Button("Previous Card") { store?.river.select(step: -1) }.keyboardShortcut(.upArrow, modifiers: [.command, .option])
                 Button("Next Card") { store?.river.select(step: 1) }.keyboardShortcut(.downArrow, modifiers: [.command, .option])
                 Button("Write in Selected Card") { write() }.keyboardShortcut(.return, modifiers: [.command, .option])
+                Button("Make First Line the Title") { titleByFirstLine() }.keyboardShortcut("t", modifiers: [.command, .control])
                 Button("Delete Note") { deleteCard() }.keyboardShortcut(.delete, modifiers: .command)
             }
             CommandGroup(before: .windowList) {
@@ -109,6 +112,9 @@ public struct WeftMacApp: App {
                 Button("Show Next Tab") { step(1) }.keyboardShortcut("]", modifiers: [.command, .shift])
             }
         }
+
+        Window("Sync Diagnostics", id: "diagnostics") { DiagnosticsView(store: store) }
+            .defaultSize(width: 760, height: 620)
 
         Settings { SettingsView() }
     }
@@ -153,16 +159,12 @@ public struct WeftMacApp: App {
 
     private func closeAll() {
         guard let store else { return }
-        store.saveAll()
-        withAnimation(.snappy(duration: 0.28)) { store.river.cards.removeAll() }
-        store.rememberRivers()
+        withAnimation(.snappy(duration: 0.28)) { store.closeAll(in: store.river) }
     }
 
     private func closeCard() {
         guard let store, let selected = store.river.selected else { return }
-        store.saveAll()
-        withAnimation(.snappy(duration: 0.28)) { store.river.close(selected) }
-        store.rememberRivers()
+        withAnimation(.snappy(duration: 0.28)) { store.close(selected, in: store.river) }
     }
 
     /// ⌘W closes what is in front: the card chosen; with none, the river; with one river, the window.
@@ -171,10 +173,8 @@ public struct WeftMacApp: App {
     }
 
     private func deleteCard() {
-        guard let store, let selected = store.river.selected, let card = store.river.card(selected) else { return }
-        store.draft(path: card.path, title: card.title).delete()
-        withAnimation(.snappy(duration: 0.28)) { store.river.close(selected) }
-        store.rememberRivers()
+        guard let store, let selected = store.river.selected else { return }
+        withAnimation(.snappy(duration: 0.28)) { store.delete(selected, in: store.river) }
     }
 
     private func closeTab() {
@@ -185,6 +185,12 @@ public struct WeftMacApp: App {
     private func fold(_ folded: Bool) {
         guard let river = store?.river, let selected = river.selected, let card = river.card(selected), card.folded != folded else { return }
         withAnimation(.snappy(duration: 0.22)) { river.toggleFold(selected) }
+    }
+
+    /// The first line of the card chosen — the one being written in, if one is — made its title.
+    private func titleByFirstLine() {
+        guard let store, let chosen = store.river.writing ?? store.river.selected, let card = store.river.card(chosen) else { return }
+        withAnimation(.snappy(duration: 0.22)) { _ = store.draft(path: card.path, title: card.title).titleByFirstLine() }
     }
 
     /// Folds the card chosen — the one being written in, if one is — or unfolds it.
@@ -233,6 +239,10 @@ enum RiverKeys {
             return isDelete
         }
         let flags = event.modifierFlags.intersection([.command, .option, .control])
+        // ⌘Z, with nothing being written: what was just done to the river, undone.
+        if flags == .command, event.charactersIgnoringModifiers == "z", !event.modifierFlags.contains(.shift) {
+            return withAnimation(.snappy(duration: 0.28)) { store.takeUndo() }
+        }
         let river = store.river
         if flags.isEmpty {
             switch event.specialKey {

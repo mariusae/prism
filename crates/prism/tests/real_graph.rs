@@ -121,3 +121,38 @@ fn a_real_history_dates_its_pages() {
     assert_eq!(indexer.update_times(&repo, repo.head()).unwrap(), 0);
     println!("asked again: {:.2?}", started.elapsed());
 }
+
+/// Where a real graph's links lead, now that a page's own name is what
+/// leads to it first: how many lead elsewhere than they did when titles
+/// led, then aliases, the lower path first. The graph is cloned — which
+/// only reads it — and the clone is what is indexed; nothing is synced.
+#[test]
+fn a_real_graphs_links_lead_where_they_led() {
+    let Some(source) = std::env::var_os("PRISM_GRAPH") else { return };
+    let dir = tempfile::tempdir().unwrap();
+    let cloned = std::process::Command::new("git").args(["clone", "-q"]).arg(&source).arg(dir.path()).status().unwrap();
+    assert!(cloned.success());
+    let engine = Engine::start(dir.path(), EngineConfig::default()).unwrap();
+    engine.settle();
+    let db = engine.index_showing_private().unwrap();
+    let before = "(SELECT path FROM note_names WHERE note_names.key = links.key AND rank >= 0 ORDER BY rank, path LIMIT 1)";
+    let now = "(SELECT substr(min(printf('%d|%020d|',
+         CASE WHEN rank = -1 AND name = links.target THEN 0 WHEN rank = -1 THEN 3 ELSE rank + 1 END,
+         coalesce((SELECT created FROM prism_dates WHERE prism_dates.path = note_names.path), 9223372036854775807)) || path), 24)
+     FROM note_names WHERE note_names.key = links.key)";
+    let count = |sql: &str| -> i64 { db.query_row(sql, [], |r| r.get(0)).unwrap() };
+    let links = count("SELECT count(*) FROM links");
+    let moved = count(&format!("SELECT count(*) FROM links WHERE {before} IS NOT NULL AND {before} IS NOT {now}"));
+    let found = count(&format!("SELECT count(*) FROM links WHERE {before} IS NULL AND {now} IS NOT NULL AND kind != 'tag'"));
+    println!("{links} links; {moved} lead elsewhere than they did; {found} that led nowhere now lead to a file of that name");
+    let mut statement = db
+        .prepare(&format!("SELECT target, kind, count(*), {before}, {now} FROM links WHERE {before} IS NOT NULL AND {before} IS NOT {now} GROUP BY key, kind"))
+        .unwrap();
+    let rows = statement
+        .query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?, r.get::<_, i64>(2)?, r.get::<_, String>(3)?, r.get::<_, Option<String>>(4)?)))
+        .unwrap();
+    for row in rows.flatten() {
+        println!("  {} × {} [[{}]]: {} → {}", row.2, row.1, row.0, row.3, row.4.unwrap_or_default());
+    }
+    println!("{} titles or aliases are more than one page's", Catalog::duplicates(&db).unwrap().len());
+}

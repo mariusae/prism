@@ -112,6 +112,14 @@ pub fn name_key(name: String) -> String {
     prism::markup::name_key(&name)
 }
 
+/// What a link to the page at a path is written with: its file's name —
+/// `project-atlas` for `notes/project-atlas.md`, the date for a day's
+/// page. `None` for a file that is no page.
+#[uniffi::export]
+pub fn link_name(path: String) -> Option<String> {
+    prism::markup::NoteKind::link_name(&path).map(str::to_owned)
+}
+
 /// The river a link's target names — `rivers/Work` is `Work` — if any.
 #[uniffi::export]
 pub fn river_name(link_target: String) -> Option<String> {

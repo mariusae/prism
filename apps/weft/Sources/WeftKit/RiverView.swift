@@ -1,3 +1,4 @@
+#if os(macOS)
 import Prism
 import PrismEmblem
 import SwiftUI
@@ -72,7 +73,7 @@ struct RiverView: View {
                                 .onDrop(of: [CardMove.type], delegate: CardMove(target: card.id, river: river, store: store, carried: $carried))
                                 .padding(.bottom, card.folded ? Measures.foldedGap : Measures.cardGap)
                                 .id(card.id)
-                                .transition(.opacity)
+                                .transition(.poof)
                         }
                     }
                     .padding(.horizontal, Measures.riverSides)
@@ -95,6 +96,8 @@ struct RiverView: View {
             }
             // The ticks are the river's scroll bar: its own is put away.
             .scrollIndicators(.hidden)
+            // Cards pass straight behind the bar: nothing is dimmed or blurred at the top.
+            .scrollEdgeEffectHidden(true, for: .top)
             .overlay(alignment: .trailing) {
                 let cards = river.all
                 if cards.count > 1 {
@@ -371,3 +374,4 @@ struct CardMove: DropDelegate {
 
     func dropExited(info: DropInfo) {}
 }
+#endif

@@ -18,12 +18,16 @@ another editor and everything is there to read.
 
 A graph has very few kinds of thing.
 
-- **A page** is a Markdown file. Its **path** is its identity. Its
-  **title** is its first heading. It may have **aliases**.
-- **A link** is one page pointing at another *by name*. `[[Ada]]`,
-  `![[Ada]]`, `#person`, `tags: [Person]`, `related: [Ada]` and
-  `company: "[[Acme]]"` are all links. One table holds them; one rule
-  resolves them; one operation rewrites them when a name changes.
+- **A page** is a Markdown file. Its **path** is its identity, and its
+  file's name — `ada` for `notes/ada.md` — is its **own name**: what a
+  link to it is written with. Its **title** is its first heading: what
+  it is shown as called. Two pages may have one title. It may have
+  **aliases**.
+- **A link** is one page pointing at another. `[[ada]]`, `![[ada]]`,
+  `#person`, `tags: [Person]`, `related: [ada]` and
+  `company: "[[acme]]"` are all links. One table holds them; one rule
+  resolves them — a page's own name first, then a title, then an alias;
+  what a link shows is its page's title, computed.
 - **A field** is a frontmatter key with a text or list value. Fields
   carry no built-in meaning except `aliases`, `tags`, `private`, and the
   two lists of names, `related` and `list`. Anything that *marks* a page —
@@ -108,7 +112,9 @@ named the same way and never written over.
 | | Example | What it is for |
 |---|---|---|
 | **path** | `notes/project-atlas.md` | the page's identity: the key in every index, what the engine's API takes. A rename keeps it. |
-| **title**, **aliases** | `Project Atlas`, `Atlas` | what links are written with |
+| **own name** | `project-atlas` | the file's name (`NoteKind::link_name`): what a link to the page is written with. No other page has it, and no rename changes it. A day's or a week's is its date. |
+| **title** | `Project Atlas` | what the page is shown as called, and what a link to it shows. Pages may share one. |
+| **aliases** | `Atlas` | other names it can be found and linked by |
 
 There is no other identifier. A legacy `id:` line in a note is an
 ordinary field.
@@ -122,36 +128,52 @@ ordinary field.
 
 `Note::set_title` rewrites that heading, making one if there is none.
 
-**Names** are the title, then each of `aliases`, each once.
-
 **Names are compared by key**: `name_key` collapses runs of whitespace
-and lowercases. `[[project  ATLAS]]` finds `Project Atlas`. Tags are
-names and use the same key.
+and lowercases. Tags are names and use the same key.
 
 **Resolving a name** (`Catalog::resolve`), in order:
 
 1. a date — `2026-10-31` or `2026-W44` — always leads to that day's or
    week's path, whether the page is written yet (`Resolved::Note`) or not
    (`Resolved::Unwritten`);
-2. a page whose **title** has that key;
-3. a page with that **alias**;
-4. otherwise nothing: a page waiting to be written.
+2. the page whose **own name** it is, written exactly: `[[atlas]]` is
+   `notes/atlas.md`, whatever else is called Atlas;
+3. a page whose **title** has that key;
+4. a page with that **alias**;
+5. a page whose own name has that key, written some other way (`Atlas`
+   for `atlas.md`, where nothing is titled so);
+6. otherwise nothing: a page waiting to be written.
 
-Ties go to the lower path.
+Of two pages that answer equally — two with one title — the one made
+first is led to, so a page made later takes no link from one that was
+there.
 
-**One name, one page — as far as the engine can see to it.**
-`Engine::create_note` answers the page that already has the name instead
-of making `…-2.md`; a rename or a new alias is refused (`TitleTaken`)
-when another page has the name. Two devices can still each make a page of
-one name before they sync. That cannot be prevented, so it is reported:
-`Catalog::duplicates` lists every name more than one page claims.
+Step 2 before step 3 is what makes a page's own name its own. Step 3
+before step 5 is what keeps a graph written before own names were what
+links say: its links are written with titles, and go on leading where
+they led — `[[Atlas]]` to the page titled Atlas, though another's file
+is `atlas.md`.
+
+**Apps write own names.** A link an app makes — completed, mentioned, a
+river's card — is `[[project-atlas]]`, and shows as *Project Atlas*. A
+link written by hand with a title, or by an earlier app, resolves by
+step 3 and is left as it is until its title comes to mean something
+else; then it is **pinned** ([§19](#19-renaming)).
+
+**Titles are not unique, and nothing needs them to be.**
+`Engine::create_note` always makes a new file: a second *Manifold* is
+`notes/manifold-2.md`, titled Manifold. A new file never takes a name
+that is another page's own name, title or alias
+(`Engine::path_for_title`), so no link already written leads to it.
+`Catalog::duplicates` lists the titles and aliases more than one page
+has, for an app that wants to show them.
 
 ### Untitled notes and labels
 
 A note is **untitled** when it has no first `# Heading` and its file's
 name says nothing: only an id, or `untitled`, or `untitled-` and a stamp
-(`notes/untitled-2026-11-10-135831-jmgs.md`). Its *title* is still its
-file's name — that is what a link to it says — but nothing shows it.
+(`notes/untitled-2026-11-10-135831-jmgs.md`). Its *title* is then its
+own name — which is what a link to any page says — but nothing shows it.
 
 What a note is shown as called is its **label** (`note::label`,
 `Note::label`, `Session::label`): a titled note's title; an untitled
@@ -284,8 +306,22 @@ Because they are one thing:
 - **A typed `link` field is a real link**: `company: "[[Acme]]"` shows up
   in Acme's backlinks.
 
-**Links hold names, not paths.** Nothing is resolved when a link is
-indexed, so a page created later is linked to by links written before it.
+**Links hold names, and are resolved when asked.** Nothing is resolved
+when a link is indexed, so a page created later is linked to by links
+written before it. The name an app writes is the page's own
+([§2](#2-identity-and-names)); a page's backlinks are the links that
+*lead to it* (`Links::leading_to`) — not every link that says a name it
+has. Of two pages titled Manifold, a link written `[[Manifold]]` is one
+page's only, and a link written `[[manifold-2]]` is the other's.
+
+**What a link shows is computed.** `[[project-atlas]]` shows the page's
+label — its title, or an untitled note's first words — wherever an
+editor draws it; `[[project-atlas|the project]]` shows the words given.
+What is written is not changed by it.
+
+**A tag is a word, not a pointer.** `#person` and `tags: [Person]` match
+by key, as they always did, and lead to the page that name resolves to.
+They are never rewritten to a file's name.
 
 `Note::references()` also gathers, in the same pass and never from code:
 
@@ -379,6 +415,20 @@ text)` finds the block as the document is now: at the path if it still
 has that text, else the block with that text nearest to where the path
 would stand, one at the same depth first. `Engine::set_task(path, block,
 text, done)` is built on it.
+
+**A fold is not part of the note.** An outline can show a block without
+what is under it; which blocks are folded is kept by whoever shows the
+note — a river keeps it per card ([§11](#11-saved-rivers)) — and handed
+to the editing `Session`, which holds it on the tree while the note is
+open (`Block::folded`, never written, never set by reading) so that a
+block moved takes its fold with it. `Session::folded_rows` and
+`set_folded_rows` give and take folds as a river keeps them: a row's
+index among all the body's rows, and its text.
+
+**A time block is a list item that starts with a time**: `9:00–10:30
+Deep work`, `11am Standup`. A list whose every item starts so — two or
+more, or one that says when it ends — is a timeline (`time::find`), and
+an outline draws it as one. Nothing but the words says so.
 
 **Losslessness** rests on two things: `Layout` records what the writer
 needs to give back the same bytes; and any top-level chunk that would
@@ -517,9 +567,10 @@ whole of how it fits the model:
 - The links index reads rivers as sources of links. A river holding a
   page is among that page's backlinks, and `listed in: rivers/Work`
   orders a query by its cards.
-- A rename rewrites a river exactly as it rewrites a page — its cards,
-  its `folded`/`opened`/`hidden` lists, its query — with no code of its
-  own.
+- A river's cards and its `folded`/`opened`/`hidden` lists say pages'
+  own names, as links do. One written with titles is read by resolving
+  them, and pinned as a page is ([§19](#19-renaming)), with no code of
+  its own.
 - A folded row is remembered by its index and its text, the same way any
   block is [known again](#8-the-body-blocks).
 
@@ -680,7 +731,7 @@ written, snapshotted and indexed in about 4 ms (release build).
 
 ## 15. The index schema
 
-### `catalog` — pages, names, fields (version 4)
+### `catalog` — pages, names, fields (version 5)
 
 ```sql
 notes       (path PRIMARY KEY, title, kind, private, conflicted, blank, label, untitled)
@@ -695,9 +746,9 @@ note_fields (path, key, position, value, number)    -- indexed on (path, key), o
 | `notes.kind` | `day`, `week` or `note` |
 | `notes.conflicted` | the file holds a whole conflict block ([§18](#18-merging-the-model-under-two-writers)) |
 | `notes.blank` | nothing is written in it: no blocks, or only empty bullets |
-| `note_names.rank` | `0` the title, `1` an alias |
+| `note_names.rank` | `-1` the page's own name (its file's), `0` the title, `1` an alias |
 | `name_words.suffix` | a name's key from one of its words on: `ada lovelace` gives `ada lovelace` and `lovelace` |
-| `name_words.score` | `rank × 2`, plus 1 for a suffix that is not the whole name: lower is a better find |
+| `name_words.score` | for a title or an alias, `rank × 2`, plus 1 for a suffix that is not the whole name: lower is a better find |
 | `note_fields` | every frontmatter key, a row a value: a list is a row an item, in order. A key written twice is read as its first |
 | `note_fields.number` | the value as a number, where it is one: what `sort:` by a field goes by first |
 
@@ -709,8 +760,8 @@ prefix of `name_words.suffix` — `suffix >= 'love' AND suffix < 'love…'` —
 so it finds a name by its start or by any word in it, and costs what it
 finds.
 
-Asks: `get`, `all`, `count`, `resolve`, `answering`, `duplicates`,
-`names`, `complete`, `conflicted`, `tagged`, `tags`, `tags_of`, `fields`,
+Asks: `get`, `all`, `count`, `resolve`, `answering`, `called`,
+`own_name`, `duplicates`, `names`, `complete`, `conflicted`, `tagged`, `tags`, `tags_of`, `fields`,
 `with_field`, `field_specs`, `schema`.
 
 ### `links` — every pointer (version 3)
@@ -793,7 +844,7 @@ and queries. A link *to* a hidden page simply does not resolve.
 
 Two things always see everything, because they act on the graph rather
 than show it: the engine's own operations (a rename rewrites a private
-page's links too; `create_note` will not duplicate a private page), and
+page's links too; a new note's file avoids a private page's names), and
 commit messages, which never name a private page.
 
 ## 17. How writes flow
@@ -840,7 +891,7 @@ to look again.
 **Two surfaces, split by what they need.** `Graph` does what needs only
 the files: read, write, save a draft, delete, add an asset, read and save
 a river, tick a task. `Engine` does what needs the index: make a note
-(is the name taken?), rename a page or an alias (what points at it?),
+(which file names are free?), rename a page or an alias (what points at it?),
 run a query. There is one way to do each.
 
 - **Files are written whole or not at all**, and only when the content
@@ -888,33 +939,47 @@ kept. A binary both changed — both are kept, the other as
 
 ## 19. Renaming
 
-Because links are names, changing a name must rewrite the links written
-with it. There is one mechanism:
+A link written with a page's own name needs nothing when the page is
+renamed: the file stays where it is, the link leads to it, and shows the
+new title. So a rename is one line changed in one file.
 
-1. **Find what points at the name** — `Links::backlinks`, which returns
-   pages and rivers, links and tags, body and frontmatter alike.
-2. **Rewrite each** with `Note::relink(old, new)`, matching by name key,
-   never inside code:
-   - `[[old]]`, `[[old|shown]]`, `![[old]]`, including `[[old\|x]]` in
-     tables;
-   - `#old`, when the new name can be written as a tag (one word);
-   - in query blocks, the value of `tag:`, `not tag:`, `links to:`,
-     `linked from:` and `listed in:`;
-   - in frontmatter, any list item or whole text value equal to the old
-     name, plain or as a `[[link]]` — except under `aliases` and
-     `caption`.
+What needs care is a link written with a **title** or an **alias** — by
+hand, by another tool, or before own names were what links say. It
+leads where it does because of what pages are called, and that can
+change. So before a name comes to mean something else, the links
+written with it are **pinned**: rewritten with the own name of the page
+they lead to (`Note::pin`, matching by name key, never inside code):
 
-**Only links that led to this page are rewritten.** Of two pages with one
-name, links lead to the first; renaming the other touches nothing else.
+- `[[old]]`, `[[old|shown]]`, `![[old]]`, including `[[old\|x]]` in
+  tables;
+- in query blocks, the value of `links to:`, `linked from:` and
+  `listed in:`;
+- in frontmatter, any list item or whole text value equal to the name,
+  plain or as a `[[link]]` — except under `aliases`, `caption` and
+  `tags`.
 
-| Call | Does |
+Left as they are: tags (`#old`, `tags:`, `tag:` in a query), which are
+words; and a link written exactly as another file's own name, which is
+that file's.
+
+A name is pinned when:
+
+| What happens | Pinned first |
 |---|---|
-| `Engine::rename_note(path, new_title)` | rewrites the first heading, then the links. Refused if the title is another page's name or a date (`TitleTaken`), or the page is a day's or week's (`NotRenamable`). |
-| `Engine::rename_alias(path, alias, new)` | changes the alias, then the links written with it |
-| `Engine::remove_alias(path, alias)` | removes it; links written with it are rewritten with the title |
+| `Engine::create_note(title)`, and the title is already a page's | links written with the title, to the page that had it |
+| `Engine::rename_note(path, new)` | links written with the old title, to this page; and links written with the new title — if it is another page's — to that page |
+| `Engine::rename_alias(path, alias, new)` | links written with the old alias; and with the new one, if another page is called by it |
+| `Engine::remove_alias(path, alias)` | links written with the alias |
 
-**The file stays where it is.** The path does not change, so indices,
-open editors and git history keep following the same page.
+After that no link has moved: each leads where it led.
+
+`rename_note` is refused for a title that is a date (`TitleTaken`: it
+would name a day's page) and for a day's or week's page
+(`NotRenamable`). A title another page has is not refused.
+
+**Nothing is rewritten that does not have to be.** A graph of title
+links is not converted at once: a link is pinned when its title is
+about to change meaning, and not before.
 
 ## 20. What the model does not do
 
@@ -923,9 +988,16 @@ open editors and git history keep following the same page.
   block references.
 - **No index of web links.**
 - **Assets are not dated**, and their contents are never read.
-- **A tag that cannot be written follows a rename only in frontmatter.**
-  Renaming Person to "Two Words" rewrites `tags: [Person]` but leaves
-  `#person` in a line.
+- **A tag does not follow a rename.** `#person` goes on saying person
+  when the page it leads to is retitled People; it still leads there,
+  by the page's own name where that is `person`.
+- **Two devices can each change what a title means before they sync** —
+  one renames a page while the other writes a link with its old title.
+  Each pins what it can see; a link written meanwhile with the title
+  resolves as any title does, to the page made first.
+- **What a link shows is computed where an editor draws it, and not in
+  an index.** A folded note's first words, a search snippet and a
+  backlink's context show what is written: a link's own name.
 - **Aliases edited by hand are not relinked.** Only `rename_alias` and
   `remove_alias` rewrite links.
 - **Nested tags are not a hierarchy.** `#work/deep` is one tag;
@@ -933,7 +1005,6 @@ open editors and git history keep following the same page.
 - **Typed fields are not enforced.**
 - **Frontmatter is flat.** Nested YAML is read as text.
 - **Times follow a path.** A file moved by hand is a new page made then.
-- **Duplicate names cannot be ruled out**, only avoided and reported.
 - **A field both devices changed keeps the merging device's value**,
   silently.
 - **Sorting folds case for ASCII only** where SQLite does the comparing.
@@ -949,7 +1020,7 @@ what the work grows with. Times are on the real graph — 2,115 pages,
 | Save a note and have it indexed | `snapshot_paths`; a tree diff; one transaction | the files written | 4 ms |
 | Resolve a link's name | `note_names (key)` | one lookup | — |
 | Complete a title as it is typed | `name_words (suffix)`, a range | what it finds | 56 µs |
-| Backlinks of a page | `links (key)` | the links to it | 261 µs for 494 |
+| Backlinks of a page | `links (key)`, each checked against `note_names (key)` | the links written with its names | 261 µs for 494 |
 | Pages with a tag | `links (key)` | the pages tagged | 207 µs for 172 |
 | Pages a field marks (`is: inbox`) | `note_fields (key, value)` | the pages with the field | 96 µs for 62 |
 | First 20 pages by title | `notes (title, path)` | the limit | 58 µs |

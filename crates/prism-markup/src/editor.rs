@@ -378,8 +378,9 @@ pub enum Command {
     /// made a plain line.
     Newline,
     /// Delete at the start of a line's words: an item's marker is taken
-    /// off, leaving its words a plain line; anything else is left to the
-    /// text view.
+    /// off, leaving its words a plain line. Delete just after a picture:
+    /// the picture is taken out whole, with the size written after it.
+    /// Anything else is left to the text view.
     DeleteBackward,
     /// Tab: the selected rows, with what is under them, a level deeper.
     Indent,
@@ -409,6 +410,56 @@ pub enum Command {
     /// Made a numbered item — or, being one, a plain line.
     Numbered,
     /// Made a quote — or, being one, a plain line.
+    Quote,
+    /// The selected rows above every sibling before them. Like all the
+    /// commands from here on, an outline's: as text, a note has no rows
+    /// to give them to.
+    MoveToTop,
+    /// The selected rows below every sibling after them.
+    MoveToBottom,
+    /// The rows under each selected row put out of sight. See
+    /// [`Session`](crate::Session) for what a fold is.
+    Fold,
+    Unfold,
+    /// Folded, or — being folded — unfolded.
+    ToggleFold,
+    /// Each selected row folded, and every row under it that has rows
+    /// under it.
+    FoldCompletely,
+    /// Each selected row unfolded, and every row under it.
+    UnfoldCompletely,
+    /// Every row of the note that has rows under it, folded.
+    FoldAll,
+    UnfoldAll,
+    /// The open tasks and checklist items among the selected rows, checked.
+    MarkDone,
+    /// The checked items right under each selected row put after the
+    /// rest, in their order.
+    MoveDoneToBottom,
+    /// Made a row of this kind, whatever it was.
+    Turn(RowKind),
+    /// A new time block, from `now` — minutes from midnight, on the
+    /// clock of whoever asks — for a quarter of an hour: see
+    /// [`time::new_block`](crate::time::new_block). The caret is left
+    /// after its time.
+    NewTimeBlock {
+        now: u32,
+    },
+}
+
+/// A kind a row can be turned into.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RowKind {
+    Paragraph,
+    /// `- text`.
+    Bullet,
+    /// `- [ ] text`: a checklist item.
+    Checkbox,
+    /// `+ [ ] text`: a task.
+    Task,
+    /// `1. text`.
+    Numbered,
+    Heading(u8),
     Quote,
 }
 
@@ -526,6 +577,14 @@ pub fn perform(body: &str, selection: Range<usize>, command: Command) -> Option<
             Some(Edit { range: caret..caret, replacement: prefix, selection: at..at })
         }
         Command::DeleteBackward => {
+            // Just after a picture: the picture, whole.
+            if collapsed && caret > line.content && !matches!(line.kind, LineKind::Code | LineKind::Fence) {
+                let words = line.content..line.range.end;
+                if let Some(picture) = inline::picture_before(&body[words.clone()], caret - words.start) {
+                    let range = words.start + picture.start..words.start + picture.end;
+                    return Some(Edit { selection: range.start..range.start, range, replacement: String::new() });
+                }
+            }
             if !collapsed || caret != line.content || line.content == line.range.start + line.indent {
                 return None;
             }
@@ -686,6 +745,20 @@ pub fn perform(body: &str, selection: Range<usize>, command: Command) -> Option<
             let place = |offset: usize| if offset <= from { offset } else { (offset.max(content) as isize + moved) as usize };
             Some(Edit { range: from..content, replacement: marker, selection: place(selection.start)..place(selection.end) })
         }
+        // An outline's: text has no rows to fold, nor to carry about.
+        Command::MoveToTop
+        | Command::MoveToBottom
+        | Command::Fold
+        | Command::Unfold
+        | Command::ToggleFold
+        | Command::FoldCompletely
+        | Command::UnfoldCompletely
+        | Command::FoldAll
+        | Command::UnfoldAll
+        | Command::MarkDone
+        | Command::MoveDoneToBottom
+        | Command::Turn(_)
+        | Command::NewTimeBlock { .. } => None,
     }
 }
 
@@ -919,6 +992,18 @@ mod tests {
         assert_eq!(after("## |Title", Command::DeleteBackward).unwrap(), "|Title");
         assert_eq!(after("- o|ne", Command::DeleteBackward), None);
         assert_eq!(after("|plain", Command::DeleteBackward), None);
+    }
+
+    #[test]
+    fn delete_after_a_picture_takes_the_whole_picture() {
+        assert_eq!(after("- see ![cat](assets/cat.png)| there", Command::DeleteBackward).unwrap(), "- see | there");
+        assert_eq!(after("![](a.png) ![](b.png)<!-- {\"width\":40} -->|", Command::DeleteBackward).unwrap(), "![](a.png) |");
+        // The size, written a space after, goes with it.
+        assert_eq!(after("![](a.png) <!-- {\"width\":40,\"height\":30} -->|", Command::DeleteBackward).unwrap(), "|");
+        // Inside its markup, and after any other comment, a character is deleted as ever.
+        assert_eq!(after("![](a.p|ng)", Command::DeleteBackward), None);
+        assert_eq!(after("word <!-- note -->|", Command::DeleteBackward), None);
+        assert_eq!(after("```\n![](a.png)|\n```", Command::DeleteBackward), None);
     }
 
     #[test]

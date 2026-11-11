@@ -48,6 +48,18 @@ public struct EditorTheme {
     public var highlight: EditorColor
     public var size: CGFloat
     public var face: EditorFace
+    /// What the text stands on: what is put behind a row lifted to be
+    /// carried, which would otherwise show the rows under it through.
+    /// The system's own, unless the app sets another.
+    public var background: EditorColor = EditorTheme.systemBackground
+
+    static var systemBackground: EditorColor {
+        #if os(macOS)
+        return .textBackgroundColor
+        #else
+        return .systemBackground
+        #endif
+    }
 
     public init(text: EditorColor, secondary: EditorColor, faint: EditorColor, accent: EditorColor, codeBackground: EditorColor, highlight: EditorColor, size: CGFloat, face: EditorFace = .sans) {
         self.text = text
@@ -135,6 +147,25 @@ public struct EditorOffer: Hashable {
     }
 }
 
+/// A row folded in an outline — the rows under it not shown — as an app
+/// keeps it: its place among all the note's rows, and its words, by which
+/// it is found again after the note changed. The very form a saved river
+/// keeps its cards' folded rows in (`RiverCard.foldedRows`).
+public typealias EditorFoldedRow = RiverFoldedRow
+
+/// A picture pasted or dropped into a note, for the app to keep: its
+/// bytes, and the extension of the file they should be kept in — `png`,
+/// `jpg`, `gif`.
+public struct EditorPastedPicture: Hashable, Sendable {
+    public var data: Data
+    public var fileExtension: String
+
+    public init(data: Data, fileExtension: String) {
+        self.data = data
+        self.fileExtension = fileExtension
+    }
+}
+
 /// What a link in a note leads to: what the editor hands its app to follow.
 public enum EditorLink: Hashable {
     case page(String)
@@ -143,14 +174,15 @@ public enum EditorLink: Hashable {
 }
 
 /// A part of a note an app may draw something in place of: a fenced
-/// block — a query, shown as what it finds — or a line that is only a
-/// picture, shown as the picture.
+/// block — a query, shown as what it finds — or a line that is only
+/// pictures, shown as the picture, or as several to turn through.
 public struct EditorBlock: Hashable {
     /// What follows the opening fence: `query`. For a line that is only
-    /// a picture, [`EditorBlock.picture`].
+    /// pictures, [`EditorBlock.picture`].
     public var info: String
-    /// The lines between the fences; for a picture, its line as written:
-    /// `![alt](assets/a.png)`, perhaps with its size after it.
+    /// The lines between the fences; for pictures, their line as written:
+    /// `![alt](assets/a.png)`, perhaps with its size after it — or
+    /// several such, a space between them: see `EditorPicture.all(line:)`.
     public var source: String
     /// Writes other words in the block's place: how a picture, resized,
     /// has its new size written beside it. Only a picture's line is
@@ -159,8 +191,12 @@ public struct EditorBlock: Hashable {
     /// How wide the room it is drawn in is: so that what stands in its
     /// place knows its size at once, and need not measure and move.
     public var room: CGFloat = 0
+    /// Tells the editor that what stands in the block's place has changed
+    /// its size, and the note is to be laid out around it again: how a
+    /// picture being resized moves what is under it as it goes.
+    public var resized: (() -> Void)?
 
-    /// The `info` of a line that is only a picture.
+    /// The `info` of a line that is only pictures: one, or several.
     public static let picture = "picture"
 
     public init(info: String, source: String, rewrite: ((String) -> Void)? = nil) {
@@ -207,6 +243,28 @@ public struct EditorPicture: Hashable {
             width = (read["width"] as? NSNumber).map { CGFloat(truncating: $0) }
             height = (read["height"] as? NSNumber).map { CGFloat(truncating: $0) }
         }
+    }
+
+    private static let each = try? NSRegularExpression(pattern: #"\s*!\[([^\]]*)\]\(([^)\s]+)\)[ \t]*(?:<!--\s*(\{[^>]*\})\s*-->)?\s*"#)
+
+    /// Reads a line that is only pictures — one, or several with spaces
+    /// between them, each perhaps with its size after it — in the order
+    /// written; `nil` for any other line. What an app shows several of as
+    /// pictures to turn through.
+    public static func all(line: String) -> [EditorPicture]? {
+        guard let each else { return nil }
+        let text = line as NSString
+        var found: [EditorPicture] = []
+        var at = 0
+        // One after another, with nothing between them, to the line's end.
+        while at < text.length {
+            guard let match = each.firstMatch(in: line, options: .anchored, range: NSRange(location: at, length: text.length - at)), match.range.length > 0,
+                  let picture = EditorPicture(line: text.substring(with: match.range))
+            else { return nil }
+            found.append(picture)
+            at = NSMaxRange(match.range)
+        }
+        return found.isEmpty ? nil : found
     }
 
     /// The line that writes it.

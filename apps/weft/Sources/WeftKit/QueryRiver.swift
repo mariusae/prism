@@ -1,4 +1,3 @@
-#if os(macOS)
 import Prism
 import PrismEmblem
 import SwiftUI
@@ -107,6 +106,7 @@ struct QuerySpec: Equatable {
     }
 }
 
+#if os(macOS)
 /// Over a query river's cards: what it finds, said in words, a click
 /// away from its settings.
 struct QueryRiverHeader: View {
@@ -138,6 +138,8 @@ struct QueryRiverHeader: View {
         .help("Edit what the river finds, and how it orders it")
     }
 }
+
+#endif
 
 /// A query river's settings: its name, icon and colour; how it sorts;
 /// what it finds, from where, and what not.
@@ -212,7 +214,9 @@ struct QueryRiverEditor: View {
             }
             .padding(14)
         }
+        #if os(macOS)
         .frame(width: 500, height: 680)
+        #endif
         .onAppear(perform: start)
         .onChange(of: limitText) { _, text in spec.limit = Int(text.trimmingCharacters(in: .whitespaces)) }
     }
@@ -264,4 +268,3 @@ struct QueryRiverEditor: View {
         dismiss()
     }
 }
-#endif

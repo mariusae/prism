@@ -1,3 +1,4 @@
+#if os(macOS)
 import Prism
 import PrismEmblem
 import SwiftUI
@@ -251,7 +252,11 @@ struct QuickOpen: View {
                 top.append(Row(id: "day:\(day)", symbol: "calendar", name: day, detail: "Day") { $0.open(name: day, after: $0.river.selected) })
             }
             let pages = (try? store.engine.complete(typed: name, limit: 8)) ?? []
-            top += pages.map { page($0) }
+            // Notes of one title are told apart by their files' names.
+            let shared = store.sharedLabels(among: pages)
+            top += pages.map { found in
+                page(found, detail: shared.contains(found.label) ? linkName(path: found.path).map { "\($0) · \(when(found))" } : nil)
+            }
             let key = nameKey(name: name)
             if !pages.contains(where: { nameKey(name: $0.title) == key }), store.resolve(name)?.exists != true {
                 top.append(Row(id: "new", symbol: "plus", name: "New note “\(name)”", detail: "↩") { _ = $0.newPage(title: name) })
@@ -298,3 +303,4 @@ struct QuickOpen: View {
         }
     }
 }
+#endif

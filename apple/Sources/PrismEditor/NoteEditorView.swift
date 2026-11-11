@@ -2,6 +2,7 @@
 import AppKit
 import Prism
 import SwiftUI
+import UniformTypeIdentifiers
 
 /// A note's body, written in where it stands.
 ///
@@ -19,6 +20,8 @@ public struct NoteEditorView: NSViewRepresentable {
     let isWriting: Bool
     @Binding var height: CGFloat
     var pageExists: (String) -> Bool
+    /// What a link's page is shown as called, where the link does not say it.
+    var linkLabel: (String) -> String?
     var onChange: () -> Void
     var onFocus: (Bool) -> Void
     var onFollow: (EditorLink) -> Void
@@ -41,6 +44,33 @@ public struct NoteEditorView: NSViewRepresentable {
     /// after `@`. Listed under the caret; ↑ ↓ choose, Return or Tab takes
     /// one, Escape puts the list away. None, and nothing is listed.
     var offers: (BodyCompletion) -> [EditorOffer]
+    /// Whether the note has no title, and so is offered its first line
+    /// for one: a quiet "Title" at that line's end while the caret is in
+    /// it, and Return at the end of a first line written as a heading.
+    var offersTitle: Bool
+    /// The offer taken: the app makes the first line the title.
+    var onTitle: () -> Void
+    /// The rows of the outline that are folded: the rows under each are
+    /// not shown. A fold is no part of the note — the app keeps it, where
+    /// it likes: with the river the note's card is in — and so the app
+    /// says here which rows are folded, and is told (`onFolds`) when that
+    /// changes: a row was folded or unfolded, or the note changed around
+    /// one, so that it is now known by another place or other words.
+    var foldedRows: [EditorFoldedRow]
+    var onFolds: ([EditorFoldedRow]) -> Void
+    /// Takes rows to another note: handed their Markdown, the app asks
+    /// where to, puts them there, and then calls what it was handed with
+    /// it — which takes them out of this note. `nil`, and "Move to…" is
+    /// not offered. (A phone's: the Mac has no menu of a row's yet.)
+    var onMoveRows: ((_ markdown: String, _ moved: @escaping () -> Void) -> Void)?
+    /// Keeps pictures pasted or dropped, and says where: a path in the
+    /// graph for each, in order — `assets/pasted-….png`. They are then
+    /// written where the caret is, `![](path)`, a space between them.
+    /// None — as an app that does not take pictures answers — and what
+    /// was pasted is pasted as the text view would.
+    var savePictures: ([EditorPastedPicture]) -> [String]
+    /// Whether the note is today's: its timelines show the time now.
+    var isToday: Bool
 
     /// - Parameters:
     ///   - editor: the note. Give another to show another — or the same
@@ -51,10 +81,16 @@ public struct NoteEditorView: NSViewRepresentable {
     public init(
         editor: NoteEditor, theme: EditorTheme, isWriting: Bool, height: Binding<CGFloat>, refresh: Int = 0,
         pageExists: @escaping (String) -> Bool = { _ in true },
+        linkLabel: @escaping (String) -> String? = { _ in nil },
         blockView: @escaping (EditorBlock) -> AnyView? = { _ in nil },
         linkPreview: @escaping (EditorLink) -> AnyView? = { _ in nil },
         lead: EditorLead? = nil, onLead: @escaping () -> Void = {},
         offers: @escaping (BodyCompletion) -> [EditorOffer] = { _ in [] },
+        offersTitle: Bool = false, onTitle: @escaping () -> Void = {},
+        foldedRows: [EditorFoldedRow] = [], onFolds: @escaping ([EditorFoldedRow]) -> Void = { _ in },
+        onMoveRows: ((_ markdown: String, _ moved: @escaping () -> Void) -> Void)? = nil,
+        savePictures: @escaping ([EditorPastedPicture]) -> [String] = { _ in [] },
+        isToday: Bool = false,
         onChange: @escaping () -> Void = {}, onFocus: @escaping (Bool) -> Void = { _ in }, onFollow: @escaping (EditorLink) -> Void = { _ in }
     ) {
         self.editor = editor
@@ -63,11 +99,19 @@ public struct NoteEditorView: NSViewRepresentable {
         _height = height
         self.refresh = refresh
         self.pageExists = pageExists
+        self.linkLabel = linkLabel
         self.blockView = blockView
         self.linkPreview = linkPreview
         self.lead = lead
         self.onLead = onLead
         self.offers = offers
+        self.offersTitle = offersTitle
+        self.onTitle = onTitle
+        self.foldedRows = foldedRows
+        self.onFolds = onFolds
+        self.onMoveRows = onMoveRows
+        self.savePictures = savePictures
+        self.isToday = isToday
         self.onChange = onChange
         self.onFocus = onFocus
         self.onFollow = onFollow
@@ -88,6 +132,7 @@ public struct NoteEditorView: NSViewRepresentable {
         view.delegate = context.coordinator
         view.coordinator = context.coordinator
         context.coordinator.view = view
+        _ = context.coordinator.takeFolds(anew: true)
         context.coordinator.load()
         return view
     }
@@ -95,9 +140,13 @@ public struct NoteEditorView: NSViewRepresentable {
     public func updateNSView(_ view: NoteTextView, context: Context) {
         let coordinator = context.coordinator
         let other = coordinator.parent.editor !== editor
+        let folds = other || coordinator.parent.foldedRows != foldedRows
         let looks = coordinator.parent.refresh != refresh || coordinator.parent.theme.size != theme.size || coordinator.parent.theme.face != theme.face || coordinator.parent.lead != lead
+            || coordinator.parent.isToday != isToday
         coordinator.parent = self
-        if other || coordinator.shownMode != editor.mode() {
+        let refolded = folds && coordinator.takeFolds(anew: other)
+        if other || refolded || coordinator.shownMode != editor.mode() || coordinator.shown != editor.text() {
+            // …or the note was changed from outside the view: a link given its title, say.
             coordinator.load()
         } else if looks {
             coordinator.restyle()
@@ -119,362 +168,80 @@ public struct NoteEditorView: NSViewRepresentable {
         guard let width = proposal.width, width > 0, width.isFinite else { return nil }
         return CGSize(width: width, height: nsView.height(forWidth: width))
     }
+}
 
-    @MainActor
-    public final class Coordinator: NSObject, NSTextViewDelegate {
-        var parent: NoteEditorView
-        weak var view: NoteTextView?
-        /// What the editor shows, as the view last agreed it with it.
-        private var shown = ""
-        fileprivate var shownMode: EditorMode = .text
-        private var layout = BodyLayout(lines: [], runs: [], markersInText: true)
-        private var revealed = Set<Int>()
-        private var isApplying = false
-
-        init(_ parent: NoteEditorView) { self.parent = parent }
-
-        private var editor: NoteEditor { parent.editor }
-
-        /// Shows the editor's note from scratch.
-        func load() {
-            guard let view, let storage = view.textStorage else { return }
-            shown = editor.text()
-            shownMode = editor.mode()
-            if storage.string != shown {
-                isApplying = true
-                let caret = min(view.selectedRange().location, (shown as NSString).length)
-                storage.replaceCharacters(in: NSRange(location: 0, length: storage.length), with: shown)
-                view.setSelectedRange(NSRange(location: caret, length: 0))
-                isApplying = false
-            }
-            restyle()
-        }
-
-        /// Dresses the text again, as the editor reads it.
-        func restyle() {
-            guard let view, let storage = view.textStorage, let manager = view.layoutManager as? BodyLayoutManager else { return }
-            let styler = BodyStyler(theme: parent.theme, pageExists: parent.pageExists)
-            layout = editor.layout()
-            let writing = view.window?.firstResponder === view
-            revealed = writing ? BodyStyler.revealed(layout, selection: view.selectedRange()) : []
-            isApplying = true
-            manager.theme = parent.theme
-            manager.lead = parent.lead
-            if let first = layout.lines.first, case .item(let number, let done, _) = first.kind, number == nil, done == nil, first.depth <= 1 {
-                manager.leadStart = Int(first.start)
-            } else {
-                manager.leadStart = nil
-            }
-            styler.style(storage, layout: layout, revealed: revealed)
-            let replaced = placeBlocks(in: view, storage: storage)
-            // A row an app's view stands in place of has no mark of its own to draw.
-            manager.rows = layout.markersInText ? [] : layout.lines.enumerated().filter { !replaced.contains($0.offset) }.map(\.element)
-            view.typingAttributes = typingAttributes(styler)
-            isApplying = false
-            view.needsDisplay = true
-            reportHeight()
-        }
-
-        // MARK: Blocks drawn by the app
-
-        private var hosts: [String: NSHostingView<AnyView>] = [:]
-
-        /// The fenced blocks in what is shown: each with the lines it takes.
-        private func blocks(in text: NSString) -> [(block: EditorBlock, lines: ClosedRange<Int>, range: NSRange)] {
-            var found: [(EditorBlock, ClosedRange<Int>, NSRange)] = []
-            let part = { (range: NSRange) in text.substring(with: range) }
-            if layout.markersInText {
-                var opened: Int?
-                for (index, line) in layout.lines.enumerated() where line.kind == .fence {
-                    guard let start = opened else {
-                        opened = index
-                        continue
-                    }
-                    opened = nil
-                    let first = layout.lines[start]
-                    let info = part(NSRange(location: Int(first.content), length: Int(first.end - first.content))).trimmingCharacters(in: CharacterSet(charactersIn: "`~ "))
-                    let bodyStart = min(Int(first.end) + 1, Int(line.start))
-                    let source = part(NSRange(location: bodyStart, length: max(Int(line.start) - bodyStart - 1, 0)))
-                    found.append((EditorBlock(info: info, source: source), start...index, NSRange(location: Int(first.start), length: Int(line.end - first.start))))
-                }
-            } else {
-                // In an outline a block of code is one row, its lines parted by U+2028.
-                for (index, line) in layout.lines.enumerated() where line.kind == .code {
-                    let range = NSRange(location: Int(line.start), length: Int(line.end - line.start))
-                    let parts = part(range).components(separatedBy: "\u{2028}")
-                    guard parts.count >= 2, let first = parts.first else { continue }
-                    let info = first.trimmingCharacters(in: CharacterSet(charactersIn: "`~ "))
-                    found.append((EditorBlock(info: info, source: parts.dropFirst().dropLast().joined(separator: "\n")), index...index, range))
-                }
-            }
-            // A line that is only a picture, in either mode.
-            for (index, line) in layout.lines.enumerated() where line.kind != .fence && line.kind != .code {
-                let range = NSRange(location: Int(line.content), length: max(Int(line.end) - Int(line.content), 0))
-                guard range.length > 4, NSMaxRange(range) <= text.length else { continue }
-                let words = part(range)
-                guard words.contains("!["), EditorPicture(line: words) != nil else { continue }
-                let block = EditorBlock(info: EditorBlock.picture, source: words) { [weak self] rewritten in self?.rewrite(line: index, as: rewritten) }
-                found.append((block, index...index, NSRange(location: Int(line.start), length: Int(line.end - line.start))))
-            }
-            return found
-        }
-
-        /// Writes other words on a line, in place of its own: a picture's new size.
-        private func rewrite(line index: Int, as words: String) {
-            guard layout.lines.indices.contains(index), let view, !view.hasMarkedText() else { return }
-            let line = layout.lines[index]
-            var edit = editor.replace(start: line.content, end: line.end, replacement: words)
-            // The caret stays where it was: nothing was typed.
-            let kept = view.selectedRange()
-            edit.selectionStart = UInt32(kept.location)
-            edit.selectionEnd = UInt32(NSMaxRange(kept))
-            settle(edit)
-        }
-
-        /// Puts the app's views where the blocks they stand for are
-        /// written, and folds those blocks' own lines away under them.
-        @discardableResult
-        private func placeBlocks(in view: NoteTextView, storage: NSTextStorage) -> Set<Int> {
-            guard let manager = view.layoutManager, let container = view.textContainer else { return [] }
-            var replaced = Set<Int>()
-            var used = Set<String>()
-            var placed: [(host: NSHostingView<AnyView>, range: NSRange)] = []
-            let width = max(view.bounds.width - view.textContainerInset.width * 2, 120)
-            for (index, found) in blocks(in: storage.string as NSString).enumerated() {
-                var block = found.block
-                block.room = width
-                guard !found.lines.contains(where: revealed.contains), let content = parent.blockView(block) else { continue }
-                let key = "\(index)|\(found.block.info)|\(found.block.info == EditorBlock.picture ? found.block.source : "")"
-                used.insert(key)
-                replaced.formUnion(found.lines)
-                let host = hosts[key] ?? {
-                    let host = NSHostingView(rootView: AnyView(EmptyView()))
-                    view.addSubview(host)
-                    hosts[key] = host
-                    return host
-                }()
-                host.rootView = AnyView(content.frame(width: width, alignment: .leading))
-                let height = host.fittingSize.height
-                host.setFrameSize(CGSize(width: width, height: height))
-                // The block's own lines are folded to nothing; the room it takes is left under them.
-                let folded = NSMutableParagraphStyle()
-                folded.maximumLineHeight = 0.5
-                folded.minimumLineHeight = 0.5
-                folded.lineSpacing = 0
-                let last = NSMutableParagraphStyle()
-                last.setParagraphStyle(folded)
-                last.paragraphSpacing = height + 12
-                storage.addAttributes([.font: BodyStyler.hiddenFont, .foregroundColor: EditorColor.clear, .paragraphStyle: folded], range: found.range)
-                let text = storage.string as NSString
-                let final = text.paragraphRange(for: NSRange(location: NSMaxRange(found.range), length: 0))
-                storage.addAttribute(.paragraphStyle, value: last, range: final.length > 0 ? final : found.range)
-                placed.append((host, found.range))
-            }
-            for (key, host) in hosts where !used.contains(key) {
-                host.removeFromSuperview()
-                hosts[key] = nil
-            }
-            guard !placed.isEmpty else {
-                view.blocksBottom = 0
-                return replaced
-            }
-            manager.ensureLayout(for: container)
-            var bottom: CGFloat = 0
-            for (host, range) in placed {
-                let glyph = manager.glyphIndexForCharacter(at: max(NSMaxRange(range) - 1, range.location))
-                let line = manager.lineFragmentUsedRect(forGlyphAt: glyph, effectiveRange: nil)
-                host.setFrameOrigin(CGPoint(x: view.textContainerOrigin.x, y: view.textContainerOrigin.y + line.maxY + 4))
-                bottom = max(bottom, host.frame.maxY)
-            }
-            view.blocksBottom = bottom
-            return replaced
-        }
-
-        /// What is typed next takes the look of the line it is typed on.
-        private func typingAttributes(_ styler: BodyStyler) -> [NSAttributedString.Key: Any] {
-            guard let view, let storage = view.textStorage else { return styler.baseAttributes }
-            var attributes = styler.baseAttributes
-            let caret = view.selectedRange().location
-            if let line = layout.lines.first(where: { Int($0.start) <= caret && caret <= Int($0.end) }) {
-                let at = min(Int(line.start), max(storage.length - 1, 0))
-                if storage.length > 0, let style = storage.attribute(.paragraphStyle, at: at, effectiveRange: nil) { attributes[.paragraphStyle] = style }
-                if !layout.markersInText, case .item = line.kind, storage.length == Int(line.start) || line.start == line.end {
-                    // An empty row has no character to carry its indentation.
-                    let paragraph = NSMutableParagraphStyle()
-                    paragraph.lineSpacing = 3
-                    paragraph.firstLineHeadIndent = CGFloat(line.depth) * parent.theme.step
-                    paragraph.headIndent = paragraph.firstLineHeadIndent
-                    attributes[.paragraphStyle] = paragraph
-                }
-            }
-            return attributes
-        }
-
-        private func reportHeight() {
-            guard let view, view.bounds.width > 0 else { return }
-            let height = view.height(forWidth: view.bounds.width)
-            if abs(height - parent.height) > 0.5 {
-                DispatchQueue.main.async { [weak self] in self?.parent.height = height }
-            }
-        }
-
-        // What was typed is the note's to take.
-
-        public func textDidChange(_ notification: Notification) {
-            guard !isApplying, let view, !view.hasMarkedText() else { return }
-            let now = view.string as NSString
-            let was = shown as NSString
-            guard !now.isEqual(to: shown) else { return }
-            // What changed in the view, as one replacement of what was shown.
-            var prefix = 0
-            let limit = min(now.length, was.length)
-            while prefix < limit, now.character(at: prefix) == was.character(at: prefix) { prefix += 1 }
-            var suffix = 0
-            while suffix < limit - prefix, now.character(at: now.length - 1 - suffix) == was.character(at: was.length - 1 - suffix) { suffix += 1 }
-            // Not through the middle of a pair of surrogates.
-            if prefix > 0, UTF16.isLeadSurrogate(was.character(at: prefix - 1)) { prefix -= 1 }
-            if suffix > 0, UTF16.isTrailSurrogate(was.character(at: was.length - suffix)) { suffix -= 1 }
-            let typed = now.substring(with: NSRange(location: prefix, length: now.length - prefix - suffix))
-            let edit = editor.replace(start: UInt32(prefix), end: UInt32(was.length - suffix), replacement: typed)
-            settle(edit)
-        }
-
-        /// After the editor took a change: the view is made to show what
-        /// the editor now does, which is usually what it already shows.
-        private func settle(_ edit: BodyEdit?) {
-            guard let view, let storage = view.textStorage else { return }
-            let text = editor.text()
-            if storage.string != text {
-                // The editor made more of it than was typed — `- ` became a bullet.
-                isApplying = true
-                let now = storage.string as NSString
-                let want = text as NSString
-                var prefix = 0
-                let limit = min(now.length, want.length)
-                while prefix < limit, now.character(at: prefix) == want.character(at: prefix) { prefix += 1 }
-                var suffix = 0
-                while suffix < limit - prefix, now.character(at: now.length - 1 - suffix) == want.character(at: want.length - 1 - suffix) { suffix += 1 }
-                storage.replaceCharacters(in: NSRange(location: prefix, length: now.length - prefix - suffix), with: want.substring(with: NSRange(location: prefix, length: want.length - prefix - suffix)))
-                isApplying = false
-            }
-            shown = text
-            if let edit {
-                isApplying = true
-                let length = (text as NSString).length
-                let start = min(Int(edit.selectionStart), length)
-                view.setSelectedRange(NSRange(location: start, length: min(Int(edit.selectionEnd), length) - start))
-                isApplying = false
-            }
-            restyle()
-            view.scrollRangeToVisible(view.selectedRange())
-            parent.onChange()
-            updateOffers()
-        }
-
-        // MARK: A link being typed, and the pages offered for it
-
-        private var offering: (found: BodyCompletion, offers: [EditorOffer], chosen: Int)?
-        private var offerList: OfferList?
-        /// Where a link was being typed when its list was put away: not
-        /// offered for again until another is begun.
-        private var putAway: UInt32?
-
-        var isOffering: Bool { offering != nil }
-
-        /// Looks at what is being typed at the caret, and lists what the app offers for it.
-        func updateOffers() {
-            guard let view, let window = view.window, window.firstResponder === view, view.selectedRange().length == 0, !view.hasMarkedText(),
-                  let found = completionAt(body: view.string, caret: UInt32(view.selectedRange().location)), found.kind != .tag
-            else {
-                putAway = nil
-                return hideOffers()
-            }
-            guard putAway != found.start else { return hideOffers() }
-            let offers = Array(parent.offers(found).prefix(8))
-            guard !offers.isEmpty else { return hideOffers() }
-            // The same one stays chosen while the list is the same.
-            let chosen = offering.flatMap { was in was.offers == offers ? was.chosen : nil } ?? 0
-            offering = (found, offers, chosen)
-            showOffers(in: view, window: window)
-        }
-
-        private func showOffers(in view: NoteTextView, window: NSWindow) {
-            guard let offering else { return }
-            let caret = view.firstRect(forCharacterRange: NSRange(location: Int(offering.found.start), length: 0), actualRange: nil)
-            let content = AnyView(OfferListView(offers: offering.offers, chosen: offering.chosen) { [weak self] index in
-                self?.offering?.chosen = index
-                self?.acceptOffer()
-            })
-            if let offerList { offerList.show(content, under: caret) } else { offerList = OfferList(content: content, under: caret, over: window) }
-        }
-
-        func hideOffers() {
-            offering = nil
-            offerList?.close()
-            offerList = nil
-        }
-
-        func moveOffer(by step: Int) {
-            guard var now = offering, let view, let window = view.window else { return }
-            now.chosen = (now.chosen + step + now.offers.count) % now.offers.count
-            offering = now
-            showOffers(in: view, window: window)
-        }
-
-        /// Writes the link to the page chosen, in place of what was typed. Says whether there was one.
-        @discardableResult
-        func acceptOffer() -> Bool {
-            guard let now = offering, now.offers.indices.contains(now.chosen) else { return false }
-            hideOffers()
-            let link = (now.found.kind == .embed ? "![[" : "[[") + now.offers[now.chosen].name + "]]"
-            settle(editor.replace(start: now.found.start, end: now.found.end, replacement: link))
-            return true
-        }
-
-        /// Puts the list away, until another link is begun.
-        func dismissOffers() {
-            putAway = offering?.found.start
-            hideOffers()
-        }
-
-        public func textViewDidChangeSelection(_ notification: Notification) {
-            guard !isApplying, let view, view.window?.firstResponder === view else { return }
-            if BodyStyler.revealed(layout, selection: view.selectedRange()) != revealed { restyle() }
-            // The caret gone elsewhere: what was being typed there is no longer being typed.
-            if isOffering { updateOffers() }
-        }
-
-        func focusChanged(_ focused: Bool) {
-            if !focused { hideOffers() }
-            restyle()
-            parent.onFocus(focused)
-        }
-
-        /// Carries out one of the editor's commands. Says whether it had
-        /// anything to do.
-        @discardableResult
-        func perform(_ command: EditCommand, at place: Int? = nil) -> Bool {
-            guard let view, !view.hasMarkedText() else { return false }
-            let selection = place.map { NSRange(location: $0, length: 0) } ?? view.selectedRange()
-            guard var edit = editor.perform(selectionStart: UInt32(selection.location), selectionEnd: UInt32(NSMaxRange(selection)), command: command) else { return false }
-            if place != nil {
-                // Done elsewhere than at the caret: the caret stays where it was.
-                let kept = view.selectedRange()
-                edit.selectionStart = UInt32(kept.location)
-                edit.selectionEnd = UInt32(NSMaxRange(kept))
-            }
-            settle(edit)
-            return true
-        }
-
-        func undo() {
-            if let edit = editor.undo() { settle(edit) }
-        }
-
-        func redo() {
-            if let edit = editor.redo() { settle(edit) }
-        }
+// What the text view tells the coordinator, and the Mac's way of listing
+// what is offered; the work itself is in NoteEditorCoordinator.swift.
+extension NoteEditorView.Coordinator: NSTextViewDelegate {
+    public func textDidChange(_ notification: Notification) {
+        typed()
     }
+
+    public func textViewDidChangeSelection(_ notification: Notification) {
+        selectionChanged()
+    }
+
+    func showOffers() {
+        guard let offering, let view, let window = view.window else { return }
+        let caret = view.firstRect(forCharacterRange: NSRange(location: Int(offering.found.start), length: 0), actualRange: nil)
+        let content = AnyView(OfferListView(offers: offering.offers, chosen: offering.chosen) { [weak self] index in
+            self?.acceptOffer(at: index)
+        })
+        if let offerList { offerList.show(content, under: caret) } else { offerList = OfferList(content: content, under: caret, over: window) }
+    }
+
+    func closeOffers() {
+        offerList?.close()
+        offerList = nil
+    }
+}
+
+/// One of the app's own views, standing in the text in place of a block.
+@MainActor
+final class BlockHost {
+    private let host = NSHostingView(rootView: AnyView(EmptyView()))
+
+    init(in view: NoteTextView) {
+        view.addSubview(host)
+    }
+
+    /// Shows this, at a width. Says how tall it is.
+    func show(_ content: AnyView, width: CGFloat) -> CGFloat {
+        host.rootView = content
+        let height = host.fittingSize.height
+        host.setFrameSize(CGSize(width: width, height: height))
+        return height
+    }
+
+    func move(to origin: CGPoint) {
+        host.setFrameOrigin(origin)
+    }
+
+    var bottom: CGFloat { host.frame.maxY }
+
+    func remove() {
+        host.removeFromSuperview()
+    }
+}
+
+/// What the coordinator asks of the text view, under the names every
+/// platform's answers to.
+extension NoteTextView {
+    var noteStorage: NSTextStorage? { textStorage }
+    var noteLayout: NSLayoutManager? { layoutManager }
+    var noteContainer: NSTextContainer? { textContainer }
+    var caret: NSRange {
+        get { selectedRange() }
+        set { setSelectedRange(newValue) }
+    }
+    /// Whether the caret is here.
+    var isWriting: Bool { window?.firstResponder === self }
+    /// Whether something is being composed: marked text, not yet the note's.
+    var isComposing: Bool { hasMarkedText() }
+    var shownText: String { string }
+    var containerOrigin: CGPoint { textContainerOrigin }
+    var sideInset: CGFloat { textContainerInset.width }
+    func redraw() { needsDisplay = true }
 }
 
 /// A card that floats by the pointer while it rests on a link: a small
@@ -616,6 +383,44 @@ public final class NoteTextView: NSTextView {
     var blocksBottom: CGFloat = 0
     private var pressed: (point: CGPoint, link: EditorLink?, task: Int?)?
 
+    // MARK: "Title", at the first line's end
+
+    private var titleChip: NSButton?
+
+    func showTitleChip(after point: CGPoint) {
+        let chip = titleChip ?? {
+            // Quiet: a word at the line's end, not a button asking.
+            let chip = NSButton(title: "Title", target: self, action: #selector(titleChipClicked(_:)))
+            chip.isBordered = false
+            chip.image = NSImage(systemSymbolName: "arrow.up", accessibilityDescription: nil)?.withSymbolConfiguration(.init(pointSize: 9, weight: .semibold))
+            chip.imagePosition = .imageLeading
+            chip.imageHugsTitle = true
+            chip.contentTintColor = .tertiaryLabelColor
+            chip.attributedTitle = NSAttributedString(string: "Title", attributes: [.font: NSFont.systemFont(ofSize: NSFont.smallSystemFontSize, weight: .medium), .foregroundColor: NSColor.tertiaryLabelColor])
+            chip.toolTip = "Make this line the title (⌃⌘T)"
+            chip.setAccessibilityLabel("Make this line the title")
+            chip.refusesFirstResponder = true
+            chip.sizeToFit()
+            addSubview(chip)
+            titleChip = chip
+            return chip
+        }()
+        let size = chip.fittingSize
+        var x = point.x
+        if x + size.width > bounds.width { x = max(0, bounds.width - size.width) }
+        let frame = CGRect(x: x.rounded(), y: (point.y - size.height / 2).rounded(), width: size.width, height: size.height)
+        if chip.frame != frame { chip.frame = frame }
+        if chip.isHidden { chip.isHidden = false }
+    }
+
+    func hideTitleChip() {
+        if titleChip?.isHidden == false { titleChip?.isHidden = true }
+    }
+
+    @objc private func titleChipClicked(_ sender: Any?) {
+        coordinator?.parent.onTitle()
+    }
+
     // MARK: A link's card, while the pointer rests on it
 
     private var hovered: EditorLink?
@@ -646,7 +451,7 @@ public final class NoteTextView: NSTextView {
         if hit !== self { return hit.isDescendant(of: self) ? .block : .elsewhere }
         guard let manager = layoutManager as? BodyLayoutManager, let container = textContainer else { return .text }
         let point = containerPoint(event)
-        if manager.isLead(at: point) || manager.task(at: point, in: container) != nil { return .box }
+        if manager.isLead(at: point) || manager.task(at: point, in: container) != nil || manager.foldPill(at: point) != nil { return .box }
         return manager.link(at: point, in: container) != nil ? .link : .text
     }
 
@@ -749,6 +554,8 @@ public final class NoteTextView: NSTextView {
         view.usesFindBar = true
         view.isIncrementalSearchingEnabled = true
         view.setContentHuggingPriority(.defaultHigh, for: .vertical)
+        // Pictures taken when dropped, besides what a text view takes.
+        view.registerForDraggedTypes(view.acceptableDragTypes)
         return view
     }
 
@@ -777,6 +584,11 @@ public final class NoteTextView: NSTextView {
         let point = containerPoint(event)
         if manager.isLead(at: point) {
             coordinator?.parent.onLead()
+            return
+        }
+        // A folded row's pill: unfolded.
+        if let row = manager.foldPill(at: point) {
+            coordinator?.perform(.unfold, onRows: [row])
             return
         }
         let task = manager.task(at: point, in: container)
@@ -829,6 +641,8 @@ public final class NoteTextView: NSTextView {
 
     public override func insertNewline(_ sender: Any?) {
         if coordinator?.acceptOffer() == true { return }
+        // Return at the end of a first line written as a heading: that line, the title.
+        if coordinator?.titlesByReturn() == true { return coordinator?.parent.onTitle() ?? () }
         if coordinator?.perform(.newline) != true { super.insertNewline(sender) }
     }
 
@@ -870,9 +684,76 @@ public final class NoteTextView: NSTextView {
             coordinator?.redo()
             return true
         }
+        if flags == [.command, .option], event.specialKey == .carriageReturn || event.specialKey == .enter || key == "\r" {
+            // Nothing to do as text: the key is whoever's wants it.
+            return coordinator?.newTimeBlock() == true || super.performKeyEquivalent(with: event)
+        }
         guard let command = Self.command(flags: flags, key: key, special: event.specialKey) else { return super.performKeyEquivalent(with: event) }
-        _ = coordinator?.perform(command)
-        return true
+        let done = coordinator?.perform(command) ?? false
+        // A fold with nothing to fold leaves its key — ⌘0 is many an app's own — to whoever wants it.
+        return done || !Self.outlineOnly.contains(command) || super.performKeyEquivalent(with: event)
+    }
+
+    /// The commands only an outline has, whose keys are let by when there is nothing for them to do.
+    private static let outlineOnly: Set<EditCommand> = [.fold, .unfold, .foldCompletely, .unfoldCompletely, .foldAll, .unfoldAll, .moveDoneToBottom]
+
+    // MARK: Pictures, and an address, pasted and dropped
+
+    /// The kinds of picture a note keeps as they are; any other is made a PNG.
+    private static let keptPictures: [(type: UTType, fileExtension: String)] = [(.png, "png"), (.jpeg, "jpg"), (.gif, "gif")]
+    private static let pictureTypes: [NSPasteboard.PasteboardType] = [.fileURL, .png, .tiff, NSPasteboard.PasteboardType(UTType.jpeg.identifier)]
+
+    private static func png(_ image: NSImage) -> Data? {
+        guard let tiff = image.tiffRepresentation, let bitmap = NSBitmapImageRep(data: tiff) else { return nil }
+        return bitmap.representation(using: .png, properties: [:])
+    }
+
+    /// Each picture a pasteboard holds: files of pictures, or a picture itself.
+    private static func pictures(on board: NSPasteboard) -> [EditorPastedPicture] {
+        let files = (board.readObjects(forClasses: [NSURL.self], options: [.urlReadingFileURLsOnly: true]) as? [URL]) ?? []
+        if !files.isEmpty {
+            return files.compactMap { url in
+                guard let type = UTType(filenameExtension: url.pathExtension), type.conforms(to: .image), let data = try? Data(contentsOf: url) else { return nil }
+                if let kept = keptPictures.first(where: { type.conforms(to: $0.type) }) { return EditorPastedPicture(data: data, fileExtension: kept.fileExtension) }
+                return NSImage(data: data).flatMap(png).map { EditorPastedPicture(data: $0, fileExtension: "png") }
+            }
+        }
+        for kept in keptPictures {
+            if let data = board.data(forType: NSPasteboard.PasteboardType(kept.type.identifier)) { return [EditorPastedPicture(data: data, fileExtension: kept.fileExtension)] }
+        }
+        if let data = board.data(forType: .tiff), let image = NSImage(data: data), let made = png(image) { return [EditorPastedPicture(data: made, fileExtension: "png")] }
+        return []
+    }
+
+    /// What pasting from a pasteboard gives when it is pictures: files of
+    /// pictures — whatever words come with them, as the Finder gives
+    /// their names — else a picture that comes with no words. None, when
+    /// what is pasted is words.
+    private static func pasted(from board: NSPasteboard) -> [EditorPastedPicture] {
+        let files = (board.readObjects(forClasses: [NSURL.self], options: [.urlReadingFileURLsOnly: true]) as? [URL]) ?? []
+        guard !files.isEmpty || board.string(forType: .string) == nil else { return [] }
+        return pictures(on: board)
+    }
+
+    /// An address pasted onto words links them; pictures pasted are the
+    /// app's to keep, and are written where the caret is; anything else
+    /// is pasted as ever.
+    public override func paste(_ sender: Any?) {
+        let board = NSPasteboard.general
+        if selectedRange().length > 0, let words = board.string(forType: .string), coordinator?.link(to: words) == true { return }
+        if coordinator?.insert(pictures: Self.pasted(from: board)) == true { return }
+        super.paste(sender)
+    }
+
+    public override var acceptableDragTypes: [NSPasteboard.PasteboardType] {
+        super.acceptableDragTypes + Self.pictureTypes.filter { !super.acceptableDragTypes.contains($0) }
+    }
+
+    /// Pictures dropped: the app's to keep, and written where they were let go.
+    public override func performDragOperation(_ sender: any NSDraggingInfo) -> Bool {
+        let at = characterIndexForInsertion(at: convert(sender.draggingLocation, from: nil))
+        if coordinator?.insert(pictures: Self.pictures(on: sender.draggingPasteboard), at: at) == true { return true }
+        return super.performDragOperation(sender)
     }
 
     /// The editor's own keys.
@@ -884,6 +765,13 @@ public final class NoteTextView: NSTextView {
         case ([.command, .shift], "k"): return .deleteRows
         case ([.command, .shift], "d"): return .duplicateRows
         case ([.command, .shift], "8"), ([.command, .shift], "*"): return .bullet
+        case ([.command], "9"): return .fold
+        case ([.command], "0"): return .unfold
+        case ([.command, .control], "9"): return .foldCompletely
+        case ([.command, .control], "0"): return .unfoldCompletely
+        case ([.command, .option], "9"): return .foldAll
+        case ([.command, .option], "0"): return .unfoldAll
+        case ([.command, .control, .shift], "d"): return .moveDoneToBottom
         default: break
         }
         if special == .carriageReturn || special == .enter || key == "\r" {

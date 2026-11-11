@@ -42,6 +42,24 @@ pub struct NoteRow {
     pub untitled: bool,
 }
 
+/// The rank of a page's own name — its file's — among the names it
+/// answers to: before its title (`0`) and its aliases (`1`).
+pub const OWN: i64 = -1;
+
+/// SQL: how well a row of `note_names` answers a name as it was written
+/// (`written`: SQL for that text). A name written exactly as a file's
+/// own leads to that file before anything; otherwise a title (`0`)
+/// leads before an alias (`1`), and a file's name written some other
+/// way — `Atlas` for `atlas.md` — comes last (`2`). So `[[atlas]]` is
+/// the file `atlas.md`, and `[[Atlas]]` is the page titled Atlas where
+/// there is one: links written before files' names were what links say
+/// go on leading where they led. Of two pages that answer equally —
+/// two with one title — the one made first is led to: a page made later
+/// takes no link from the one that was there.
+pub(crate) fn how(written: &str) -> String {
+    format!("CASE WHEN rank = {OWN} AND name = {written} THEN {OWN} WHEN rank = {OWN} THEN 2 ELSE rank END")
+}
+
 /// What a name leads to.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Resolved {
@@ -66,7 +84,7 @@ impl Index for Catalog {
     }
 
     fn version(&self) -> u32 {
-        4
+        5
     }
 
     fn create(&self, tx: &Transaction<'_>) -> Result<()> {
@@ -84,7 +102,7 @@ impl Index for Catalog {
              -- Pages in the order they are listed in.
              CREATE INDEX IF NOT EXISTS notes_title ON notes (title COLLATE NOCASE, path);
              CREATE INDEX IF NOT EXISTS notes_conflicted ON notes (path) WHERE conflicted;
-             -- Every name a page answers to. rank: 0 its title, 1 an alias.
+             -- Every name a page answers to. rank: -1 its file's name, 0 its title, 1 an alias.
              CREATE TABLE IF NOT EXISTS note_names (key TEXT NOT NULL, name TEXT NOT NULL, path TEXT NOT NULL, rank INTEGER NOT NULL);
              CREATE INDEX IF NOT EXISTS note_names_key ON note_names (key);
              CREATE INDEX IF NOT EXISTS note_names_path ON note_names (path);
@@ -131,6 +149,10 @@ impl Index for Catalog {
         )?;
         let mut insert_name = tx.prepare_cached("INSERT INTO note_names (key, name, path, rank) VALUES (?1, ?2, ?3, ?4)")?;
         let mut insert_word = tx.prepare_cached("INSERT INTO name_words (suffix, path, score) VALUES (?1, ?2, ?3)")?;
+        // Its file's name: what a link to it is written with, and what leads to it before any title does.
+        if let Some(own) = NoteKind::link_name(file.path) {
+            insert_name.execute(params![name_key(own), own, file.path, OWN])?;
+        }
         for (rank, name) in meta.names().into_iter().enumerate() {
             let (key, rank) = (name_key(&name), rank.min(1) as i64);
             insert_name.execute(params![key, name, file.path, rank])?;
@@ -219,12 +241,26 @@ impl Catalog {
     /// Every page that answers to a name, each with how — `0` by its
     /// title, `1` by an alias — the one a link leads to first. More than
     /// one is a clash: see [`duplicates`](Self::duplicates).
-    pub fn answering(db: &Connection, name: &str) -> Result<Vec<(String, u8)>> {
+    pub fn answering(db: &Connection, name: &str) -> Result<Vec<(String, i64)>> {
+        Self::answering_as(db, name, name.trim())
+    }
+
+    /// As [`answering`](Self::answering), for the name written any way
+    /// but exactly as a file's own: `Atlas`, `ATLAS`, where there is an
+    /// `atlas.md`. Whom the name is *called* by, rather than which file
+    /// it is.
+    pub fn called(db: &Connection, name: &str) -> Result<Vec<(String, i64)>> {
+        Self::answering_as(db, name, "")
+    }
+
+    fn answering_as(db: &Connection, name: &str, written: &str) -> Result<Vec<(String, i64)>> {
+        let how = how("?2");
         let mut statement = db.prepare(&format!(
-            "SELECT note_names.path, min(rank) AS how FROM note_names JOIN notes ON notes.path = note_names.path
-             WHERE key = ?1 AND {SEEN} GROUP BY note_names.path ORDER BY how, note_names.path"
+            "SELECT note_names.path, min({how}) AS how FROM note_names JOIN notes ON notes.path = note_names.path
+             WHERE key = ?1 AND {SEEN} GROUP BY note_names.path
+             ORDER BY how, coalesce((SELECT created FROM prism_dates WHERE prism_dates.path = note_names.path), 9223372036854775807), note_names.path"
         ))?;
-        let pages = statement.query_map([name_key(name)], |r| Ok((r.get(0)?, r.get(1)?)))?.collect::<rusqlite::Result<_>>()?;
+        let pages = statement.query_map(params![name_key(name), written], |r| Ok((r.get(0)?, r.get(1)?)))?.collect::<rusqlite::Result<_>>()?;
         Ok(pages)
     }
 
@@ -235,7 +271,7 @@ impl Catalog {
     pub fn duplicates(db: &Connection) -> Result<Vec<(String, Vec<String>)>> {
         let mut statement = db.prepare(&format!(
             "SELECT key, name, note_names.path, min(rank) AS how FROM note_names JOIN notes ON notes.path = note_names.path
-             WHERE {SEEN} AND key IN (SELECT key FROM note_names GROUP BY key HAVING count(DISTINCT path) > 1)
+             WHERE {SEEN} AND rank >= 0 AND key IN (SELECT key FROM note_names WHERE rank >= 0 GROUP BY key HAVING count(DISTINCT path) > 1)
              GROUP BY key, note_names.path ORDER BY key, how, note_names.path"
         ))?;
         let rows = statement.query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?, r.get::<_, String>(2)?)))?;
@@ -250,11 +286,22 @@ impl Catalog {
         Ok(clashes.into_iter().filter(|(_, _, paths)| paths.len() > 1).map(|(_, name, paths)| (name, paths)).collect())
     }
 
-    /// Every name a page answers to: its title first.
+    /// Every name a page is called by: its title first, then its aliases.
+    /// Its file's name is not among them: see [`own_name`](Self::own_name).
     pub fn names(db: &Connection, path: &str) -> Result<Vec<String>> {
-        let mut statement = db.prepare("SELECT name FROM note_names WHERE path = ?1 ORDER BY rank, rowid")?;
+        let mut statement = db.prepare("SELECT name FROM note_names WHERE path = ?1 AND rank >= 0 ORDER BY rank, rowid")?;
         let names = statement.query_map([path], |r| r.get(0))?.collect::<rusqlite::Result<_>>()?;
         Ok(names)
+    }
+
+    /// A file's own name that has this key, written as it is: `atlas`
+    /// for `Atlas`, where there is an `atlas.md`.
+    pub fn own_name(db: &Connection, name: &str) -> Result<Option<(String, String)>> {
+        Ok(db
+            .query_row(&format!("SELECT name, path FROM note_names WHERE key = ?1 AND rank = {OWN} ORDER BY path LIMIT 1"), [name_key(name)], |r| {
+                Ok((r.get(0)?, r.get(1)?))
+            })
+            .optional()?)
     }
 
     /// Pages whose title or alias starts with, or has a word starting

@@ -4,6 +4,7 @@
 #![allow(clippy::result_large_err)]
 
 use prism::index::{Catalog, Links, Search, Tasks};
+use prism::markup::LinkKind;
 use prism::sync::{Auth, Config, Identity, Mode, Repository, Schedule};
 use prism::{Engine, EngineConfig, Event, Status};
 use std::path::{Path, PathBuf};
@@ -318,41 +319,84 @@ fn renaming_a_page_relinks_the_graph_and_the_indices_follow() {
     a.write("daily/2026-10-31.md", "- [[Project Atlas]] kick-off\n").unwrap();
     a.write("notes/taken.md", "# Taken\n").unwrap();
 
-    assert!(matches!(a.rename_note("notes/atlas.md", "taken"), Err(prism::Error::TitleTaken(_))));
+    // Its heading changes, and its file stays. What was written with its
+    // old title is written with its file's name — which no rename changes.
     let renamed = a.rename_note("notes/atlas.md", "Atlas Reborn").unwrap();
     assert_eq!(renamed.rewritten, ["notes/atlas.md", "daily/2026-10-31.md", "notes/ada.md"]);
-    assert_eq!(a.graph().read("notes/ada.md").unwrap().unwrap(), "# Ada\n\nWorks on [[Atlas Reborn]].\n");
+    assert_eq!(a.graph().read("notes/ada.md").unwrap().unwrap(), "# Ada\n\nWorks on [[atlas]].\n");
     a.settle();
     let db = a.index().unwrap();
     assert_eq!(Catalog::resolve(&db, "Atlas Reborn").unwrap().unwrap().path(), "notes/atlas.md");
+    assert_eq!(Catalog::resolve(&db, "atlas").unwrap().unwrap().path(), "notes/atlas.md");
     assert_eq!(Catalog::resolve(&db, "Project Atlas").unwrap(), None);
-    assert_eq!(Links::backlinks(&db, &["Atlas Reborn".into()]).unwrap().len(), 2);
+    assert_eq!(Links::leading_to(&db, "notes/atlas.md").unwrap().len(), 2);
     assert!(Links::unresolved(&db).unwrap().is_empty());
     // The rename's rewrites are committed like any other writing.
     assert_eq!(a.sync_blocking(Mode::Full).unwrap().committed.as_deref(), Some("Add 4 notes"));
-    a.rename_note("notes/atlas.md", "Atlas Again").unwrap();
-    assert_eq!(a.sync_blocking(Mode::Full).unwrap().committed.as_deref(), Some("Update 3 notes"));
-
-    // Queries run against the same indices.
-    let found = a.query("links to: {this}\nis: note", Some("Atlas Again")).unwrap();
-    assert_eq!(found.pages.iter().map(|p| p.title.as_str()).collect::<Vec<_>>(), ["Ada"]);
+    // Renamed again, nothing else is touched: no link says its title.
+    assert_eq!(a.rename_note("notes/atlas.md", "Atlas Again").unwrap().rewritten, ["notes/atlas.md"]);
+    // A date is a day's page, and no note's title.
+    assert!(matches!(a.rename_note("notes/atlas.md", "2026-10-31"), Err(prism::Error::TitleTaken(_))));
 }
 
 #[test]
-fn a_change_that_leaves_nothing_to_commit_asks_nothing_of_the_remote() {
+fn two_pages_may_have_one_title_and_no_link_changes_where_it_leads() {
     let world = World::new();
-    let schedule = Schedule { idle: Duration::from_millis(50), ..Schedule::default() };
-    let a = world.first("a", schedule);
-    a.write("notes/n.md", "# N\n").unwrap();
-    a.sync_blocking(Mode::Full).unwrap();
-    let events = a.subscribe();
-    // Told something changed, when nothing did; and a file rewritten as it was.
-    a.note_changed();
-    std::fs::write(a.graph().root().join("notes/n.md"), "# N\n").unwrap();
-    a.note_changed();
+    let a = world.first("a", Schedule::default());
+    // A note renamed since it was made: its file does not say its title.
+    a.write("notes/scratch.md", "# Manifold\n").unwrap();
+    a.write("notes/log.md", "# Log\n\n[[Manifold]], and #manifold\n").unwrap();
+    a.write("rivers/Deck.md", "- [[Manifold]]\n").unwrap();
     a.settle();
-    std::thread::sleep(Duration::from_millis(400));
-    assert!(events.try_iter().all(|event| !matches!(event, Event::SyncStarted(_))), "no cycle was started");
+    // Pages are dated to the second: the second note is made after the first.
+    std::thread::sleep(Duration::from_millis(1100));
+
+    // A second note of that title is a new file, whose name no link already says.
+    let second = a.create_note("Manifold").unwrap();
+    assert_eq!(second, "notes/manifold-2.md");
+    assert_eq!(a.graph().read(&second).unwrap().unwrap(), "# Manifold\n");
+    // What was written with the title led to the first, and is now written with its file's name.
+    assert_eq!(a.graph().read("notes/log.md").unwrap().unwrap(), "# Log\n\n[[scratch]], and #manifold\n");
+    assert_eq!(a.graph().read("rivers/Deck.md").unwrap().unwrap(), "- [[scratch]]\n");
+    a.settle();
+    let db = a.index().unwrap();
+    let sources = |path: &str| Links::leading_to(&db, path).unwrap().into_iter().map(|link| (link.source, link.kind)).collect::<Vec<_>>();
+    assert_eq!(
+        sources("notes/scratch.md"),
+        [("notes/log.md".to_owned(), LinkKind::Link), ("notes/log.md".to_owned(), LinkKind::Tag), ("rivers/Deck.md".to_owned(), LinkKind::Link)]
+    );
+    assert!(sources(&second).is_empty(), "the new note has no backlinks of the old one's");
+    assert_eq!(Catalog::resolve(&db, "manifold-2").unwrap().unwrap().path(), second);
+    assert_eq!(Catalog::duplicates(&db).unwrap(), [("Manifold".to_owned(), vec![second.clone(), "notes/scratch.md".to_owned()])]);
+    assert_eq!(a.query("links to: manifold-2", None).unwrap().pages.len(), 0);
+    assert_eq!(a.query("links to: scratch", None).unwrap().pages.len(), 1);
+
+    // Renaming a note to a title another has is the same: that title's links are pinned first.
+    a.write("notes/plan.md", "# Plan\n").unwrap();
+    a.write("notes/todo.md", "# Todo\n\n[[Plan]]\n").unwrap();
+    a.settle();
+    let renamed = a.rename_note(&second, "plan").unwrap();
+    assert_eq!(renamed.rewritten, [second.as_str(), "notes/todo.md"]);
+    assert_eq!(a.graph().read("notes/todo.md").unwrap().unwrap(), "# Todo\n\n[[plan]]\n");
+    a.settle();
+    let db = a.index().unwrap();
+    assert_eq!(Links::leading_to(&db, "notes/plan.md").unwrap().len(), 1);
+    assert!(Links::leading_to(&db, &second).unwrap().is_empty());
+
+    // A link written exactly as a file's name is that file, whatever else is titled so;
+    // written any other way, it is the page of that title, as it always was.
+    a.write("notes/atlas.md", "# Something Else\n").unwrap();
+    a.write("notes/project.md", "# Atlas\n").unwrap();
+    a.write("notes/both.md", "# Both\n\n[[atlas]] and [[Atlas]]\n").unwrap();
+    a.settle();
+    let db = a.index().unwrap();
+    assert_eq!(Catalog::resolve(&db, "atlas").unwrap().unwrap().path(), "notes/atlas.md");
+    assert_eq!(Catalog::resolve(&db, "Atlas").unwrap().unwrap().path(), "notes/project.md");
+    assert_eq!(Links::linked_pages(&db, "notes/both.md", None).unwrap(), ["notes/atlas.md", "notes/project.md"]);
+    // A new file never takes a name that is another page's title.
+    assert_eq!(a.path_for_title("Something else"), "notes/something-else.md");
+    a.write("notes/x.md", "---\naliases: [fresh]\n---\n# X\n").unwrap();
+    assert_eq!(a.path_for_title("Fresh"), "notes/fresh-2.md");
 }
 
 #[cfg(feature = "watch")]
@@ -391,60 +435,32 @@ fn every_way_a_page_is_pointed_at_follows_its_names() {
     a.write("notes/secret.md", "---\nprivate: true\nrelated:\n  - Person\n---\n# Secret\n").unwrap();
     a.write("rivers/People.md", "---\nfolded:\n  - Person\n---\n- [[Person]]\n- [[Ada]]\n\n```query\ntag: Person\n```\n").unwrap();
 
-    // An alias changed: links written with it follow. One taken away: its links name the title.
+    // An alias changed, or taken away: links written with it are written with the page's own name.
     let renamed = a.rename_alias("notes/person.md", "human", "Mortal").unwrap();
     assert_eq!((renamed.old_title.as_str(), renamed.new_title.as_str()), ("human", "Mortal"));
     assert_eq!(renamed.rewritten, ["notes/person.md", "notes/ada.md"]);
     a.remove_alias("notes/person.md", "somebody").unwrap();
     assert_eq!(a.graph().read("notes/person.md").unwrap().unwrap(), "---\naliases:\n  - Mortal\n---\n# Person\n");
-    assert!(a.graph().read("notes/ada.md").unwrap().unwrap().ends_with("A #person, a [[Mortal]], [[Person|someone]].\n"));
+    assert!(a.graph().read("notes/ada.md").unwrap().unwrap().ends_with("A #person, a [[person]], [[person|someone]].\n"));
     assert!(matches!(a.remove_alias("notes/person.md", "Nobody"), Err(prism::Error::NoSuchAlias(_))));
-    assert!(matches!(a.rename_alias("notes/person.md", "Mortal", "Ada"), Err(prism::Error::TitleTaken(_))));
 
-    // The title changed. Everything that pointed at it is one kind of
-    // thing, found one way: a link, a tag in a line, a tag and a relation
-    // in a frontmatter — a private page's too — a river's card, its
-    // folded list and its query.
+    // The title changed. Every link that pointed at it by its title — in
+    // a line, in a frontmatter, a private page's too, a river's card and
+    // its folded list — is written with the file's name. Tags are words,
+    // and say what they said: they still lead to the page, by its file.
     let renamed = a.rename_note("notes/person.md", "People").unwrap();
-    assert_eq!(renamed.rewritten, ["notes/person.md", "notes/ada.md", "notes/secret.md", "rivers/People.md"]);
-    assert_eq!(a.graph().read("notes/ada.md").unwrap().unwrap(), "---\ntags: [People]\n---\n# Ada\n\nA #People, a [[Mortal]], [[People|someone]].\n");
-    assert_eq!(a.graph().read("notes/secret.md").unwrap().unwrap(), "---\nprivate: true\nrelated:\n  - People\n---\n# Secret\n");
-    assert_eq!(a.graph().read("rivers/People.md").unwrap().unwrap(), "---\nfolded:\n  - People\n---\n- [[People]]\n- [[Ada]]\n\n```query\ntag: People\n```\n");
+    assert_eq!(renamed.rewritten, ["notes/person.md", "notes/secret.md", "rivers/People.md"]);
+    assert_eq!(a.graph().read("notes/ada.md").unwrap().unwrap(), "---\ntags: [Person]\n---\n# Ada\n\nA #person, a [[person]], [[person|someone]].\n");
+    assert_eq!(a.graph().read("notes/secret.md").unwrap().unwrap(), "---\nprivate: true\nrelated:\n  - person\n---\n# Secret\n");
+    assert_eq!(a.graph().read("rivers/People.md").unwrap().unwrap(), "---\nfolded:\n  - person\n---\n- [[person]]\n- [[Ada]]\n\n```query\ntag: Person\n```\n");
     a.settle();
     let db = a.index().unwrap();
     assert!(Links::unresolved(&db).unwrap().is_empty());
-    assert_eq!(a.query("tag: People", None).unwrap().pages.len(), 1);
+    assert_eq!(a.query("tag: Person", None).unwrap().pages.len(), 1);
+    assert_eq!(Links::leading_to(&a.index_showing_private().unwrap(), "notes/person.md").unwrap().len(), 6);
     // The river still reads as a river, and orders a query by its cards.
-    assert_eq!(a.graph().river("People").unwrap().unwrap().folded, ["People"]);
+    assert_eq!(a.graph().river("People").unwrap().unwrap().folded, ["person"]);
     assert_eq!(a.query("listed in: rivers/People", None).unwrap().pages.iter().map(|p| p.title.as_str()).collect::<Vec<_>>(), ["People", "Ada"]);
-}
-
-#[test]
-fn a_graph_is_not_given_two_pages_of_one_name_and_says_when_it_has_them() {
-    let world = World::new();
-    let a = world.first("a", Schedule::default());
-    let atlas = a.create_note("Project Atlas").unwrap();
-    assert_eq!(a.graph().read(&atlas).unwrap().unwrap(), "# Project Atlas\n");
-    a.write(&atlas, "---\naliases: [Atlas]\n---\n# Project Atlas\n").unwrap();
-    // Asked again — by its title, however spelled, or by an alias — it is the page there is.
-    assert_eq!(a.create_note("project  ATLAS").unwrap(), atlas);
-    assert_eq!(a.create_note("atlas").unwrap(), atlas);
-    assert_eq!(a.graph().note_paths(), std::slice::from_ref(&atlas));
-    a.settle();
-    assert!(Catalog::duplicates(&a.index().unwrap()).unwrap().is_empty());
-
-    // Another device, or another app, may still make one. It is told of,
-    a.write("notes/zz-copy.md", "# Project Atlas\n").unwrap();
-    a.write("notes/log.md", "# Log\n\n[[Project Atlas]]\n").unwrap();
-    a.settle();
-    let db = a.index().unwrap();
-    assert_eq!(Catalog::duplicates(&db).unwrap(), [("Project Atlas".to_owned(), vec![atlas.clone(), "notes/zz-copy.md".to_owned()])]);
-    // and renaming the one links do not lead to takes no link with it.
-    let renamed = a.rename_note("notes/zz-copy.md", "Atlas, Copied").unwrap();
-    assert_eq!(renamed.rewritten, ["notes/zz-copy.md"]);
-    assert_eq!(a.graph().read("notes/log.md").unwrap().unwrap(), "# Log\n\n[[Project Atlas]]\n");
-    a.settle();
-    assert!(Catalog::duplicates(&a.index().unwrap()).unwrap().is_empty());
 }
 
 #[test]
@@ -545,8 +561,8 @@ fn indexing_and_naming_do_not_wait_for_a_sync_that_is_on_the_network() {
     a.settle();
     let db = a.index().unwrap();
     assert_eq!(Catalog::resolve(&db, "Second").unwrap().unwrap().path(), two);
-    assert_eq!(a.graph().read("notes/three.md").unwrap().unwrap(), "# Three\n\n[[Second]]\n");
-    assert_eq!(a.create_note("second").unwrap(), two);
+    assert_eq!(a.graph().read("notes/three.md").unwrap().unwrap(), "# Three\n\n[[two]]\n");
+    assert_eq!(Links::leading_to(&db, &two).unwrap().len(), 1);
     assert!(started.elapsed() < Duration::from_millis(900), "took {:?}", started.elapsed());
     assert_eq!(a.status(), Status::Syncing, "and the sync is still out");
 

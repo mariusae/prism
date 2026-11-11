@@ -149,6 +149,30 @@ pub fn split(document: &mut Document, path: &[usize], offset: usize) -> Option<P
     Some([parent, &[index + 1]].concat())
 }
 
+/// Opens an empty block above a block — what Return does at the start of
+/// a block's words, which stay where the caret is. The new block is of
+/// the block's own sort: a bullet above a bullet, an open task above any
+/// task, a paragraph above a heading; a numbered item takes the number,
+/// and those after it the next. The blank lines before stay above both.
+/// Answers the path the block itself then has.
+pub fn open_above(document: &mut Document, path: &[usize]) -> Option<Path> {
+    let block = document.get_mut(path)?;
+    let kind = match &block.kind {
+        BlockKind::Item(item) => BlockKind::Item(Item { marker: item.marker, task: item.task.map(|_| Task::Open) }),
+        BlockKind::Heading(_) => BlockKind::Paragraph,
+        other @ (BlockKind::Paragraph | BlockKind::Quote) => other.clone(),
+        _ => return None,
+    };
+    let mut new = Block::new(kind, "");
+    new.layout.spacing = block.layout.spacing.max(1);
+    new.layout.gap = std::mem::take(&mut block.layout.gap);
+    let (&index, parent) = path.split_last()?;
+    let siblings = document.siblings_mut(path)?;
+    siblings.insert(index, new);
+    renumber(siblings);
+    Some([parent, &[index + 1]].concat())
+}
+
 /// Joins a block's text onto the block before it in reading order — what
 /// Delete does at a block's start. Its children are kept, under whichever
 /// block now stands where it stood. Answers the path of the block joined
@@ -157,11 +181,20 @@ pub fn join_with_previous(document: &mut Document, path: &[usize]) -> Option<(Pa
     let rows = document.rows();
     let position = rows.iter().position(|r| r.path == path)?;
     let target: Path = rows.get(position.checked_sub(1)?)?.path.clone();
+    drop(rows);
+    join_onto(document, path, &target)
+}
+
+/// Joins a block's text onto a block before it: the one before it in
+/// reading order ([`join_with_previous`]), or — in an outline with rows
+/// folded away — the one shown before it. Its children are kept, under
+/// whichever block now stands where it stood; a folded block they come
+/// under is unfolded, so that nothing shown is hidden by a join.
+pub fn join_onto(document: &mut Document, path: &[usize], target: &[usize]) -> Option<(Path, usize)> {
     let joinable = |kind: &BlockKind| matches!(kind, BlockKind::Paragraph | BlockKind::Heading(_) | BlockKind::Item(_) | BlockKind::Quote);
-    if !joinable(&rows[position].block.kind) || !joinable(&rows[position - 1].block.kind) {
+    if target >= path || !joinable(&document.get(path)?.kind) || !joinable(&document.get(target)?.kind) {
         return None;
     }
-    drop(rows);
     let block = remove(document, path)?;
     let (&index, parent) = path.split_last()?;
     // Where the children go: in the block's place when it was a first
@@ -172,16 +205,17 @@ pub fn join_with_previous(document: &mut Document, path: &[usize]) -> Option<(Pa
     } else {
         let previous = document.get_mut(&[parent, &[index - 1]].concat())?;
         if previous.can_have_children() {
+            previous.folded &= block.children.is_empty();
             previous.children.extend(block.children);
         } else {
             let siblings = document.siblings_mut(path)?;
             siblings.splice(index..index, block.children);
         }
     }
-    let onto = document.get_mut(&target)?;
+    let onto = document.get_mut(target)?;
     let offset = onto.text.len();
     onto.text.push_str(&block.text);
-    Some((target, offset))
+    Some((target.to_vec(), offset))
 }
 
 /// Checks a task off, or opens it again; a list item with no checkbox
@@ -205,6 +239,7 @@ pub fn set_kind(document: &mut Document, path: &[usize], kind: BlockKind) -> Opt
     block.kind = kind;
     block.layout.spacing = block.layout.spacing.max(1);
     if !block.can_have_children() && !block.children.is_empty() {
+        block.folded = false;
         let children = std::mem::take(&mut block.children);
         document.siblings_mut(path)?.splice(index + 1..index + 1, children);
     }

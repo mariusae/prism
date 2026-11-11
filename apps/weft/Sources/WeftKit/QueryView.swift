@@ -1,3 +1,4 @@
+#if os(macOS)
 import Prism
 import PrismEmblem
 import SwiftUI
@@ -65,3 +66,4 @@ struct QueryView: View {
         .overlay(RoundedRectangle(cornerRadius: 8).strokeBorder(Color.inkAccent.opacity(0.15)))
     }
 }
+#endif

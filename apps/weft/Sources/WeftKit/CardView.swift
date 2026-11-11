@@ -1,3 +1,4 @@
+#if os(macOS)
 import Prism
 import PrismEditor
 import PrismEmblem
@@ -18,6 +19,7 @@ struct CardView: View {
     @State private var isHovered = false
     @State private var isRenaming = false
     @State private var choosesLook = false
+    @State private var addsTag = false
     @State private var newTitle = ""
     @State private var backlinks: [Source] = []
     @State private var tags: [String] = []
@@ -74,6 +76,10 @@ struct CardView: View {
         // Where the icon and the colour are chosen, from the icon or the menu.
         .overlay(alignment: .topLeading) {
             Color.clear.frame(width: Measures.margin * 2, height: 30).allowsHitTesting(false)
+                // Where a tag is added: here whether or not the card has a line of tags yet.
+                .popover(isPresented: $addsTag, arrowEdge: .bottom) {
+                    TagAdder(store: store, draft: draft) { addsTag = false; refresh() }.frame(width: 300)
+                }
                 .popover(isPresented: $choosesLook, arrowEdge: .bottom) {
                     EmblemPicker(
                         title: draft.label,
@@ -172,7 +178,7 @@ struct CardView: View {
     }
 
     /// Whether the card has no title to show: a note never given one.
-    private var isUntitled: Bool { !isDay && draft.exists && draft.isUntitled }
+    private var isUntitled: Bool { !isDay && draft.isUntitled }
     private var showsHeader: Bool { !isUntitled || isRenaming }
 
     private var header: some View {
@@ -237,6 +243,8 @@ struct CardView: View {
                 .menuIndicator(.hidden)
                 .fixedSize()
                 .help("More")
+            // Deleted at once, and for a few seconds undone as easily: nothing asks.
+            if draft.exists { CardButton("trash", help: "Delete Note (⌘⌫)") { withAnimation(.snappy(duration: 0.28)) { store.delete(card.id, in: river) } } }
             CardButton("xmark", help: "Close (⌘W)") { withAnimation(.snappy(duration: 0.28)) { close() } }
         }
         .opacity(showsActions ? 1 : 0)
@@ -260,10 +268,16 @@ struct CardView: View {
                     editor: draft.editor, theme: Ink.editorTheme, isWriting: isWriting, height: $bodyHeight,
                     refresh: store.indexRevision,
                     pageExists: { name in store.leadsSomewhere(name) },
+                    linkLabel: { name in store.linkLabel(name) },
                     blockView: { block in
                         // A line that is only a picture is shown as the picture.
-                        if block.info == EditorBlock.picture, let picture = EditorPicture(line: block.source) {
-                            return AnyView(PictureView(store: store, picture: picture, rewrite: block.rewrite, room: block.room))
+                        if block.info == EditorBlock.picture, let pictures = EditorPicture.all(line: block.source), let first = pictures.first {
+                            // One picture can be resized; several on a line stand side by side.
+                            if pictures.count == 1 { return AnyView(PictureView(store: store, picture: first, rewrite: block.rewrite, room: block.room, resized: block.resized)) }
+                            let each = max((block.room - CGFloat(pictures.count - 1) * 8) / CGFloat(pictures.count), 60)
+                            return AnyView(HStack(alignment: .top, spacing: 8) {
+                                ForEach(Array(pictures.enumerated()), id: \.offset) { _, picture in PictureView(store: store, picture: picture, rewrite: nil, room: each) }
+                            })
                         }
                         guard block.info == "query" else { return nil }
                         return AnyView(QueryView(store: store, source: block.source, this: draft.title) { page in
@@ -273,6 +287,16 @@ struct CardView: View {
                     linkPreview: { link in LinkCard.shows(link, in: store) ? AnyView(LinkCard(store: store, link: link)) : nil },
                     lead: editorLead, onLead: { leadClicked() },
                     offers: { found in store.linkOffers(found.typed, this: card.path) },
+                    offersTitle: isUntitled, onTitle: { withAnimation(.snappy(duration: 0.22)) { _ = draft.titleByFirstLine() } },
+                    // Which rows are folded is this river's to remember, card by card.
+                    foldedRows: card.foldedRows,
+                    onFolds: { rows in
+                        river.setFolds(card.id, rows)
+                        store.rememberRiversSoon()
+                    },
+                    onMoveRows: { markdown, moved in store.movingRows = GraphStore.MovingRows(markdown: markdown, from: card.path, moved: moved) },
+                    savePictures: { pictures in pictures.compactMap { store.savePicture(data: $0.data, fileExtension: $0.fileExtension) } },
+                    isToday: card.path == "daily/\(Days.name(Date())).md",
                     onChange: { draft.changed() },
                     onFocus: { focused in
                         if focused {
@@ -302,6 +326,16 @@ struct CardView: View {
             FlowLayout(spacing: 6) {
                 ForEach(tags, id: \.self) { tag in
                     FootPill(title: tag, emblem: Emblem(symbol: "number"), tint: Color.inkAccent) { store.open(name: tag, after: card.id, in: river) }
+                        .contextMenu {
+                            // A tag written in a line is its line's: only the note's own can be taken off it here.
+                            if isFrontTag(tag) { Button("Remove Tag", systemImage: "minus.circle") { removeTag(tag) } }
+                            Button("Open Tag", systemImage: "number") { store.open(name: tag, after: card.id, in: river) }
+                        }
+                }
+                // Another tag: beside those there are, and where one is being added.
+                if draft.exists, !tags.isEmpty {
+                    FootPill(title: "Tag", emblem: Emblem(symbol: "plus"), tint: Color.inkSecondary) { addsTag = true }
+                        .help("Add a tag")
                 }
                 if !backlinks.isEmpty {
                     Text(tags.isEmpty ? "Linked from" : "· linked from").font(.caption).foregroundStyle(Color.inkSecondary).padding(.vertical, 3)
@@ -389,12 +423,14 @@ struct CardView: View {
         }
         Divider()
         if !isDay { Button("Rename…", systemImage: "character.cursor.ibeam") { startRenaming() } }
+        if isUntitled, !draft.isBlank { Button("Make First Line the Title", systemImage: "arrow.up") { withAnimation(.snappy(duration: 0.22)) { _ = draft.titleByFirstLine() } } }
         if draft.exists { Button("Icon and Colour…", systemImage: "paintpalette") { choosesLook = true } }
+        if draft.exists { Button("Add Tag…", systemImage: "number") { addsTag = true } }
         Picker("Write As", selection: Binding(get: { draft.mode }, set: { draft.setMode($0) })) {
             Label("Outline", systemImage: "list.bullet.indent").tag(EditorMode.outline)
             Label("Text", systemImage: "text.alignleft").tag(EditorMode.text)
         }
-        Button("Copy Link", systemImage: "link") { copy("[[\(draft.title)]]") }
+        Button("Copy Link", systemImage: "link") { copy("[[\(store.linkName(path: card.path, title: draft.title))]]") }
         Button("Copy Contents", systemImage: "doc.on.doc") { copy(draft.markdown) }
         #if os(macOS)
         Button("Show in Finder", systemImage: "folder") {
@@ -403,9 +439,7 @@ struct CardView: View {
         #endif
         Divider()
         Button("Close Others", systemImage: "rectangle.stack.badge.minus") {
-            store.saveAll()
-            withAnimation(.snappy(duration: 0.28)) { river.cards.removeAll { $0.id != card.id } }
-            store.rememberRivers()
+            withAnimation(.snappy(duration: 0.28)) { store.closeAll(in: river, but: card.id) }
         }
         if river.query != nil {
             if river.isFound(card.id) {
@@ -416,11 +450,17 @@ struct CardView: View {
         }
         Button(river.isFound(card.id) ? "Remove from River" : "Close", systemImage: "xmark") { close() }
         if draft.exists {
-            Button("Delete Note", systemImage: "trash", role: .destructive) {
-                draft.delete()
-                close()
-            }
+            Button("Delete Note", systemImage: "trash", role: .destructive) { withAnimation(.snappy(duration: 0.28)) { store.delete(card.id, in: river) } }
         }
+    }
+
+    private func isFrontTag(_ tag: String) -> Bool {
+        draft.frontTags.contains { nameKey(name: $0) == nameKey(name: tag) }
+    }
+
+    private func removeTag(_ tag: String) {
+        draft.removeTag(tag)
+        withAnimation(.snappy(duration: 0.2)) { tags.removeAll { nameKey(name: $0) == nameKey(name: tag) } }
     }
 
     private func fold() {
@@ -430,9 +470,7 @@ struct CardView: View {
     }
 
     private func close() {
-        draft.saveNow()
-        river.close(card.id)
-        store.rememberRivers()
+        store.close(card.id, in: river)
     }
 
     /// The day before or after a day's card, opened just after it.
@@ -549,38 +587,4 @@ struct FootPill: View {
         .onHover { isHovered = $0 }
     }
 }
-
-/// Lays its children out in rows, wrapping.
-struct FlowLayout: Layout {
-    var spacing: CGFloat = 6
-
-    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
-        let rows = arrange(width: proposal.width ?? .infinity, subviews: subviews)
-        return CGSize(width: proposal.width ?? rows.width, height: rows.height)
-    }
-
-    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
-        let rows = arrange(width: bounds.width, subviews: subviews)
-        for (index, point) in rows.points.enumerated() {
-            subviews[index].place(at: CGPoint(x: bounds.minX + point.x, y: bounds.minY + point.y), proposal: .unspecified)
-        }
-    }
-
-    private func arrange(width: CGFloat, subviews: Subviews) -> (points: [CGPoint], width: CGFloat, height: CGFloat) {
-        var points: [CGPoint] = []
-        var (x, y, rowHeight, widest): (CGFloat, CGFloat, CGFloat, CGFloat) = (0, 0, 0, 0)
-        for subview in subviews {
-            let size = subview.sizeThatFits(.unspecified)
-            if x > 0, x + size.width > width {
-                x = 0
-                y += rowHeight + spacing
-                rowHeight = 0
-            }
-            points.append(CGPoint(x: x, y: y))
-            x += size.width + spacing
-            rowHeight = max(rowHeight, size.height)
-            widest = max(widest, x - spacing)
-        }
-        return (points, widest, y + rowHeight)
-    }
-}
+#endif

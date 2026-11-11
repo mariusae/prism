@@ -147,7 +147,9 @@ public struct EmblemView: View {
     private var tint: Color { emblem.color?.color ?? quiet }
 
     public var body: some View {
-        Group {
+        // A stack, not a group: so that an emblem with nothing to draw
+        // still takes its room, and a list's rows line up.
+        ZStack {
             switch emblem.glyph {
             case .symbol(let name):
                 Image(systemName: name)

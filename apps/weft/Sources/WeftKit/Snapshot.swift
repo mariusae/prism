@@ -95,7 +95,9 @@ enum Snapshot {
         let frame = CGRect(x: 0, y: 0, width: size.first ?? 1240, height: size.last ?? 860)
         let window = NSWindow(contentRect: frame, styleMask: [.titled, .closable, .resizable, .fullSizeContentView], backing: .buffered, defer: false)
         window.appearance = NSAppearance(named: environment["WEFT_DARK"] != nil ? .darkAqua : .aqua)
-        if environment["WEFT_QUERY_EDITOR"] != nil {
+        if environment["WEFT_DIAGNOSTICS"] != nil {
+            window.contentView = NSHostingView(rootView: DiagnosticsView(store: store))
+        } else if environment["WEFT_QUERY_EDITOR"] != nil {
             // The query river editor alone, as its sheet shows it: for the river shown, if it has a query.
             window.contentView = NSHostingView(rootView: QueryRiverEditor(store: store, ask: store.river.query == nil ? .new : .edit(store.river)))
         } else if environment["WEFT_SETTINGS"] != nil {
@@ -117,6 +119,10 @@ enum Snapshot {
             }
         }
 
+        // WEFT_DELETE=Title: that card's note deleted, as its button does it — and the offer to undo shown.
+        if let title = environment["WEFT_DELETE"], let card = store.river.cards.first(where: { $0.title == title }) {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) { store.delete(card.id, in: store.river) }
+        }
         let delay = Double(environment["WEFT_DELAY"] ?? "") ?? 2
         DispatchQueue.main.asyncAfter(deadline: .now() + delay) {
             if let typed = environment["WEFT_TYPE"], let view = window.firstResponder as? NSTextView {

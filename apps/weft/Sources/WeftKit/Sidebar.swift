@@ -1,3 +1,4 @@
+#if os(macOS)
 import Prism
 import PrismEmblem
 import SwiftUI
@@ -228,3 +229,4 @@ extension Notification.Name {
     /// The account was just signed in to: the graph is to be opened again as it.
     static let weftSignedIn = Notification.Name("WeftSignedIn")
 }
+#endif

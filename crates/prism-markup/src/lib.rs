@@ -90,6 +90,7 @@ pub mod query;
 pub mod river;
 pub mod session;
 pub mod table;
+pub mod time;
 
 pub use block::{Block, BlockKind, Callout, Code, Document, Item, Layout, LineEnding, Marker, Row, Task};
 pub use date::{Day, Timestamp, Week, Weekday};
@@ -99,5 +100,5 @@ pub use inline::{Span, SpanKind, Style};
 pub use note::{name_key, ImageRef, LinkKind, Meta, Note, NoteKind, NoteLink, References, TaskRef, WebLink};
 pub use query::{Clause, Query};
 pub use river::River;
-pub use session::{Mode, Session};
+pub use session::{Mode, RowInfo, Session};
 pub use table::Table;

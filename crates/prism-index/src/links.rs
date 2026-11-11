@@ -139,7 +139,14 @@ fn backlink(row: &rusqlite::Row<'_>) -> rusqlite::Result<Backlink> {
 
 /// The page a link's name leads to, as SQL: its title's before an
 /// alias's. (A date not written yet leads to no page there is.)
-pub(crate) const LEADS_TO: &str = "(SELECT path FROM note_names WHERE note_names.key = links.key ORDER BY rank, path LIMIT 1)";
+/// SQL: the page a row of `links` leads to. See [`crate::catalog::how`].
+/// The first of what answers is the least of a key made of how well it
+/// answers, when it was made, and its path — a subquery's `ORDER BY`
+/// cannot read the link it is asked for.
+pub(crate) const LEADS_TO: &str = "(SELECT substr(min(printf('%d|%020d|',
+         CASE WHEN rank = -1 AND name = links.target THEN 0 WHEN rank = -1 THEN 3 ELSE rank + 1 END,
+         coalesce((SELECT created FROM prism_dates WHERE prism_dates.path = note_names.path), 9223372036854775807)) || path), 24)
+     FROM note_names WHERE note_names.key = links.key)";
 
 impl Links {
     /// Every pointer at a page — links, embeds and tags alike — given
@@ -153,6 +160,19 @@ impl Links {
         let seen = seen("links.source");
         let mut statement = db.prepare(&format!("SELECT {COLUMNS} FROM links WHERE key IN ({placeholders}) AND {seen} ORDER BY source, rowid"))?;
         let links = statement.query_map(params_from_iter(names.iter().map(|n| name_key(n))), backlink)?.collect::<rusqlite::Result<_>>()?;
+        Ok(links)
+    }
+
+    /// The links that lead to a page: written with its file's name, or
+    /// with a title or an alias of its that leads to it — of two pages
+    /// with one title, a link written with that title is one page's
+    /// only. Needs the [`Catalog`](crate::Catalog) in the same database.
+    pub fn leading_to(db: &Connection, path: &str) -> Result<Vec<Backlink>> {
+        let seen = seen("links.source");
+        let mut statement = db.prepare(&format!(
+            "SELECT {COLUMNS} FROM links WHERE key IN (SELECT key FROM note_names WHERE path = ?1) AND {LEADS_TO} = ?1 AND {seen} ORDER BY source, rowid"
+        ))?;
+        let links = statement.query_map([path], backlink)?.collect::<rusqlite::Result<_>>()?;
         Ok(links)
     }
 
