@@ -38,6 +38,12 @@ public final class GraphStore {
     /// What names lead to, kept until the index next moves.
     @ObservationIgnored private var resolved: [String: ResolvedPage?] = [:]
     @ObservationIgnored private var labels: [String: String?] = [:]
+    /// What a card last measured, and what stood at its foot: so that a
+    /// card scrolled back into view comes as it was, at its full height,
+    /// and the river does not shift under the finger while it finds out
+    /// again. Never shown from: only where a card starts.
+    @ObservationIgnored var cardHeights: [String: CGFloat] = [:]
+    @ObservationIgnored var cardFeet: [String: Any] = [:]
     @ObservationIgnored private var observer: Observer?
 
     public var rivers: [River] = []

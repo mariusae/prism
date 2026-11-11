@@ -30,7 +30,20 @@ struct CardView: View {
         self.river = river
         self.card = card
         _draft = State(initialValue: store.draft(path: card.path, title: card.title))
+        // As it was when last seen: its height, and what stood at its foot.
+        _bodyHeight = State(initialValue: store.cardHeights[card.path] ?? 24)
+        if let foot = store.cardFeet[Self.footKey(card, in: river)] as? Foot {
+            _backlinks = State(initialValue: foot.backlinks)
+            _tags = State(initialValue: foot.tags)
+        }
     }
+
+    private struct Foot {
+        var backlinks: [Source]
+        var tags: [String]
+    }
+
+    private static func footKey(_ card: Card, in river: River) -> String { "\(river.id)|\(card.path)" }
 
     private var emblem: Emblem { Emblem(title: draft.title, icon: draft.icon, color: draft.color, kindSymbol: isDay ? "calendar" : nil, letter: false) }
     private var isSelected: Bool { river.selected == card.id }
@@ -102,6 +115,7 @@ struct CardView: View {
         .onHover { isHovered = $0 }
         .contextMenu { menu }
         .task(id: store.indexRevision) { refresh() }
+        .onChange(of: bodyHeight) { _, height in store.cardHeights[card.path] = height }
     }
 
     private struct Source: Hashable {
@@ -123,6 +137,7 @@ struct CardView: View {
             return Source(path: link.source, name: name, title: page?.label ?? name, emblem: store.emblem(path: link.source, title: name))
         }
         tags = (try? store.engine.tagsOf(path: card.path)) ?? []
+        store.cardFeet[Self.footKey(card, in: river)] = Foot(backlinks: backlinks, tags: tags)
     }
 
     // MARK: Parts
