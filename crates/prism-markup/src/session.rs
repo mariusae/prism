@@ -681,6 +681,20 @@ impl Session {
                 }
                 let offset = own_offset(&self.text[self.rows[first].range.clone()], start.1);
                 let (at_end, folded) = (offset == block.text.len(), block.folded);
+                // Return after a fence — ``` or ```rust — and nothing else: the row
+                // is a code block, and the caret is on the line between its fences.
+                let fenced = at_end
+                    && block.children.is_empty()
+                    && matches!(kind, BlockKind::Paragraph | BlockKind::Item(_))
+                    && block.text.strip_prefix("```").is_some_and(|info| !info.contains(['`', '\n']));
+                if fenced {
+                    let fence = block.text.clone();
+                    outline::set_kind(&mut self.body, &path, BlockKind::Code);
+                    let code = format!("{fence}\n\n```");
+                    let caret = shown_offset(&code, fence.len() + 1);
+                    self.body.get_mut(&path)?.text = code;
+                    return Some(self.changed(before, (path, caret), None));
+                }
                 if at_end {
                     // At a time block's end: the next, starting as it ends.
                     if let Some((next, caret)) = time::next_block(&mut self.body, &path) {
@@ -1054,6 +1068,62 @@ impl Session {
                 *at.last_mut()? += 1;
             }
             session.rearranged(before_text, Some(()), position, false)
+        })
+    }
+
+    /// Puts rows written as Markdown — carried here from another note, or
+    /// from anywhere — before a row, at a depth: where
+    /// [`drop_depth`](Self::drop_depth), asked with no rows, says they
+    /// would go. A row that brings a name a row here already has comes
+    /// without it. The caret is put at the first of them. `None` in a
+    /// note shown as text, and for Markdown with nothing in it.
+    pub fn insert_rows(&mut self, markdown: &str, before: usize, depth: usize, selection: Range<usize>) -> Option<Change> {
+        self.undoably(selection, |session, _| {
+            if session.mode != Mode::Outline {
+                return None;
+            }
+            let mut carried = read_marks(Document::parse(markdown)).blocks;
+            if carried.is_empty() {
+                return None;
+            }
+            let taken: Vec<String> = session.whole().walk().filter_map(|block| block.anchor.clone()).collect();
+            fn unname(block: &mut Block, taken: &[String]) {
+                if block.anchor.as_ref().is_some_and(|name| taken.contains(name)) {
+                    block.anchor = None;
+                }
+                block.children.iter_mut().for_each(|under| unname(under, taken));
+            }
+            carried.iter_mut().for_each(|block| unname(block, &taken));
+            let before_text = session.text.clone();
+            let (above, below, depth) = session.drop_place(&[], before, depth)?;
+            let mut at = match &above {
+                None => vec![0],
+                Some(above) if depth == above.len() => {
+                    let first = below.as_ref().filter(|below| below.len() == above.len() + 1 && below.starts_with(above)).map(|below| below[above.len()]);
+                    [above.as_slice(), &[first.unwrap_or(session.body.get(above).map_or(0, |block| block.children.len()))]].concat()
+                }
+                Some(above) => {
+                    let mut after = above[..=depth.min(above.len() - 1)].to_vec();
+                    *after.last_mut()? += 1;
+                    after
+                }
+            };
+            let first = at.clone();
+            for (index, mut block) in carried.into_iter().enumerate() {
+                block.layout.extra_indent = 0;
+                block.layout.gap.clear();
+                if index == 0 {
+                    if let Some(follower) = session.body.get_mut(&at) {
+                        block.layout.gap = std::mem::take(&mut follower.layout.gap);
+                    }
+                }
+                outline::insert(&mut session.body, &at, block)?;
+                *at.last_mut()? += 1;
+            }
+            session.project();
+            let (range, replacement) = difference(&before_text, &session.text);
+            let caret = session.place(&first, 0);
+            Some(Change { range, replacement, selection: caret..caret })
         })
     }
 
@@ -2109,6 +2179,28 @@ mod tests {
     }
 
     #[test]
+    fn return_after_a_fence_makes_the_row_a_code_block() {
+        let (mut session, mut view) = outline("- one\n- two\n");
+        let end = view.len();
+        shown(&mut view, &session.replace(end..end, "\n"));
+        let end = view.len();
+        shown(&mut view, &session.replace(end..end, "```rust"));
+        let end = view.len();
+        let change = session.perform(end..end, Command::Newline).unwrap();
+        shown(&mut view, &change);
+        assert_eq!(view, format!("one\ntwo\n```rust{SOFT_BREAK}{SOFT_BREAK}```"));
+        // The caret is between the fences, and what is typed there is the code.
+        let caret = change.selection.start;
+        assert_eq!(caret, view.len() - "```".len() - SOFT_BREAK.len_utf8());
+        shown(&mut view, &session.replace(caret..caret, "let x = 1;"));
+        assert_eq!(session.markdown(), "- one\n- two\n```rust\nlet x = 1;\n```\n");
+        assert_eq!(session.layout().lines.last().map(|line| line.kind.clone()), Some(LineKind::Code));
+        // A fence with words after it on its line is only words.
+        let (mut session, view) = outline("- ``` and `more`\n");
+        assert!(!session.perform(view.len()..view.len(), Command::Newline).is_some_and(|_| session.markdown().contains("```\n")));
+    }
+
+    #[test]
     fn code_is_one_row_and_a_line_break_in_it_stays_in_it() {
         let (mut session, mut view) = outline("- before\n\n```\nlet x = 1;\n```\n");
         let at = view.find("let x = 1;").unwrap() + "let x = 1;".len();
@@ -2493,6 +2585,30 @@ mod tests {
         assert_eq!((gaps.markdown().as_str(), &view[change.selection.start..]), ("- a\n\n- c\n- b\n", "b"));
         gaps.undo().unwrap();
         assert_eq!(gaps.markdown(), "- a\n\n- b\n- c\n");
+    }
+
+    #[test]
+    fn rows_from_elsewhere_are_put_down_at_a_place() {
+        let (mut session, mut view) = outline("- one\n  - under one\n- two\n");
+        // Before "two", as deep as under "one": the last under it.
+        let two = row(&session, "two");
+        assert_eq!((session.drop_depth(&[], two, 5), session.drop_depth(&[], two, 1)), (Some(2), Some(1)));
+        let change = session.insert_rows("- [ ] carried <!-- ^c1 -->\n  - with it\n- and another\n", two, 1, 0..0).unwrap();
+        shown(&mut view, &change);
+        assert_eq!(view, "one\nunder one\ncarried\nwith it\nand another\ntwo");
+        assert_eq!(change.selection, view.find("carried").unwrap()..view.find("carried").unwrap());
+        assert_eq!(session.markdown(), "- one\n  - under one\n  - [ ] carried <!-- ^c1 -->\n    - with it\n  - and another\n- two\n");
+        // At the end, at the top; and a name already here is not brought twice.
+        let end = session.layout().lines.len();
+        shown(&mut view, &session.insert_rows("- last <!-- ^c1 -->\n", end, 0, 0..0).unwrap());
+        assert!(session.markdown().ends_with("- two\n- last\n"));
+        // Into a note with nothing in it; and one undo takes them out again.
+        let (mut empty, _) = outline("");
+        empty.insert_rows("- a\n- b\n", 0, 0, 0..0).unwrap();
+        assert_eq!(empty.markdown(), "- a\n- b\n");
+        empty.undo().unwrap();
+        assert_eq!(empty.markdown(), "");
+        assert!(Session::new("- a\n", Mode::Text).insert_rows("- b\n", 0, 0, 0..0).is_none());
     }
 
     #[test]

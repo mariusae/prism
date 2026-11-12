@@ -142,10 +142,14 @@ final class TickStripView: NSView {
     override var isFlipped: Bool { true }
 
     /// The cards' sizes, one a card, and which of them show.
-    func set(sizes fresh: [Double], lit: Set<Int>) {
-        guard fresh != sizes || lit != litCards else { return }
+    /// The colour each card's note was given, by its place; none for a note given none.
+    private var tints: [NSColor?] = []
+
+    func set(sizes fresh: [Double], lit: Set<Int>, tints colours: [NSColor?] = []) {
+        guard fresh != sizes || lit != litCards || colours != tints else { return }
         sizes = fresh
         litCards = lit
+        tints = colours
         relayout()
     }
 
@@ -245,6 +249,11 @@ final class TickStripView: NSView {
             l.frame = NSRect(x: tickRight - w, y: t.y - h / 2, width: w, height: h)
             l.cornerRadius = min(min(h, w) / 2, 1.5)
             effectiveAppearance.performAsCurrentDrawingAppearance {
+                // A note given a colour is ticked in it: full where it shows, quieter where it does not.
+                if tints.indices.contains(t.index), let tint = tints[t.index] {
+                    l.backgroundColor = tint.withAlphaComponent(hovered == t.index || isCarried || t.lit ? 1 : 0.45 + 0.4 * near).cgColor
+                    return
+                }
                 let base = hovered == t.index || isCarried ? text : (t.lit ? text : tertiary)
                 l.backgroundColor = (base.blended(withFraction: near * 0.7, of: text) ?? base).cgColor
             }
@@ -353,9 +362,13 @@ final class TickStripView: NSView {
 
     private var pressed: (index: Int, at: NSPoint)?
 
+    /// The ticks clicked twice: the river asked for whole.
+    var onOverview: () -> Void = {}
+
     override func mouseDown(with event: NSEvent) {
         pressed = nil
         carried = nil
+        if event.clickCount == 2 { return onOverview() }
         let p = convert(event.locationInWindow, from: nil)
         guard onColumn(p), chevron(at: p.y) == nil, let t = tick(near: p.y) else { return }
         pressed = (t.index, p)
@@ -502,9 +515,13 @@ struct TickStrip: NSViewRepresentable {
     var sizes: [Double]
     /// The cards that show, by their place.
     var lit: Set<Int>
+    /// The colour each card's note was given, if it was given one.
+    var tints: [Color?] = []
     var onPick: (Int) -> Void
     var onMove: (Int, Int) -> Void = { _, _ in }
     var preview: (Int) -> TickPreview?
+    /// The ticks clicked twice: the river asked for whole.
+    var onOverview: () -> Void = {}
 
     func makeNSView(context: Context) -> TickStripView {
         let view = TickStripView(frame: NSRect(x: 0, y: 0, width: TickStripView.lane, height: 100))
@@ -519,7 +536,8 @@ struct TickStrip: NSViewRepresentable {
         view.onPick = onPick
         view.onMove = onMove
         view.preview = preview
-        view.set(sizes: sizes, lit: lit)
+        view.onOverview = onOverview
+        view.set(sizes: sizes, lit: lit, tints: tints.map { $0.map { NSColor($0) } })
     }
 }
 #endif

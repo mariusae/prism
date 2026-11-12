@@ -12,11 +12,15 @@ struct QuickOpen: View {
     @Binding var isShown: Bool
     /// What was typed to bring it up, if a key brought it up.
     var seed: String = ""
+    /// Whether only the river shown is looked in: its notes, by name and by what they say.
+    var inRiver = false
     @State private var typed = ""
     @State private var sections: [Section] = []
     @State private var chosen = 0
     @AppStorage("WeftLens") private var lens = Lens.recent.rawValue
     @FocusState private var focused: Bool
+    /// Where the pointer lay when the list was last drawn or arrowed through: until it moves from there, it chooses nothing.
+    @State private var still = NSEvent.mouseLocation
 
     enum Lens: String, CaseIterable {
         case recent, pinned, tasks, tags
@@ -68,7 +72,7 @@ struct QuickOpen: View {
         VStack(spacing: 0) {
             HStack(spacing: 12) {
                 Image(systemName: "magnifyingglass").font(.system(size: 17, weight: .medium)).foregroundStyle(Color.inkSecondary)
-                TextField("Find a note, or name a new one", text: $typed)
+                TextField(inRiver ? "Find in \(store.title(of: store.river))" : "Find a note, or name a new one", text: $typed)
                     .textFieldStyle(.plain)
                     .font(.system(size: 20))
                     .foregroundStyle(Color.inkText)
@@ -84,17 +88,19 @@ struct QuickOpen: View {
             }
             .padding(.horizontal, 20)
             .frame(height: 56)
-            if isBrowsing { lensBar }
+            if isBrowsing, !inRiver { lensBar }
             Rectangle().fill(Color.inkRule).frame(height: 1)
             ScrollViewReader { proxy in
                 ScrollView {
                     LazyVStack(alignment: .leading, spacing: 0) {
-                        ForEach(sections) { section in
+                        // Each row is known by its place in the list — never by what it is of, which two rows may share.
+                        ForEach(Array(sections.enumerated()), id: \.offset) { at, section in
+                            let start = sections[..<at].reduce(0) { $0 + $1.rows.count }
                             if let title = section.title {
                                 Text(title.uppercased()).font(.system(size: 10.5, weight: .semibold)).kerning(0.6).foregroundStyle(Color.inkFaint)
                                     .padding(.horizontal, 14).padding(.top, 10).padding(.bottom, 4)
                             }
-                            ForEach(section.rows) { row in rowView(row) }
+                            ForEach(Array(section.rows.enumerated()), id: \.offset) { offset, row in rowView(row, at: start + offset).id(start + offset) }
                         }
                         if rows.isEmpty {
                             Text(isBrowsing ? "Nothing here yet" : "Nothing found").font(.callout).foregroundStyle(Color.inkFaint).padding(14)
@@ -104,7 +110,7 @@ struct QuickOpen: View {
                 }
                 .frame(height: min(listHeight, 440))
                 .onChange(of: chosen) { _, index in
-                    if rows.indices.contains(index) { proxy.scrollTo(rows[index].id) }
+                    if rows.indices.contains(index) { proxy.scrollTo(index) }
                 }
             }
         }
@@ -115,6 +121,7 @@ struct QuickOpen: View {
         .padding(.horizontal, 24)
         .onAppear {
             focused = true
+            still = NSEvent.mouseLocation
             find()
             // What was typed to bring it up goes in once the field has the
             // caret, so that the next key adds to it rather than replaces it.
@@ -149,9 +156,8 @@ struct QuickOpen: View {
         .padding(.bottom, 8)
     }
 
-    private func rowView(_ row: Row) -> some View {
-        let index = rows.firstIndex(where: { $0.id == row.id }) ?? -1
-        return HStack(alignment: .firstTextBaseline, spacing: 10) {
+    private func rowView(_ row: Row, at index: Int) -> some View {
+        HStack(alignment: .firstTextBaseline, spacing: 10) {
             EmblemView(row.emblem ?? Emblem(symbol: row.symbol), size: 20, style: row.emblem == nil ? .plain : .tile, quiet: Color.inkSecondary)
                 .alignmentGuide(.firstTextBaseline) { $0[VerticalAlignment.center] + 5 }
             VStack(alignment: .leading, spacing: 2) {
@@ -168,7 +174,9 @@ struct QuickOpen: View {
         .frame(minHeight: 34)
         .background(RoundedRectangle(cornerRadius: 8, style: .continuous).fill(index == chosen ? Color.inkHover : .clear))
         .contentShape(Rectangle())
-        .onHover { if $0 { chosen = index } }
+        // The pointer chooses a row by moving onto it — not by lying where the list
+        // happens to be drawn, or where it scrolls to under the arrow keys.
+        .onHover { if $0, NSEvent.mouseLocation != still { chosen = index } }
         .onTapGesture {
             chosen = index
             go()
@@ -178,6 +186,7 @@ struct QuickOpen: View {
 
     private func move(_ step: Int) -> KeyPress.Result {
         guard !rows.isEmpty else { return .ignored }
+        still = NSEvent.mouseLocation
         chosen = (chosen + step + rows.count) % rows.count
         return .handled
     }
@@ -214,9 +223,58 @@ struct QuickOpen: View {
         (try? store.engine.runQuery(body: body, this: nil).pages) ?? []
     }
 
+    /// A card of the river shown, to go to where it stands.
+    private func card(_ card: Card, snippet: String? = nil) -> Row {
+        let label = store.label(path: card.path, title: card.title)
+        return Row(id: "card:\(card.id)\(snippet == nil ? "" : ":text")", symbol: "doc.text", name: label, detail: snippet == nil ? "In this river" : "", snippet: snippet, emblem: snippet == nil ? store.emblem(path: card.path, title: card.title) : nil) { store in
+            withAnimation(.snappy(duration: 0.24)) { store.river.reveal(card.id) }
+        }
+    }
+
+    /// Whether every word typed begins a word of a name.
+    private static func names(_ label: String, _ typed: String) -> Bool {
+        let words = label.lowercased().split { !$0.isLetter && !$0.isNumber }
+        return typed.lowercased().split { !$0.isLetter && !$0.isNumber }.allSatisfy { word in words.contains { $0.hasPrefix(word) } }
+    }
+
+    /// The river's own notes: all of them, or those named or saying what was typed.
+    private func findInRiver(_ name: String) -> [Section] {
+        let cards = store.river.all
+        guard !name.isEmpty else { return [Section(id: "river", title: nil, rows: cards.map { card($0) })] }
+        var found: [Section] = []
+        let named = cards.filter { Self.names(store.label(path: $0.path, title: $0.title), name) }
+        if !named.isEmpty { found.append(Section(id: "river", title: nil, rows: named.map { card($0) })) }
+        // What they say: as written now, saved or not.
+        let words = name.lowercased().split(separator: " ")
+        let saying: [Row] = cards.compactMap { held in
+            let text = store.draft(path: held.path, title: held.title).markdown
+            let lines = text.split(separator: "\n").map(String.init)
+            guard words.allSatisfy({ text.lowercased().contains($0) }), let line = lines.first(where: { line in words.contains { line.lowercased().contains($0) } }) else { return nil }
+            // Its words, without the marks a line opens with.
+            let words = line.replacingOccurrences(of: #"^\s*(#{1,6}\s+|>\s?|([-*+]|\d+[.)])\s+(\[.\]\s+)?)"#, with: "", options: .regularExpression)
+            return card(held, snippet: inlinePlainText(text: words))
+        }
+        if !saying.isEmpty { found.append(Section(id: "text", title: "In Text", rows: saying)) }
+        return found
+    }
+
+    /// Finds again — and, where that finds the same rows (the graph moved, and nothing here did), leaves the row chosen chosen.
     private func find() {
+        let before = rows.map(\.id)
+        let kept = chosen
+        search()
+        if rows.map(\.id) == before { chosen = min(kept, max(rows.count - 1, 0)) }
+        still = NSEvent.mouseLocation
+    }
+
+    private func search() {
         let name = typed.trimmingCharacters(in: .whitespaces)
         var found: [Section] = []
+        if inRiver {
+            sections = findInRiver(name)
+            chosen = 0
+            return
+        }
         if name.isEmpty {
             switch Lens(rawValue: lens) ?? .recent {
             case .recent:
@@ -252,19 +310,23 @@ struct QuickOpen: View {
             if let when = store.spoken(name) {
                 top.append(Row(id: "day:\(when.name)", symbol: "calendar", name: when.said, detail: when.name) { $0.open(name: when.name, after: $0.river.selected) })
             }
-            let pages = (try? store.engine.complete(typed: name, limit: 8)) ?? []
+            // The river's own notes come first: what is open is what is most often meant.
+            let here = store.river.all.filter { Self.names(store.label(path: $0.path, title: $0.title), name) }.prefix(4)
+            top += here.map { card($0) }
+            let open = Set(here.map(\.path))
+            let pages = ((try? store.engine.complete(typed: name, limit: 8)) ?? []).filter { !open.contains($0.path) }
             // Notes of one title are told apart by their files' names.
             let shared = store.sharedLabels(among: pages)
             top += pages.map { found in
                 page(found, detail: shared.contains(found.label) ? linkName(path: found.path).map { "\($0) · \(when(found))" } : nil)
             }
             let key = nameKey(name: name)
-            if !pages.contains(where: { nameKey(name: $0.label) == key || nameKey(name: $0.title) == key }), store.resolve(name)?.exists != true {
+            if !pages.contains(where: { nameKey(name: $0.label) == key || nameKey(name: $0.title) == key }), !here.contains(where: { nameKey(name: store.label(path: $0.path, title: $0.title)) == key }), store.resolve(name)?.exists != true {
                 top.append(Row(id: "new", symbol: "plus", name: "New note “\(name)”", detail: "↩") { _ = $0.newPage(title: name) })
             }
             found.append(Section(id: "names", title: nil, rows: top))
             // The pages saying it, after the pages named it.
-            let named = Set(pages.map(\.path))
+            let named = Set(pages.map(\.path)).union(open)
             let hits = ((try? store.engine.search(typed: name, limit: 12)) ?? []).filter { !named.contains($0.path) }
             if !hits.isEmpty {
                 found.append(Section(id: "text", title: "In Text", rows: hits.map { hit in

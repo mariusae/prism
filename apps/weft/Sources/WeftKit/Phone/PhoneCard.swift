@@ -607,6 +607,14 @@ struct PhoneCard: View {
                 Label("Text", systemImage: "text.alignleft").tag(EditorMode.text)
             }
             if canRead { Button("Read", systemImage: "doc.richtext") { read() } }
+            Button("Move to Top", systemImage: "arrow.up.to.line") {
+                withAnimation(.snappy(duration: 0.28)) { river.move(card.id, toPlace: 0) }
+                store.rememberRivers()
+            }
+            Button("Move to Bottom", systemImage: "arrow.down.to.line") {
+                withAnimation(.snappy(duration: 0.28)) { river.move(card.id, toPlace: river.cards.count - 1) }
+                store.rememberRivers()
+            }
             Button("Close Others", systemImage: "rectangle.stack.badge.minus") { withAnimation(.snappy(duration: 0.28)) { store.closeAll(in: river, but: card.id) } }
             Button("Close", systemImage: "xmark") { withAnimation(.snappy(duration: 0.28)) { store.close(card.id, in: river) } }
         }

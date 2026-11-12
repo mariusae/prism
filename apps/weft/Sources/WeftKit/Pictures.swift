@@ -189,6 +189,12 @@ struct PictureView: View {
             .frame(width: width, height: height)
             .clipShape(RoundedRectangle(cornerRadius: 5, style: .continuous))
             .overlay(RoundedRectangle(cornerRadius: 5, style: .continuous).strokeBorder(dragged != nil ? Color.inkAccent : Color.inkRule, lineWidth: dragged != nil ? 1.5 : 0.5))
+            // Taken out of the note, to wherever takes a picture: its file — or, on the web, its address.
+            .onDrag {
+                if isRemote, let url = URL(string: picture.address) { return NSItemProvider(object: url as NSURL) }
+                let file = store.root.appendingPathComponent(picture.address.removingPercentEncoding ?? picture.address)
+                return NSItemProvider(contentsOf: file) ?? NSItemProvider()
+            }
             if rewrite != nil {
                 if isHovered || dragged != nil {
                     // Where it is taken hold of: shown, though all of both edges will do.

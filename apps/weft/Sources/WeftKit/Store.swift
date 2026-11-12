@@ -558,7 +558,7 @@ public final class GraphStore {
     /// Makes a note with no title — it is called by its first words —
     /// and opens it to be written in.
     @discardableResult
-    public func newNote(saying words: String? = nil) -> Card? {
+    public func newNote(saying words: String? = nil, written: String? = nil) -> Card? {
         let format = DateFormatter()
         format.locale = Locale(identifier: "en_US_POSIX")
         format.dateFormat = "yyyy-MM-dd-HHmmss"
@@ -567,10 +567,11 @@ public final class GraphStore {
         let path = "notes/\(name).md"
         // Words given it — dictated — are its first row, and it is not opened to be written in.
         let said = words.map { $0.replacingOccurrences(of: "\n", with: " ").trimmingCharacters(in: .whitespaces) }
-        guard (try? engine.write(path: path, content: said.map { "- \($0)\n" } ?? "")) != nil else { return nil }
+        // Or it is written already — pasted — and is as it was written.
+        guard (try? engine.write(path: path, content: written ?? said.map { "- \($0)\n" } ?? "")) != nil else { return nil }
         let card = Card(path: path, title: name)
         river.open(card, after: river.selected)
-        if said == nil { river.writing = card.id }
+        if said == nil, written == nil { river.writing = card.id }
         rememberRivers()
         return card
     }
@@ -1414,14 +1415,17 @@ public final class River: Identifiable {
             hidden.append(found[index].name)
             found.remove(at: index)
         }
+        // A note being written in stays where it is, whatever else is closed.
+        let busy = writing != nil && writing != id
         if writing == id { writing = nil }
         let left = all
         if selected == id { selected = left.indices.contains(place) ? left[place].id : left.last?.id }
-        settle(on: left.indices.contains(place) ? left[place].id : left.last?.id)
+        if !busy { settle(on: left.indices.contains(place) ? left[place].id : left.last?.id) }
     }
 
     public func toggleFold(_ id: Card.ID) {
-        defer { if card(id)?.folded == true { settle(on: id) } }
+        let busy = writing != nil && writing != id
+        defer { if card(id)?.folded == true, !busy { settle(on: id) } }
         if let index = cards.firstIndex(where: { $0.id == id }) {
             cards[index].folded.toggle()
             if cards[index].folded, writing == id { writing = nil }

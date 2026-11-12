@@ -35,7 +35,8 @@ struct FlowLayout: Layout {
     func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
         let rows = arrange(width: bounds.width, subviews: subviews)
         for (index, point) in rows.points.enumerated() {
-            subviews[index].place(at: CGPoint(x: bounds.minX + point.x, y: bounds.minY + point.y), proposal: .unspecified)
+            // No child is wider than the row: one too long for it is cut short, not let out past the edge.
+            subviews[index].place(at: CGPoint(x: bounds.minX + point.x, y: bounds.minY + point.y), proposal: ProposedViewSize(width: min(subviews[index].sizeThatFits(.unspecified).width, bounds.width), height: nil))
         }
     }
 
@@ -43,7 +44,8 @@ struct FlowLayout: Layout {
         var points: [CGPoint] = []
         var (x, y, rowHeight, widest): (CGFloat, CGFloat, CGFloat, CGFloat) = (0, 0, 0, 0)
         for subview in subviews {
-            let size = subview.sizeThatFits(.unspecified)
+            var size = subview.sizeThatFits(.unspecified)
+            size.width = min(size.width, width)
             if x > 0, x + size.width > width {
                 x = 0
                 y += rowHeight + spacing

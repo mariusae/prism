@@ -84,6 +84,9 @@ extension NoteEditorView {
             restyle()
         }
 
+        /// Whether any of the app's views stand in the note: a picture, a query's findings.
+        var hasBlocks: Bool { !hosts.isEmpty }
+
         /// Dresses the text again, as the editor reads it.
         func restyle() {
             guard let view, let storage = view.noteStorage, let manager = view.noteLayout as? BodyLayoutManager else { return }
@@ -157,10 +160,15 @@ extension NoteEditorView {
         // MARK: Blocks drawn by the app
 
         private var hosts: [String: BlockHost] = [:]
+        /// The lines with pictures among their words, and where in the
+        /// text each picture is written: such a line keeps its words, and
+        /// its pictures are shown under it.
+        private var among: [Int: [NSRange]] = [:]
 
         /// The fenced blocks in what is shown: each with the lines it takes.
         private func blocks(in text: NSString) -> [(block: EditorBlock, lines: ClosedRange<Int>, range: NSRange)] {
             var found: [(EditorBlock, ClosedRange<Int>, NSRange)] = []
+            among = [:]
             let part = { (range: NSRange) in text.substring(with: range) }
             if layout.markersInText {
                 var opened: Int?
@@ -191,7 +199,15 @@ extension NoteEditorView {
                 let range = NSRange(location: Int(line.content), length: max(Int(line.end) - Int(line.content), 0))
                 guard range.length > 4, NSMaxRange(range) <= text.length else { continue }
                 let words = part(range)
-                guard words.contains("!["), EditorPicture.all(line: words) != nil else { continue }
+                guard words.contains("![") else { continue }
+                guard EditorPicture.all(line: words) != nil else {
+                    // Pictures among words: the words stay, and the pictures are shown under them.
+                    let pictures = EditorPicture.among(line: words)
+                    guard !pictures.isEmpty else { continue }
+                    among[index] = pictures.map { NSRange(location: range.location + $0.range.location, length: $0.range.length) }
+                    found.append((EditorBlock(info: EditorBlock.picture, source: pictures.map(\.picture.line).joined(separator: " ")), index...index, NSRange(location: Int(line.start), length: Int(line.end - line.start))))
+                    continue
+                }
                 let block = EditorBlock(info: EditorBlock.picture, source: words) { [weak self] rewritten in self?.rewrite(line: index, as: rewritten) }
                 found.append((block, index...index, NSRange(location: Int(line.start), length: Int(line.end - line.start))))
             }
@@ -229,13 +245,26 @@ extension NoteEditorView {
                 guard !found.lines.contains(where: revealed.contains), let content = parent.blockView(block) else { continue }
                 let key = "\(index)|\(found.block.info)|\(found.block.info == EditorBlock.picture ? found.block.source : "")"
                 used.insert(key)
-                replaced.formUnion(found.lines)
                 let host = hosts[key] ?? {
                     let host = BlockHost(in: view)
                     hosts[key] = host
                     return host
                 }()
                 let height = host.show(AnyView(content.frame(width: width, alignment: .leading)), width: width)
+                if let written = among[found.lines.lowerBound], found.range.length > 0 {
+                    // The line's words stay as they are; what writes its pictures is
+                    // not shown, and the room they take is left under the line.
+                    for range in written where NSMaxRange(range) <= storage.length {
+                        storage.addAttributes([.font: BodyStyler.hiddenFont, .foregroundColor: EditorColor.clear], range: range)
+                    }
+                    let whole = (storage.string as NSString).paragraphRange(for: NSRange(location: found.range.location, length: 0))
+                    let style = ((storage.attribute(.paragraphStyle, at: found.range.location, effectiveRange: nil) as? NSParagraphStyle)?.mutableCopy() as? NSMutableParagraphStyle) ?? NSMutableParagraphStyle()
+                    style.paragraphSpacing += height + 10
+                    storage.addAttribute(.paragraphStyle, value: style, range: whole)
+                    placed.append((host, found.range, indent))
+                    continue
+                }
+                replaced.formUnion(found.lines)
                 // The block's own lines are folded to nothing; the room it takes is left under them.
                 let folded = NSMutableParagraphStyle()
                 folded.maximumLineHeight = 0.5
@@ -429,6 +458,23 @@ extension NoteEditorView {
             guard let view, !view.isComposing, !rows.isEmpty else { return false }
             let kept = view.caret
             guard let edit = editor.moveRows(rows: rows.map { UInt32($0) }, before: UInt32(before), depth: UInt32(depth), selectionStart: UInt32(kept.location), selectionEnd: UInt32(NSMaxRange(kept))) else { return false }
+            settle(edit)
+            return true
+        }
+
+        /// Writes other words in place of some of the note's: a link's, renamed.
+        func rewrite(_ range: NSRange, as words: String) {
+            guard let view, !view.isComposing, NSMaxRange(range) <= (shown as NSString).length else { return }
+            settle(editor.replace(start: UInt32(range.location), end: UInt32(NSMaxRange(range)), replacement: words))
+        }
+
+        /// Puts rows written as Markdown — carried here from another note —
+        /// before a row, at a depth. Says whether there was anything to put.
+        @discardableResult
+        func insertRows(_ markdown: String, before: Int, depth: Int) -> Bool {
+            guard let view, !view.isComposing else { return false }
+            let kept = view.caret
+            guard let edit = editor.insertRows(markdown: markdown, before: UInt32(before), depth: UInt32(depth), selectionStart: UInt32(kept.location), selectionEnd: UInt32(NSMaxRange(kept))) else { return false }
             settle(edit)
             return true
         }

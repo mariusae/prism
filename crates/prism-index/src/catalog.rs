@@ -309,15 +309,20 @@ impl Catalog {
 
     /// Pages whose title or alias starts with, or has a word starting
     /// with, what was typed: a chooser's first answer. Titles first, and
-    /// a name's start before a word inside it. Looked up in an index of
-    /// names' words, so it costs what it finds, not what there is.
+    /// a name's start before a word inside it; among those found alike,
+    /// the page changed last comes first — what was worked on lately is
+    /// what is most often looked for — and then by name. Looked up in
+    /// an index of names' words, so it costs what it finds, not what
+    /// there is.
     pub fn complete(db: &Connection, typed: &str, limit: usize) -> Result<Vec<NoteRow>> {
         let key = name_key(typed);
         let mut statement = db.prepare(&format!(
             "SELECT {COLUMNS} FROM notes JOIN (
                  SELECT path, min(score) AS score FROM name_words WHERE suffix >= ?1 AND suffix < ?2 GROUP BY path
              ) AS found ON found.path = notes.path
-             WHERE {SEEN} ORDER BY found.score, notes.label COLLATE NOCASE LIMIT ?3"
+             WHERE {SEEN}
+             ORDER BY found.score, coalesce((SELECT modified FROM prism_dates WHERE prism_dates.path = notes.path), 0) DESC, notes.label COLLATE NOCASE, notes.path
+             LIMIT ?3"
         ))?;
         let rows = statement.query_map(params![key, format!("{key}{}", char::MAX), limit as i64], row)?.collect::<rusqlite::Result<_>>()?;
         Ok(rows)

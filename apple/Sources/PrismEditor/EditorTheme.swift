@@ -270,6 +270,21 @@ public struct EditorPicture: Hashable {
         return found.isEmpty ? nil : found
     }
 
+    /// The pictures written among a line's words, each with where it is
+    /// written: what an app shows under the line they are in.
+    public static func among(line: String) -> [(picture: EditorPicture, range: NSRange)] {
+        guard let each else { return [] }
+        let text = line as NSString
+        return each.matches(in: line, range: NSRange(location: 0, length: text.length)).compactMap { match in
+            guard match.range.length > 0, let picture = EditorPicture(line: text.substring(with: match.range)) else { return nil }
+            // The spaces about it are the words': only what writes the picture is its own.
+            let written = text.substring(with: match.range)
+            let lead = written.prefix { $0 == " " || $0 == "\t" }.utf16.count
+            let trail = written.reversed().prefix { $0 == " " || $0 == "\t" }.count
+            return (picture, NSRange(location: match.range.location + lead, length: max(match.range.length - lead - trail, 0)))
+        }
+    }
+
     /// The line that writes it.
     public var line: String {
         guard let width else { return "![\(alt)](\(address))" }

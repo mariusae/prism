@@ -37,6 +37,12 @@ public struct NoteEditorView: NSViewRepresentable {
     /// What the app shows of a link while the pointer rests on it: a
     /// card of the page on the web, or of the note. `nil` for nothing.
     var linkPreview: (EditorLink) -> AnyView?
+    /// The title of the page at an address, if the app knows it — and,
+    /// asked, goes to find it out. With this, a link on the web clicked
+    /// is asked about — its words rewritten, its page's title taken for
+    /// them, or it opened — and one clicked with ⌘ held is opened at once.
+    /// `nil`, and a click opens it.
+    var webTitle: ((String) -> String?)?
     /// What stands at the head of the note's first line in place of its
     /// bullet, and what clicking it does. Drawn only when the note opens
     /// with a plain bulleted line: see `takesLead`.
@@ -94,6 +100,7 @@ public struct NoteEditorView: NSViewRepresentable {
         linkIcon: @escaping (String) -> String? = { _ in nil },
         blockView: @escaping (EditorBlock) -> AnyView? = { _ in nil },
         linkPreview: @escaping (EditorLink) -> AnyView? = { _ in nil },
+        webTitle: ((String) -> String?)? = nil,
         lead: EditorLead? = nil, onLead: @escaping () -> Void = {},
         offers: @escaping (BodyCompletion) -> [EditorOffer] = { _ in [] },
         offersTitle: Bool = false, onTitle: @escaping () -> Void = {},
@@ -114,6 +121,7 @@ public struct NoteEditorView: NSViewRepresentable {
         self.linkIcon = linkIcon
         self.blockView = blockView
         self.linkPreview = linkPreview
+        self.webTitle = webTitle
         self.lead = lead
         self.onLead = onLead
         self.offers = offers
@@ -490,7 +498,9 @@ public final class NoteTextView: NSTextView {
         if hit !== self { return hit.isDescendant(of: self) ? .block : .elsewhere }
         guard let manager = layoutManager as? BodyLayoutManager, let container = textContainer else { return .text }
         let point = containerPoint(event)
-        if manager.isLead(at: point) || manager.task(at: point, in: container) != nil || manager.foldPill(at: point) != nil { return .box }
+        if manager.isLead(at: point) || manager.task(at: point, in: container) != nil || manager.foldPill(at: point) != nil || manager.mark(at: point) != nil { return .box }
+        // Rows chosen are taken hold of, not written in: an arrow.
+        if let chosen = rowsChosen, let row = manager.row(at: point, in: container), (min(chosen.anchor, chosen.head)...max(chosen.anchor, chosen.head)).contains(row) { return .box }
         return manager.link(at: point, in: container) != nil ? .link : .text
     }
 
@@ -549,6 +559,8 @@ public final class NoteTextView: NSTextView {
 
     public override func mouseExited(with event: NSEvent) {
         super.mouseExited(with: event)
+        // Off the words: the pointer is no longer theirs to shape.
+        if under == .text || under == .link { NSCursor.arrow.set() }
         under = .elsewhere
         hovered = nil
         // Onto the card, perhaps: it is over the text, and a window of its own.
@@ -624,6 +636,19 @@ public final class NoteTextView: NSTextView {
         return view
     }
 
+    /// The width the app's views were last placed for: at another, the
+    /// lines above them break elsewhere, and they are placed again.
+    private var placedWidth: CGFloat = 0
+
+    public override func setFrameSize(_ newSize: NSSize) {
+        super.setFrameSize(newSize)
+        guard abs(newSize.width - placedWidth) > 0.5 else { return }
+        let first = placedWidth == 0
+        placedWidth = newSize.width
+        guard !first, coordinator?.hasBlocks == true else { return }
+        DispatchQueue.main.async { [weak self] in self?.coordinator?.restyle() }
+    }
+
     func height(forWidth width: CGFloat) -> CGFloat {
         guard let container = textContainer, let manager = layoutManager else { return 20 }
         if abs(container.size.width - width) > 0.5 {
@@ -645,11 +670,25 @@ public final class NoteTextView: NSTextView {
     public override func mouseDown(with event: NSEvent) {
         hovered = nil
         hideCard()
-        leaveRows()
-        guard let manager = layoutManager as? BodyLayoutManager, let container = textContainer else { return super.mouseDown(with: event) }
+        rowPress = nil
+        guard let manager = layoutManager as? BodyLayoutManager, let container = textContainer else {
+            leaveRows()
+            return super.mouseDown(with: event)
+        }
         let point = containerPoint(event)
+        // On rows chosen: they are taken hold of, to carry — or, let go where they are, let be.
+        if let chosen = rowsChosen, let row = manager.row(at: point, in: container), (min(chosen.anchor, chosen.head)...max(chosen.anchor, chosen.head)).contains(row) {
+            rowPress = (row, point, true)
+            return
+        }
+        leaveRows()
         if manager.isLead(at: point) {
             coordinator?.parent.onLead()
+            return
+        }
+        // A row's bullet: clicked, it folds the row or unfolds it; dragged, it carries the row.
+        if let row = manager.mark(at: point) {
+            rowPress = (row, point, false)
             return
         }
         // A folded row's pill: unfolded.
@@ -669,6 +708,11 @@ public final class NoteTextView: NSTextView {
     }
 
     public override func mouseUp(with event: NSEvent) {
+        if let press = rowPress {
+            rowPress = nil
+            if press.chosen { leaveRows() } else { coordinator?.perform(.toggleFold, onRows: [press.row]) }
+            return
+        }
         guard let pressed else { return super.mouseUp(with: event) }
         self.pressed = nil
         let point = containerPoint(event)
@@ -676,8 +720,190 @@ public final class NoteTextView: NSTextView {
         if let task = pressed.task {
             coordinator?.perform(.toggleCheckbox, at: task)
         } else if let link = pressed.link {
+            // A link on the web is asked about; with ⌘ held, opened.
+            if case .web(let address) = link, !event.modifierFlags.contains(.command), coordinator?.parent.webTitle != nil, editLink(address, at: pressed.point) { return }
             coordinator?.parent.onFollow(link)
         }
+    }
+
+    /// The caret is as tall as the words it stands among, and no taller:
+    /// a line's box also holds the room left under it before the next,
+    /// which a caret drawn the whole box's height would hang down into.
+    public override func drawInsertionPoint(in rect: NSRect, color: NSColor, turnedOn flag: Bool) {
+        var rect = rect
+        let font = (typingAttributes[.font] as? NSFont) ?? coordinator?.parent.theme.body ?? .systemFont(ofSize: NSFont.systemFontSize)
+        let tall = (font.ascender - font.descender).rounded(.up) + 2
+        if rect.height > tall { rect.size.height = tall }
+        super.drawInsertionPoint(in: rect, color: color, turnedOn: flag)
+    }
+
+    public override func setNeedsDisplay(_ rect: NSRect, avoidAdditionalLayout flag: Bool) {
+        // What a taller caret left behind is cleared with it.
+        super.setNeedsDisplay(rect.insetBy(dx: -1, dy: -4), avoidAdditionalLayout: flag)
+    }
+
+    // MARK: Rows carried by the pointer
+    //
+    // A row is taken by its bullet — or its box, or, chosen with others
+    // (Esc), anywhere on them — and carried: within the note, to another
+    // place and depth in it; or to another note, any card showing an
+    // outline. A line shows where it would go. Carried anywhere else — a
+    // note shown as text, another app — it is its Markdown.
+
+    /// What says rows are being carried, on the pasteboard, beside their Markdown.
+    static let rowsType = NSPasteboard.PasteboardType("org.mutable.prism.rows")
+    /// The rows being carried, and the view they are carried from.
+    private static var carried: (rows: [Int], markdown: String)?
+    private static weak var carriedFrom: NoteTextView?
+    /// A press on a bullet, or on rows chosen: a click or a carry, by what comes next.
+    private var rowPress: (row: Int, point: CGPoint, chosen: Bool)?
+
+    public override func mouseDragged(with event: NSEvent) {
+        let point = containerPoint(event)
+        var row = rowPress?.row
+        var from = rowPress?.point
+        // A task is carried by its box, as a bullet's row by its bullet.
+        if row == nil, let pressed, let task = pressed.task, let manager = layoutManager as? BodyLayoutManager {
+            row = manager.lines.firstIndex { Int($0.start) == task }
+            from = pressed.point
+        }
+        guard let row, let from else { return super.mouseDragged(with: event) }
+        guard hypot(point.x - from.x, point.y - from.y) >= 4 else { return }
+        rowPress = nil
+        pressed = nil
+        carry(row: row, with: event)
+    }
+
+    private func carry(row: Int, with event: NSEvent) {
+        guard let coordinator, let manager = layoutManager as? BodyLayoutManager else { return }
+        var rows = [row]
+        if let chosen = rowsChosen, (min(chosen.anchor, chosen.head)...max(chosen.anchor, chosen.head)).contains(row) {
+            rows = Array(min(chosen.anchor, chosen.head)...max(chosen.anchor, chosen.head))
+        }
+        let markdown = coordinator.editor.markdownOf(rows: rows.map { UInt32($0) })
+        guard !markdown.isEmpty else { return }
+        let item = NSPasteboardItem()
+        item.setString(markdown, forType: .string)
+        item.setString("rows", forType: Self.rowsType)
+        let dragging = NSDraggingItem(pasteboardWriter: item)
+        // What is carried is shown as it stands: the rows, and what is under the last of them.
+        var rect = rows.reduce(CGRect.null) { $0.union(manager.rect(ofRow: $1)) }
+        rect = rect.offsetBy(dx: textContainerOrigin.x, dy: textContainerOrigin.y).intersection(bounds)
+        guard !rect.isEmpty else { return }
+        let image = NSImage(size: rect.size)
+        if let picture = bitmapImageRepForCachingDisplay(in: rect) {
+            cacheDisplay(in: rect, to: picture)
+            image.addRepresentation(picture)
+        }
+        dragging.setDraggingFrame(rect, contents: image)
+        Self.carried = (rows, markdown)
+        Self.carriedFrom = self
+        beginDraggingSession(with: [dragging], event: event, source: self)
+    }
+
+    public override func draggingSession(_ session: NSDraggingSession, sourceOperationMaskFor context: NSDraggingContext) -> NSDragOperation {
+        Self.carriedFrom === self ? [.move, .copy] : super.draggingSession(session, sourceOperationMaskFor: context)
+    }
+
+    public override func draggingSession(_ session: NSDraggingSession, endedAt screenPoint: NSPoint, operation: NSDragOperation) {
+        if Self.carriedFrom === self {
+            Self.carried = nil
+            Self.carriedFrom = nil
+            return
+        }
+        super.draggingSession(session, endedAt: screenPoint, operation: operation)
+    }
+
+    /// Where rows carried over this note would be put down: before which
+    /// row, how deep, and where the line that says so is drawn. Nothing,
+    /// when none are carried, or the note is shown as text.
+    private func rowsDrop(_ sender: any NSDraggingInfo) -> (before: Int, depth: Int, y: CGFloat, x: CGFloat)? {
+        guard sender.draggingPasteboard.availableType(from: [Self.rowsType]) != nil, let carried = Self.carried, let coordinator, !coordinator.layout.markersInText,
+              let manager = layoutManager as? BodyLayoutManager else { return nil }
+        let place = convert(sender.draggingLocation, from: nil)
+        let point = CGPoint(x: place.x - textContainerOrigin.x, y: place.y - textContainerOrigin.y)
+        let lines = manager.lines
+        let step = max(manager.theme.step, 1)
+        // Before the first row whose middle is under the pointer; after the last, past them all.
+        let before = lines.indices.first { point.y < manager.rect(ofRow: $0).midY } ?? lines.count
+        // As deep as the rows it comes between — or as the pointer says, by the column it is over:
+        // further out, or one step in under the row above.
+        let depthOf = { (index: Int) in lines.indices.contains(index) ? max(Int(lines[index].depth) - 1, 0) : 0 }
+        let (above, beside) = (depthOf(before - 1), before < lines.count ? depthOf(before) : depthOf(before - 1))
+        let column = max(Int(point.x / step), 0)
+        var depth = column <= beside || (before > 0 && column == above + 1) ? column : beside
+        let own = Self.carriedFrom === self
+        if lines.isEmpty { depth = 0 } else {
+            guard let held = coordinator.editor.dropDepth(rows: own ? carried.rows.map { UInt32($0) } : [], before: UInt32(before), depth: UInt32(depth)) else { return nil }
+            depth = Int(held)
+        }
+        let y = before < lines.count ? manager.rect(ofRow: before).minY : (lines.isEmpty ? 0 : manager.rect(ofRow: lines.count - 1).maxY)
+        return (before, depth, y, CGFloat(depth) * step)
+    }
+
+    private func showDrop(_ sender: any NSDraggingInfo) -> Bool {
+        guard let manager = layoutManager as? BodyLayoutManager else { return false }
+        let drop = rowsDrop(sender)
+        manager.dropLine = drop.map { ($0.y, $0.x) }
+        needsDisplay = true
+        return drop != nil
+    }
+
+    private var carriesRows: Bool { Self.carried != nil }
+
+    public override func draggingEntered(_ sender: any NSDraggingInfo) -> NSDragOperation {
+        guard carriesRows, coordinator?.layout.markersInText == false else { return super.draggingEntered(sender) }
+        return showDrop(sender) ? .move : []
+    }
+
+    public override func draggingUpdated(_ sender: any NSDraggingInfo) -> NSDragOperation {
+        guard carriesRows, coordinator?.layout.markersInText == false else { return super.draggingUpdated(sender) }
+        return showDrop(sender) ? .move : []
+    }
+
+    public override func draggingExited(_ sender: (any NSDraggingInfo)?) {
+        (layoutManager as? BodyLayoutManager)?.dropLine = nil
+        needsDisplay = true
+        if !carriesRows { super.draggingExited(sender) }
+    }
+
+    public override func draggingEnded(_ sender: any NSDraggingInfo) {
+        (layoutManager as? BodyLayoutManager)?.dropLine = nil
+        needsDisplay = true
+        super.draggingEnded(sender)
+    }
+
+    /// Puts rows carried down where the line was. From another note, they
+    /// are written here and then taken out there; within this one, moved.
+    private func drop(rows sender: any NSDraggingInfo) -> Bool? {
+        guard carriesRows, let coordinator, !coordinator.layout.markersInText else { return nil }
+        guard let drop = rowsDrop(sender), let carried = Self.carried else { return false }
+        (layoutManager as? BodyLayoutManager)?.dropLine = nil
+        needsDisplay = true
+        return put(rows: carried.rows, of: Self.carriedFrom, before: drop.before, depth: drop.depth)
+    }
+
+    /// Puts rows of a note's — this one's, or another's — before a row
+    /// here, at a depth: what letting go of rows carried does. Says
+    /// whether they were put.
+    @discardableResult
+    public func put(rows: [Int], of source: NoteTextView?, before: Int, depth: Int) -> Bool {
+        guard let coordinator, let source, let from = source.coordinator, !rows.isEmpty else { return false }
+        if source === self {
+            leaveRows()
+            return coordinator.moveRows(rows, before: before, depth: depth)
+        }
+        let markdown = from.editor.markdownOf(rows: rows.map { UInt32($0) })
+        guard !markdown.isEmpty, coordinator.insertRows(markdown, before: before, depth: depth) else { return false }
+        // Taken out where they came from, once this note has them — and only if they
+        // are still what was carried: a card of the same note is by then another's.
+        DispatchQueue.main.async { [weak source] in
+            guard let from = source?.coordinator, from.editor.markdownOf(rows: rows.map { UInt32($0) }) == markdown else { return }
+            source?.leaveRows()
+            from.perform(.deleteRows, onRows: rows)
+        }
+        window?.makeFirstResponder(self)
+        return true
     }
 
     /// The pointer's shape is set as it moves (see `point`), from what is
@@ -961,11 +1187,12 @@ public final class NoteTextView: NSTextView {
     }
 
     public override var acceptableDragTypes: [NSPasteboard.PasteboardType] {
-        super.acceptableDragTypes + Self.pictureTypes.filter { !super.acceptableDragTypes.contains($0) }
+        super.acceptableDragTypes + ([Self.rowsType] + Self.pictureTypes).filter { !super.acceptableDragTypes.contains($0) }
     }
 
     /// Pictures dropped: the app's to keep, and written where they were let go.
     public override func performDragOperation(_ sender: any NSDraggingInfo) -> Bool {
+        if let dropped = drop(rows: sender) { return dropped }
         let at = characterIndexForInsertion(at: convert(sender.draggingLocation, from: nil))
         if coordinator?.insert(pictures: Self.pictures(on: sender.draggingPasteboard), at: at) == true { return true }
         return super.performDragOperation(sender)
@@ -1017,6 +1244,46 @@ public final class NoteTextView: NSTextView {
         }
     }
 
+    /// Asks about a link on the web, under it: its words, to rewrite; its
+    /// page's title, to take for them; and the way there. Says whether it asked.
+    private func editLink(_ address: String, at point: CGPoint) -> Bool {
+        guard let manager = layoutManager, let container = textContainer, let storage = textStorage, storage.length > 0, linkPrompt == nil, let coordinator else { return false }
+        let character = manager.characterIndexForGlyph(at: manager.glyphIndex(for: point, in: container))
+        var range = NSRange()
+        guard character < storage.length, storage.attribute(.prismLink, at: character, longestEffectiveRange: &range, in: NSRange(location: 0, length: storage.length)) != nil else { return false }
+        let text = storage.string as NSString
+        let written = text.substring(with: range)
+        // An address written bare is its own words; written `<so>`, its brackets go with it.
+        let bare = written == address || address.hasSuffix(written)
+        if bare, range.location > 0, NSMaxRange(range) < text.length, text.character(at: range.location - 1) == 60, text.character(at: NSMaxRange(range)) == 62 {
+            range = NSRange(location: range.location - 1, length: range.length + 2)
+        }
+        let prompt = NSPopover()
+        let known = coordinator.parent.webTitle
+        let content = LinkEditor(
+            address: address, words: bare ? "" : written, title: { known?(address) },
+            apply: { [weak self, weak prompt] words in
+                prompt?.close()
+                let words = words.trimmingCharacters(in: .whitespacesAndNewlines).replacingOccurrences(of: "[", with: "(").replacingOccurrences(of: "]", with: ")")
+                guard let self, !words.isEmpty, words != written else { return }
+                self.coordinator?.rewrite(range, as: bare ? "[\(words)](\(address))" : words)
+            },
+            open: { [weak self, weak prompt] in
+                prompt?.close()
+                self?.coordinator?.parent.onFollow(.web(address))
+            }
+        )
+        prompt.contentViewController = NSHostingController(rootView: content)
+        prompt.behavior = .transient
+        prompt.delegate = self
+        linkPrompt = prompt
+        let glyphs = manager.glyphRange(forCharacterRange: range, actualCharacterRange: nil)
+        var anchor = manager.boundingRect(forGlyphRange: glyphs, in: container).offsetBy(dx: textContainerOrigin.x, dy: textContainerOrigin.y)
+        anchor.size.width = max(anchor.width, 1)
+        prompt.show(relativeTo: anchor, of: self, preferredEdge: .maxY)
+        return true
+    }
+
     private static func command(flags: NSEvent.ModifierFlags, key: String, special: NSEvent.SpecialKey?) -> EditCommand? {
         switch (flags, key) {
         case ([.command], "b"): return .bold
@@ -1056,6 +1323,53 @@ public final class NoteTextView: NSTextView {
 extension NoteTextView: NSPopoverDelegate {
     public func popoverDidClose(_ notification: Notification) {
         if (notification.object as? NSPopover) === linkPrompt { linkPrompt = nil }
+    }
+}
+#endif
+
+
+#if os(macOS)
+/// What is asked of a link on the web, clicked: the words it is shown
+/// by, to write anew; its page's title, to take for them; the way there.
+private struct LinkEditor: View {
+    let address: String
+    @State var words: String
+    let title: () -> String?
+    let apply: (String) -> Void
+    let open: () -> Void
+    @State private var known: String?
+    @FocusState private var writing: Bool
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            TextField("Title", text: $words)
+                .textFieldStyle(.roundedBorder)
+                .focused($writing)
+                .onSubmit { apply(words) }
+            Text(address).font(.caption).foregroundStyle(.secondary).lineLimit(1).truncationMode(.middle)
+            if let known, known != words {
+                Button { apply(known) } label: {
+                    Label(known, systemImage: "textformat").lineLimit(1).frame(maxWidth: .infinity, alignment: .leading)
+                }
+                .help("Use the page's title")
+            }
+            HStack {
+                Button("Open") { open() }
+                Spacer()
+                Button("Rename") { apply(words) }.keyboardShortcut(.defaultAction).disabled(words.trimmingCharacters(in: .whitespaces).isEmpty)
+            }
+        }
+        .padding(12)
+        .frame(width: 340)
+        .onAppear { writing = true }
+        .task {
+            // The page's title, as soon as the app has found it out.
+            for _ in 0..<24 {
+                known = title()
+                if known != nil { return }
+                try? await Task.sleep(for: .milliseconds(300))
+            }
+        }
     }
 }
 #endif

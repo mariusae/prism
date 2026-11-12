@@ -445,6 +445,10 @@ struct CardView: View {
                         })
                     },
                     linkPreview: { link in LinkCard.shows(link, in: store) ? AnyView(LinkCard(store: store, link: link, draft: draft)) : nil },
+                    webTitle: { address in
+                        WebCards.shared.look(address)
+                        return WebCards.shared.found[address]?.title
+                    },
                     lead: isFocus ? nil : editorLead, onLead: { leadClicked() },
                     offers: { found in store.linkOffers(found.typed, this: card.path) },
                     offersTitle: !isFocus && isUntitled, onTitle: { withAnimation(.snappy(duration: 0.22)) { _ = draft.titleByFirstLine() } },
@@ -603,6 +607,14 @@ struct CardView: View {
         }
         #endif
         Divider()
+        Button("Move to Top", systemImage: "arrow.up.to.line") {
+            withAnimation(.snappy(duration: 0.28)) { river.move(card.id, toPlace: 0) }
+            store.rememberRivers()
+        }
+        Button("Move to Bottom", systemImage: "arrow.down.to.line") {
+            withAnimation(.snappy(duration: 0.28)) { river.move(card.id, toPlace: river.cards.count - 1) }
+            store.rememberRivers()
+        }
         Button("Close Others", systemImage: "rectangle.stack.badge.minus") {
             withAnimation(.snappy(duration: 0.28)) { store.closeAll(in: river, but: card.id) }
         }

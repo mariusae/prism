@@ -552,6 +552,16 @@ impl NoteEditor {
         })
     }
 
+    /// Puts rows written as Markdown — carried from another note —
+    /// before a row, at a depth: where `drop_depth`, asked with no
+    /// rows, says they would go. One change, undone as one. `nil` in a
+    /// note shown as text, and for Markdown with nothing in it.
+    pub fn insert_rows(&self, markdown: String, before: u32, depth: u32, selection_start: u32, selection_end: u32) -> Option<BodyEdit> {
+        self.changing(|session, offsets| {
+            session.insert_rows(&markdown, before as usize, depth as usize, offsets.to8(selection_start)..offsets.to8(selection_end.max(selection_start)))
+        })
+    }
+
     /// How deep rows carried would lie, put down before a row at a depth
     /// asked for: what `move_rows` would give them. `nil` where they
     /// cannot be put down: among the rows under one of them.

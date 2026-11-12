@@ -65,9 +65,12 @@ public struct WeftMacApp: App {
             CommandGroup(replacing: .newItem) {
                 Button("New Note") { newPage() }.keyboardShortcut("n")
                 Button("New To-Do") { newToDo() }.keyboardShortcut("n", modifiers: [.command, .shift])
+                Button("New Note from Pasteboard") { newFromPasteboard() }.keyboardShortcut("v", modifiers: [.command, .shift])
                 Button("New Tab") { store?.newRiver() }.keyboardShortcut("t")
                 Button("New Query River…") { store?.queryAsk = .new }.keyboardShortcut("t", modifiers: [.command, .option])
                 Button("Quick Open…") { actions.quickOpen += 1 }.keyboardShortcut("o")
+                Button("Find in River…") { actions.findInRiver += 1 }.keyboardShortcut("a", modifiers: [.command, .shift])
+                Button(store?.river.name == nil ? "Save River…" : "Rename River…") { actions.saveRiver += 1 }.keyboardShortcut("s")
                 Divider()
                 Button("Open Folder…") { choose() }.keyboardShortcut("o", modifiers: [.command, .shift])
                 Divider()
@@ -94,6 +97,7 @@ public struct WeftMacApp: App {
             CommandMenu("Story") {
                 Button("Today") { today() }.keyboardShortcut("d")
                 Button("Go to Date…") { actions.calendar += 1 }.keyboardShortcut("d", modifiers: [.command, .shift])
+                Button("River Overview") { actions.overview += 1 }.keyboardShortcut("e")
                 Button("Close All Cards") { closeAll() }.keyboardShortcut("w", modifiers: [.command, .shift])
                 Button("Reopen Closed Note") { withAnimation(.snappy(duration: 0.28)) { _ = store?.reopenClosed() } }.keyboardShortcut("t", modifiers: [.command, .shift])
                 Divider()
@@ -152,6 +156,24 @@ public struct WeftMacApp: App {
 
     private func newPage() {
         withAnimation(.snappy(duration: 0.28)) { _ = store?.newNote() }
+    }
+
+    /// A new note of what was copied: its words, as they are — or its picture, kept in the graph.
+    private func newFromPasteboard() {
+        guard let store else { return }
+        let board = NSPasteboard.general
+        var content: String?
+        let files = (board.readObjects(forClasses: [NSURL.self], options: [.urlReadingFileURLsOnly: true]) as? [URL]) ?? []
+        if let words = board.string(forType: .string), files.isEmpty, !words.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            // One line is a row; more are taken as they are written.
+            let trimmed = words.trimmingCharacters(in: .newlines)
+            content = trimmed.contains("\n") || trimmed.hasPrefix("- ") || trimmed.hasPrefix("#") ? trimmed + "\n" : "- \(trimmed)\n"
+        } else if let picture = NSImage(pasteboard: board), let tiff = picture.tiffRepresentation, let png = NSBitmapImageRep(data: tiff)?.representation(using: .png, properties: [:]),
+                  let path = store.savePicture(data: png, fileExtension: "png") {
+            content = "![](\(path))\n"
+        }
+        guard let content else { return NSSound.beep() }
+        withAnimation(.snappy(duration: 0.28)) { _ = store.newNote(written: content) }
     }
 
     /// A new note that is a thing to do: its ring before its first words.
@@ -265,6 +287,11 @@ enum RiverKeys {
                 withAnimation(.snappy(duration: 0.28)) { store.close(card, in: river) }
                 return true
             }
+        }
+        // ⌘F: finds among the river's own notes — by name, and by what they say.
+        if pressed == .command, event.charactersIgnoringModifiers == "f", isRiverWindow(window) {
+            actions.findInRiver += 1
+            return true
         }
         // ⌘1 to ⌘8: the river at that place among the tabs; ⌘9, the last —
         // but in a note being written, ⌘9 is the outline's, to fold a row.

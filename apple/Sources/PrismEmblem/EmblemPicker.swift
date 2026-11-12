@@ -8,6 +8,24 @@ public struct EmblemPicker: View {
     @Binding var color: String?
     var kindSymbol: String?
     @State private var search = ""
+    /// The icons chosen lately on this device, each with the colour it was
+    /// chosen in, the last first: `star|blue,book|,…`.
+    @AppStorage("prism.emblem.recent") private var recentlyChosen = ""
+
+    private var recent: [(icon: String, color: String?)] {
+        recentlyChosen.split(separator: ",").compactMap { entry in
+            let parts = entry.split(separator: "|", omittingEmptySubsequences: false)
+            guard let name = parts.first, !name.isEmpty else { return nil }
+            return (String(name), parts.count > 1 && !parts[1].isEmpty ? String(parts[1]) : nil)
+        }
+    }
+
+    /// Remembers what was just chosen: an icon, in the colour it now has.
+    private func remember() {
+        guard let icon, !icon.isEmpty else { return }
+        let kept = recent.filter { $0.icon != icon }.prefix(7)
+        recentlyChosen = ([(icon, color)] + kept).map { "\($0.icon)|\($0.color ?? "")" }.joined(separator: ",")
+    }
 
     public init(title: String, icon: Binding<String?>, color: Binding<String?>, kindSymbol: String? = nil) {
         self.title = title
@@ -40,6 +58,23 @@ public struct EmblemPicker: View {
             }
             .padding(7)
             .background(RoundedRectangle(cornerRadius: 8).fill(.quaternary.opacity(0.5)))
+            // What was chosen lately, icon and colour together: one click takes both.
+            if search.isEmpty, !recent.isEmpty {
+                VStack(alignment: .leading, spacing: 5) {
+                    Text("RECENTLY USED").font(.system(size: 9.5, weight: .semibold)).foregroundStyle(.secondary)
+                    HStack(spacing: 6) {
+                        ForEach(Array(recent.enumerated()), id: \.offset) { _, used in
+                            cell(isChosen: icon == used.icon && color == used.color) {
+                                color = used.color
+                                icon = used.icon
+                            } label: {
+                                Image(systemName: used.icon).font(.system(size: 15, weight: .medium)).foregroundStyle(EmblemColor(named: used.color)?.color ?? .primary)
+                            }
+                            .help(used.color.map { "\(used.icon), \($0)" } ?? used.icon)
+                        }
+                    }
+                }
+            }
             ScrollView {
                 LazyVGrid(columns: Array(repeating: GridItem(.fixed(32), spacing: 6), count: 8), spacing: 6) {
                     // No icon: the letter of its name.
@@ -62,6 +97,8 @@ public struct EmblemPicker: View {
         }
         .padding(14)
         .frame(width: 8 * 32 + 7 * 6 + 4 + 28)
+        .onChange(of: icon) { _, _ in remember() }
+        .onChange(of: color) { _, _ in remember() }
     }
 
     private func swatch(_ value: EmblemColor?) -> some View {

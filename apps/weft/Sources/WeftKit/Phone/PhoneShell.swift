@@ -18,6 +18,8 @@ final class PhoneState {
 
     var start: Start?
     var showsOverview = false
+    /// Whether the river shown is seen whole: its cards as tiles.
+    var showsCards = false
     var showsSettings = false
     /// The bar drawn small, while the river is read down.
     var tucked = false
@@ -66,6 +68,9 @@ struct PhoneShell: View {
         .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardWillHideNotification)) { _ in state.keyboardUp = false }
         .fullScreenCover(item: $state.start) { mode in StartPage(store: store, mode: mode, state: state) }
         .fullScreenCover(isPresented: $state.showsOverview) { RiverOverview(store: store, state: state) }
+        .fullScreenCover(isPresented: $state.showsCards) { CardsOverview(store: store, river: store.river, isShown: $state.showsCards) }
+        // Pinched together, the river is seen whole.
+        .simultaneousGesture(MagnifyGesture().onEnded { if $0.magnification < 0.75, !store.river.all.isEmpty { state.showsCards = true } })
         .sheet(isPresented: $state.showsSettings) { PhoneSettings(store: store) }
         // A note's pages read, over the river.
         .sheet(isPresented: Binding(get: { store.river.reading != nil }, set: { if !$0 { store.river.reading = nil } })) {
@@ -589,6 +594,7 @@ struct PhoneBar: View {
                     }
                 }
             }
+            if !river.all.isEmpty { Button("Overview", systemImage: "square.grid.2x2") { state.showsCards = true } }
             if store.rivers.count > 1 { Button("All Rivers", systemImage: "square.on.square") { state.showsOverview = true } }
             Section {
                 Button("Today", systemImage: "calendar") { withAnimation(.snappy(duration: 0.28)) { store.open(name: Days.name(Date()), after: river.selected) } }

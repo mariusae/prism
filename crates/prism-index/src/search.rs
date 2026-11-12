@@ -52,12 +52,15 @@ impl Index for Search {
 impl Search {
     /// The pages with every word typed, best first. The last word matches
     /// as a prefix, so results come as it is typed. A title match counts
-    /// for more than one in the body.
+    /// for more than one in the body, and a page changed lately for more
+    /// than one long left alone: how well the words match (BM25, a title
+    /// eight times the body) is raised by up to half for a page changed
+    /// just now, and by less the longer ago it was changed.
     pub fn search(db: &Connection, typed: &str, limit: usize) -> Result<Vec<Hit>> {
         let Some(query) = fts_query(typed) else { return Ok(Vec::new()) };
         let mut statement = db.prepare(&format!(
             "SELECT path, title, snippet(search, 2, '[', ']', '…', 12) FROM search
-                 WHERE search MATCH ?1 AND {} ORDER BY bm25(search, 0.0, 8.0, 1.0), path LIMIT ?2",
+                 WHERE search MATCH ?1 AND {} ORDER BY bm25(search, 0.0, 8.0, 1.0) * {RECENCY}, path LIMIT ?2",
             crate::seen("search.path")
         ))?;
         let hits = statement
@@ -66,6 +69,12 @@ impl Search {
         Ok(hits)
     }
 }
+
+/// How much more a find counts for its page having been changed lately:
+/// 1.5 for one changed now, 1.25 a month ago, towards 1 with age. A page
+/// with no time known counts as it is.
+const RECENCY: &str = "(1.0 + 0.5 / (1.0 + max(0, CAST(strftime('%s', 'now') AS INTEGER)
+     - coalesce((SELECT modified FROM prism_dates WHERE prism_dates.path = search.path), 0)) / 2592000.0))";
 
 impl Search {
     /// Every page with every word typed, in no order: for a query's

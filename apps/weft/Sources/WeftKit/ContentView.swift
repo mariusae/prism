@@ -13,6 +13,12 @@ public final class WindowActions {
     public var sidebar = 0
     /// Moved to bring the calendar up.
     public var calendar = 0
+    /// Moved to show the river whole, its cards as tiles — or, shown so, the river again.
+    public var overview = 0
+    /// Moved to name the river shown — which saves it.
+    public var saveRiver = 0
+    /// Moved to find among the river's own notes: by name, or in what they say.
+    public var findInRiver = 0
     public init() {}
 }
 
@@ -46,6 +52,10 @@ public struct ContentView: View {
     @State private var showsQuickOpen = false
     @State private var showsCalendar = false
     @State private var seed = ""
+    /// Whether the river is shown whole: its cards as tiles.
+    @State private var showsOverview = false
+    /// Whether what is being found is found among the river's own notes only.
+    @State private var findsInRiver = false
     @State private var columns: NavigationSplitViewVisibility = .detailOnly
     @State private var searchFocus = 0
     /// How wide the river's side of the window is: what the bar is fitted to.
@@ -61,14 +71,24 @@ public struct ContentView: View {
             Sidebar(store: store, searchFocus: $searchFocus)
                 .navigationSplitViewColumnWidth(min: 220, ideal: 260, max: 400)
         } detail: {
-            RiverView(store: store, river: store.river, onQuickOpen: { show("") })
+            RiverView(store: store, river: store.river, onQuickOpen: { show("") }, onOverview: { showsOverview = true })
                 .id(store.river.id)
+                // Pinched together, the river is seen whole; the river itself stays under it, where it was.
+                .simultaneousGesture(MagnifyGesture().onEnded { if $0.magnification < 0.8 { showsOverview = true } })
+                .overlay {
+                    if showsOverview {
+                        CardsOverview(store: store, river: store.river, isShown: $showsOverview)
+                            .simultaneousGesture(MagnifyGesture().onEnded { if $0.magnification > 1.25 { showsOverview = false } })
+                            .transition(.opacity.combined(with: .scale(scale: 1.04)))
+                    }
+                }
+                .animation(.easeOut(duration: 0.16), value: showsOverview)
                 .onGeometryChange(for: CGFloat.self) { $0.size.width.rounded() } action: { detailWidth = $0 }
                 .overlay(alignment: .top) {
                     if showsQuickOpen {
                         ZStack(alignment: .top) {
                             Color.black.opacity(0.06).ignoresSafeArea().onTapGesture { showsQuickOpen = false }
-                            QuickOpen(store: store, isShown: $showsQuickOpen, seed: seed).padding(.top, 6)
+                            QuickOpen(store: store, isShown: $showsQuickOpen, seed: seed, inRiver: findsInRiver).padding(.top, 6)
                         }
                         .transition(.opacity.combined(with: .scale(scale: 0.98, anchor: .top)))
                     }
@@ -79,7 +99,7 @@ public struct ContentView: View {
                 .toolbarBackgroundVisibility(.hidden, for: .windowToolbar)
                 .background(ClearTitleBar())
                 .toolbar {
-                    ToolbarItem(placement: .principal) { RiverBar(store: store, room: min(max(detailWidth - 330, 220), 860), onFind: { show("") }) }
+                    ToolbarItem(placement: .principal) { RiverBar(store: store, room: min(max(detailWidth - 330, 220), 860), saves: actions.saveRiver, onFind: { show("") }) }
                     ToolbarItemGroup(placement: .primaryAction) {
                         if !store.conflicted.isEmpty {
                             Button {
@@ -130,12 +150,22 @@ public struct ContentView: View {
             actions.typed = ""
         }
         .onChange(of: actions.calendar) { _, _ in showsCalendar = true }
+        .onChange(of: actions.overview) { _, _ in showsOverview.toggle() }
+        .onChange(of: store.currentRiver) { _, _ in showsOverview = false }
+        .onChange(of: actions.findInRiver) { _, _ in
+            if showsQuickOpen, findsInRiver { return showsQuickOpen = false }
+            seed = actions.typed
+            actions.typed = ""
+            findsInRiver = true
+            showsQuickOpen = true
+        }
         .onChange(of: actions.sidebar) { _, _ in
             withAnimation(.snappy(duration: 0.2)) { columns = columns == .detailOnly ? .all : .detailOnly }
         }
     }
 
     private func show(_ typed: String) {
+        findsInRiver = false
         seed = typed
         showsQuickOpen = true
     }
@@ -155,6 +185,8 @@ struct RiverBar: View {
     let store: GraphStore
     /// How wide the bar may be.
     var room: CGFloat
+    /// Moved to name the river shown, which saves it.
+    var saves = 0
     var onFind: () -> Void
     @State private var hovered: UUID?
     /// The river whose name, icon and colour are being chosen.
@@ -200,6 +232,8 @@ struct RiverBar: View {
                         Image(systemName: "magnifyingglass").font(.system(size: 11, weight: .semibold)).foregroundStyle(Color.inkSecondary)
                     } else if shrunk {
                         EmblemView(Emblem(title: store.title(of: river), icon: river.icon, color: river.color), size: 20, quiet: Color.inkSecondary)
+                            // A river not saved is only passing through: its letter stands fainter.
+                            .opacity(river.name == nil ? 0.5 : 1)
                     } else if river.icon != nil || river.color != nil {
                         // What it was given — and, clicked, where that is chosen.
                         Button { styling = river.id } label: {
@@ -209,9 +243,12 @@ struct RiverBar: View {
                         .help("Name this river, and choose its icon and colour")
                     }
                     if !shrunk {
+                        // A saved river is called by its name, upright; one not saved — called,
+                        // for now, by what is first in it — is in italics, as a thing in passing is.
                         Text(store.title(of: river))
                             .font(.system(size: 12.5, weight: current ? .semibold : .regular))
-                            .foregroundStyle(current ? Color.inkText : Color.inkSecondary)
+                            .italic(river.name == nil && !alone)
+                            .foregroundStyle(current ? Color.inkText : (river.name == nil ? Color.inkFaint : Color.inkSecondary))
                             .lineLimit(1)
                     }
                 }
@@ -242,6 +279,15 @@ struct RiverBar: View {
                     if current { onFind() } else { withAnimation(.snappy(duration: 0.2)) { store.currentRiver = index } }
                 }
                 .onHover { hovered = $0 ? river.id : (hovered == river.id ? nil : hovered) }
+                // A card carried here — from the river, or from its overview — is sent to this river.
+                .onDrop(of: [CardMove.type], isTargeted: nil) { providers in
+                    guard !current, river.query == nil, let provider = providers.first else { return false }
+                    _ = provider.loadDataRepresentation(forTypeIdentifier: CardMove.type.identifier) { data, _ in
+                        guard let data, let id = UUID(uuidString: String(decoding: data, as: UTF8.self)) else { return }
+                        Task { @MainActor in withAnimation(.snappy(duration: 0.24)) { store.send([id], from: store.river, to: river) } }
+                    }
+                    return true
+                }
                 .contextMenu {
                     Button(river.name == nil ? "Name and Save…" : "Rename…", systemImage: "character.cursor.ibeam") { styling = river.id }
                     Button("Icon and Colour…", systemImage: "paintpalette") { styling = river.id }
@@ -253,7 +299,7 @@ struct RiverBar: View {
                 .popover(isPresented: Binding(get: { styling == river.id }, set: { if !$0 { styling = nil } }), arrowEdge: .bottom) {
                     RiverLook(store: store, river: river)
                 }
-                .help(current ? "Find a note, or name a new one (⌘O) — or just start typing" : store.title(of: river))
+                .help(current ? "Find a note, or name a new one (⌘O) — or just start typing" : (river.name == nil ? "\(store.title(of: river)) — not saved (⌘S names and saves it)" : store.title(of: river)))
             }
             Button { withAnimation(.snappy(duration: 0.2)) { store.newRiver() } } label: {
                 Image(systemName: "plus").font(.system(size: 10.5, weight: .semibold)).frame(width: 24, height: 24).contentShape(Rectangle())
@@ -269,6 +315,7 @@ struct RiverBar: View {
         .animation(.snappy(duration: 0.2), value: store.currentRiver)
         .animation(.snappy(duration: 0.2), value: store.rivers.count)
         .animation(.easeOut(duration: 0.12), value: CommandKey.shared.isHeld)
+        .onChange(of: saves) { _, _ in styling = store.river.id }
     }
 }
 

@@ -423,6 +423,19 @@ final class BodyLayoutManager: NSLayoutManager {
     var lines: [BodyLine] = []
     /// The rows chosen whole, as the characters they cover: marked across the note's width.
     var chosen: ClosedRange<Int>?
+    /// Where rows being carried would be put down: a line across the
+    /// note at a height, from how far in they would lie.
+    var dropLine: (y: CGFloat, x: CGFloat)?
+
+    /// The row whose mark — a bullet, a number, a ring — is at a point:
+    /// its place among the lines. Not a task's box, which is ticked.
+    func mark(at point: CGPoint) -> Int? {
+        for (index, row) in lines.enumerated() {
+            guard case .item(_, let done, _) = row.kind, done == nil, let line = firstLine(of: row) else { continue }
+            if markBox(of: row, on: line).contains(point) { return index }
+        }
+        return nil
+    }
     /// What an outline's timelines draw at its rows.
     var marks: [BodyTimeMark] = []
     /// The rows being written in: a time block's label is not drawn over
@@ -543,6 +556,12 @@ final class BodyLayoutManager: NSLayoutManager {
                 Self.roundedPath(band.insetBy(dx: -4, dy: -1).offsetBy(dx: origin.x, dy: origin.y), radius: 6).fill()
             }
         }
+        if let dropLine {
+            theme.accent.setFill()
+            let line = CGRect(x: dropLine.x + origin.x, y: dropLine.y + origin.y - 1, width: max(container.size.width - dropLine.x, 20), height: 2)
+            Self.roundedPath(line, radius: 1).fill()
+            Self.ovalPath(CGRect(x: line.minX - 3, y: line.midY - 3, width: 6, height: 6)).fill()
+        }
         drawTimeMarks(at: origin, in: characters)
         for (index, line) in lines.enumerated() where line.isFolded && Int(line.start) <= NSMaxRange(characters) && Int(line.end) >= characters.location {
             if let pill = foldPill(ofRow: index) { drawFoldPill(in: pill.offsetBy(dx: origin.x, dy: origin.y)) }
@@ -588,7 +607,10 @@ final class BodyLayoutManager: NSLayoutManager {
                 guard rect.width > 2 else { return }
                 let fragment = self.lineFragmentRect(forGlyphAt: self.glyphIndex(for: CGPoint(x: rect.midX, y: rect.midY), in: container), effectiveRange: nil)
                 let baseline = fragment.minY + self.location(forGlyphAt: glyphs.location).y
-                let lead: CGFloat = first && pill.symbol != nil ? side + 6 : 0
+                // The icon's room is before the link — but for one that opens its line, whose room is
+                // its own first, hidden characters': there the pill begins where the line does.
+                let opens = range.location == 0 || (storage.string as NSString).character(at: range.location - 1) == 10
+                let lead: CGFloat = first && pill.symbol != nil && !opens ? side + 6 : 0
                 let box = CGRect(x: rect.minX - pad - lead, y: baseline - font.ascender.rounded(.up) - 2, width: rect.width + 2 * pad + lead, height: font.ascender.rounded(.up) + (-font.descender).rounded(.up) + 4)
                     .offsetBy(dx: origin.x, dy: origin.y)
                 pill.tint.withAlphaComponent(pill.isMissing ? 0.10 : 0.12).setFill()

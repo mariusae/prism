@@ -9,6 +9,8 @@ struct RiverView: View {
     let store: GraphStore
     let river: River
     var onQuickOpen: () -> Void
+    /// Asked to show the river whole.
+    var onOverview: () -> Void = {}
     /// Each card's height as it was last laid out, and the cards that
     /// show: what the ticks at the river's edge are drawn from.
     @State private var heights: [Card.ID: CGFloat] = [:]
@@ -19,8 +21,10 @@ struct RiverView: View {
     /// A card's size for its tick: its height, once it has been laid out;
     /// till then, a guess from how much its note holds.
     private func size(of card: Card) -> Double {
-        if let known = heights[card.id] { return Double(known) }
-        if card.folded { return 44 }
+        // A folded card is ticked as long as its note is, not as its one line:
+        // the ticks say what is in the river, however it is put away.
+        if card.folded, let open = store.cardHeights[card.spot] { return Double(open) + 70 }
+        if !card.folded, let known = heights[card.id] { return Double(known) }
         let file = (try? store.engine.absolutePath(path: card.path)) ?? ""
         let bytes = ((try? FileManager.default.attributesOfItem(atPath: file))?[.size] as? NSNumber)?.doubleValue ?? 400
         return 90 + bytes / 70 * 22
@@ -104,6 +108,7 @@ struct RiverView: View {
                     TickStrip(
                         sizes: cards.map { size(of: $0) },
                         lit: Set(cards.indices.filter { showing.contains(cards[$0].id) }),
+                        tints: cards.map { store.emblem(path: $0.path, title: $0.title).color?.color },
                         onPick: { index in
                             guard cards.indices.contains(index) else { return }
                             // Gone to at once, as Manifold goes: nothing slides.
@@ -115,7 +120,8 @@ struct RiverView: View {
                             withAnimation(.snappy(duration: 0.24)) { river.move(cards[from].id, toPlace: to) }
                             store.rememberRivers()
                         },
-                        preview: { index in cards.indices.contains(index) ? preview(of: cards[index]) : nil }
+                        preview: { index in cards.indices.contains(index) ? preview(of: cards[index]) : nil },
+                        onOverview: onOverview
                     )
                     .frame(width: TickStripView.lane)
                     .padding(.trailing, 6)

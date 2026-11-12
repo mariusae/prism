@@ -129,6 +129,15 @@ enum Snapshot {
             }
             done.wait()
         }
+        // WEFT_OVERVIEW: the river shown whole, its cards as tiles.
+        if environment["WEFT_OVERVIEW"] != nil { DispatchQueue.main.async { actions.overview += 1 } }
+        // WEFT_FIND_IN_RIVER="words": the river's own notes, looked through for them.
+        if let typed = environment["WEFT_FIND_IN_RIVER"] {
+            DispatchQueue.main.async {
+                actions.typed = typed == "1" ? "" : typed
+                actions.findInRiver += 1
+            }
+        }
         if let typed = environment["WEFT_QUICK_OPEN"] {
             DispatchQueue.main.async {
                 actions.typed = typed == "1" ? "" : typed
@@ -150,6 +159,16 @@ enum Snapshot {
                 for key in names("WEFT_KEYS") {
                     // "cmd+]", "cmd+shift+]": a key held with ⌘, as the keyboard sends it; else a command by its name.
                     let now = window.firstResponder as? NSTextView ?? view
+                    // "key:125": a key by its code, pressed as the keyboard presses it — 125 is ↓, 126 ↑.
+                    if key.hasPrefix("key:"), let code = UInt16(key.dropFirst(4)) {
+                        for kind in [NSEvent.EventType.keyDown, .keyUp] {
+                            if let event = NSEvent.keyEvent(with: kind, location: .zero, modifierFlags: [.numericPad, .function], timestamp: 0, windowNumber: window.windowNumber, context: nil,
+                                                            characters: code == 125 ? "\u{F701}" : "\u{F700}", charactersIgnoringModifiers: code == 125 ? "\u{F701}" : "\u{F700}", isARepeat: false, keyCode: code) {
+                                window.sendEvent(event)
+                            }
+                        }
+                        continue
+                    }
                     guard key.hasPrefix("cmd+") else {
                         now.doCommand(by: Selector(key))
                         continue
@@ -161,6 +180,30 @@ enum Snapshot {
                         characters: character, charactersIgnoringModifiers: character, isARepeat: false, keyCode: 0
                     ) {
                         _ = now.performKeyEquivalent(with: event)
+                    }
+                }
+            }
+            func editors(in view: NSView) -> [NoteTextView] {
+                (view as? NoteTextView).map { [$0] } ?? view.subviews.flatMap(editors)
+            }
+            let notes = editors(in: window.contentView ?? NSView()).sorted { $0.convert(NSPoint.zero, to: nil).y > $1.convert(NSPoint.zero, to: nil).y }
+            // WEFT_CARRY="0:1>1:0:0": row 1 of the first note shown, put before row 0 of the second, at depth 0.
+            if let carry = environment["WEFT_CARRY"] {
+                let parts = carry.split(separator: ">").map { $0.split(separator: ":").compactMap { Int($0) } }
+                if parts.count == 2, parts[0].count == 2, parts[1].count == 3, notes.indices.contains(parts[0][0]), notes.indices.contains(parts[1][0]) {
+                    notes[parts[1][0]].put(rows: [parts[0][1]], of: notes[parts[0][0]], before: parts[1][1], depth: parts[1][2])
+                }
+            }
+            // WEFT_CLICK="0:12,34": a click in the first note shown, at a point of its own.
+            if let click = environment["WEFT_CLICK"] {
+                let parts = click.split(separator: ":")
+                let at = (parts.last ?? "").split(separator: ",").compactMap { Double($0) }
+                if parts.count == 2, at.count == 2, let index = Int(parts[0]), notes.indices.contains(index) {
+                    let place = notes[index].convert(NSPoint(x: at[0], y: at[1]), to: nil)
+                    for kind in [NSEvent.EventType.leftMouseDown, .leftMouseUp] {
+                        if let event = NSEvent.mouseEvent(with: kind, location: place, modifierFlags: [], timestamp: 0, windowNumber: window.windowNumber, context: nil, eventNumber: 0, clickCount: 1, pressure: 1) {
+                            if kind == .leftMouseDown { notes[index].mouseDown(with: event) } else { notes[index].mouseUp(with: event) }
+                        }
                     }
                 }
             }
