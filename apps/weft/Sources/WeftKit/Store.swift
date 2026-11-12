@@ -1397,10 +1397,11 @@ public final class River: Identifiable {
 
     /// Shows a card, and chooses it. Where the river was — the card the
     /// jump was made `from`, else the one chosen — is kept to go back to.
-    public func reveal(_ id: Card.ID, from: Card.ID? = nil) {
+    public func reveal(_ id: Card.ID, from: Card.ID? = nil, unfolding: Bool = true) {
         leave(for: id, from: from)
-        // Gone to on purpose: opened out, if it was folded.
-        if card(id)?.folded == true { toggleFold(id) }
+        // Gone to on purpose: opened out, if it was folded — but not when only
+        // passed over, stepping through the river card by card.
+        if unfolding, card(id)?.folded == true { toggleFold(id) }
         selected = id
         scrollTarget = (id, (scrollTarget?.tick ?? 0) + 1)
     }
@@ -1466,7 +1467,8 @@ public final class River: Identifiable {
         guard !cards.isEmpty else { return }
         let index = selected.flatMap { id in cards.firstIndex(where: { $0.id == id }) } ?? (step > 0 ? -1 : cards.count)
         let to = min(max(index + step, 0), cards.count - 1)
-        reveal(cards[to].id)
+        // Stepped to, with the arrows: chosen and shown, and left folded if it is.
+        reveal(cards[to].id, unfolding: false)
     }
 }
 

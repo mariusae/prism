@@ -89,9 +89,27 @@ struct CardTile: View {
             if !model.trail.isEmpty {
                 Text(model.trail.joined(separator: " › ")).font(.system(size: 9.5)).foregroundStyle(Color.inkFaint).lineLimit(1)
             }
-            HStack(alignment: .firstTextBaseline, spacing: 5) {
-                if model.emblem.isShown { EmblemView(model.emblem, size: 12, style: .plain, quiet: Color.inkSecondary) }
-                Text(model.emblem.caption(model.label)).font(.system(size: 12.5, weight: .semibold)).foregroundStyle(Color.inkText).lineLimit(2)
+            HStack(alignment: card.focus == nil && Leaf(path: card.path) != nil ? .center : .firstTextBaseline, spacing: card.focus == nil && Leaf(path: card.path) != nil ? 8 : 5) {
+                if card.focus == nil, let leaf = Leaf(path: card.path) {
+                    // A day's page, or a week's, is a leaf of a calendar: told from the notes at a glance.
+                    VStack(spacing: 0) {
+                        Text(leaf.over).font(.system(size: 7.5, weight: .bold)).kerning(0.4).foregroundStyle(.white)
+                            .frame(maxWidth: .infinity).frame(height: 11).background(tint ?? Color.inkAccent)
+                        Text(leaf.number).font(.system(size: 14, weight: .semibold, design: .rounded)).foregroundStyle(Color.inkText)
+                            .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    }
+                    .frame(width: 30, height: 31)
+                    .background(Color.inkPaper)
+                    .clipShape(RoundedRectangle(cornerRadius: 5, style: .continuous))
+                    .overlay(RoundedRectangle(cornerRadius: 5, style: .continuous).strokeBorder(Color.inkRule, lineWidth: 1))
+                    VStack(alignment: .leading, spacing: 1) {
+                        Text(leaf.title).font(.system(size: 12.5, weight: .semibold)).foregroundStyle(Color.inkText).lineLimit(1)
+                        Text(leaf.detail).font(.system(size: 10)).foregroundStyle(Color.inkFaint).lineLimit(1)
+                    }
+                } else {
+                    if model.emblem.isShown { EmblemView(model.emblem, size: 12, style: .plain, quiet: Color.inkSecondary) }
+                    Text(model.emblem.caption(model.label)).font(.system(size: 12.5, weight: .semibold)).foregroundStyle(Color.inkText).lineLimit(2)
+                }
                 Spacer(minLength: 0)
                 // Put away in the river: said, small.
                 if card.folded { Image(systemName: "chevron.up.chevron.down").font(.system(size: 8, weight: .semibold)).foregroundStyle(Color.inkFaint) }
@@ -151,6 +169,39 @@ struct CardTile: View {
         .background(RoundedRectangle(cornerRadius: 10, style: .continuous).fill(Color.inkAccent.opacity(isChosen ? 0.10 : 0)))
         .shadow(color: .black.opacity(0.05), radius: 5, y: 2)
         .contentShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+    }
+}
+
+/// A day's page, or a week's, as a leaf of a calendar says it.
+struct Leaf {
+    /// What stands over the number: the month, or "WEEK".
+    var over: String
+    var number: String
+    /// The day of the week — or the week, said.
+    var title: String
+    var detail: String
+
+    init?(path: String) {
+        let name = String(path.split(separator: "/").last ?? "").replacingOccurrences(of: ".md", with: "")
+        let parts = name.split(separator: "-")
+        if path.hasPrefix("daily/"), parts.count == 3, let year = Int(parts[0]), let month = Int(parts[1]), let day = Int(parts[2]),
+           let date = Calendar(identifier: .gregorian).date(from: DateComponents(year: year, month: month, day: day)) {
+            let format = DateFormatter()
+            format.calendar = Calendar(identifier: .gregorian)
+            format.dateFormat = "MMM"
+            over = format.string(from: date).uppercased()
+            number = "\(day)"
+            format.dateFormat = "EEEE"
+            title = format.string(from: date)
+            detail = Days.shown(name)
+        } else if path.hasPrefix("weekly/"), parts.count == 2, parts[1].hasPrefix("W"), let week = Int(parts[1].dropFirst()) {
+            over = "WEEK"
+            number = "\(week)"
+            title = "Week \(week)"
+            detail = String(parts[0])
+        } else {
+            return nil
+        }
     }
 }
 

@@ -145,8 +145,12 @@ final class TickStripView: NSView {
     /// The colour each card's note was given, by its place; none for a note given none.
     private var tints: [NSColor?] = []
 
-    func set(sizes fresh: [Double], lit: Set<Int>, tints colours: [NSColor?] = []) {
-        guard fresh != sizes || lit != litCards || colours != tints else { return }
+    /// The cards that are days' or weeks' pages, by their place: each ticked with a dot before it.
+    private var days: Set<Int> = []
+
+    func set(sizes fresh: [Double], lit: Set<Int>, tints colours: [NSColor?] = [], days dated: Set<Int> = []) {
+        guard fresh != sizes || lit != litCards || colours != tints || dated != days else { return }
+        days = dated
         sizes = fresh
         litCards = lit
         tints = colours
@@ -256,6 +260,21 @@ final class TickStripView: NSView {
                 }
                 let base = hovered == t.index || isCarried ? text : (t.lit ? text : tertiary)
                 l.backgroundColor = (base.blended(withFraction: near * 0.7, of: text) ?? base).cgColor
+            }
+            // A day's page, or a week's, has a dot before its tick: the days are told from the notes at a glance.
+            let dot = l.sublayers?.first
+            if days.contains(t.index) {
+                let dot = dot ?? {
+                    let dot = CALayer()
+                    l.addSublayer(dot)
+                    return dot
+                }()
+                let side: CGFloat = 4
+                dot.frame = NSRect(x: -side - 3, y: h / 2 - side / 2, width: side, height: side)
+                dot.cornerRadius = side / 2
+                dot.backgroundColor = l.backgroundColor
+            } else {
+                dot?.removeFromSuperlayer()
             }
         }
         drawChevrons()
@@ -517,6 +536,8 @@ struct TickStrip: NSViewRepresentable {
     var lit: Set<Int>
     /// The colour each card's note was given, if it was given one.
     var tints: [Color?] = []
+    /// The cards that are days' or weeks' pages, by their place.
+    var days: Set<Int> = []
     var onPick: (Int) -> Void
     var onMove: (Int, Int) -> Void = { _, _ in }
     var preview: (Int) -> TickPreview?
@@ -537,7 +558,7 @@ struct TickStrip: NSViewRepresentable {
         view.onMove = onMove
         view.preview = preview
         view.onOverview = onOverview
-        view.set(sizes: sizes, lit: lit, tints: tints.map { $0.map { NSColor($0) } })
+        view.set(sizes: sizes, lit: lit, tints: tints.map { $0.map { NSColor($0) } }, days: days)
     }
 }
 #endif

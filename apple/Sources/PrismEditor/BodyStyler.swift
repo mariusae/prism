@@ -602,10 +602,19 @@ final class BodyLayoutManager: NSLayoutManager {
             let pad: CGFloat = pill.symbol == nil ? 3 : 1
             let side = (size * 0.72).rounded()
             var first = true
-            enumerateEnclosingRects(forGlyphRange: glyphs, withinSelectedGlyphRange: NSRange(location: NSNotFound, length: 0), in: container) { rect, _ in
+            enumerateEnclosingRects(forGlyphRange: glyphs, withinSelectedGlyphRange: NSRange(location: NSNotFound, length: 0), in: container) { whole, _ in
+                var rect = whole
                 // What of a link's hidden name fell onto another line is nothing to draw around.
                 guard rect.width > 2 else { return }
-                let fragment = self.lineFragmentRect(forGlyphAt: self.glyphIndex(for: CGPoint(x: rect.midX, y: rect.midY), in: container), effectiveRange: nil)
+                let glyph = self.glyphIndex(for: CGPoint(x: rect.midX, y: rect.midY), in: container)
+                let fragment = self.lineFragmentRect(forGlyphAt: glyph, effectiveRange: nil)
+                // Where a link runs on to another line, its pill is behind its words there and
+                // no more: not out into the margin the line is set in from, nor on to the edge.
+                let used = self.lineFragmentUsedRect(forGlyphAt: glyph, effectiveRange: nil)
+                let (left, right) = (max(rect.minX, used.minX), min(rect.maxX, used.maxX))
+                guard right - left > 2 else { return }
+                rect.origin.x = left
+                rect.size.width = right - left
                 let baseline = fragment.minY + self.location(forGlyphAt: glyphs.location).y
                 // The icon's room is before the link — but for one that opens its line, whose room is
                 // its own first, hidden characters': there the pill begins where the line does.

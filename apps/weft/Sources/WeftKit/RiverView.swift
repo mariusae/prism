@@ -109,6 +109,7 @@ struct RiverView: View {
                         sizes: cards.map { size(of: $0) },
                         lit: Set(cards.indices.filter { showing.contains(cards[$0].id) }),
                         tints: cards.map { store.emblem(path: $0.path, title: $0.title).color?.color },
+                        days: Set(cards.indices.filter { cards[$0].path.hasPrefix("daily/") || cards[$0].path.hasPrefix("weekly/") }),
                         onPick: { index in
                             guard cards.indices.contains(index) else { return }
                             // Gone to at once, as Manifold goes: nothing slides.
