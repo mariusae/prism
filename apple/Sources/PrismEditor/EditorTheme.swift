@@ -4,11 +4,13 @@ import SwiftUI
 #if os(macOS)
 import AppKit
 public typealias EditorColor = NSColor
+typealias EditorPlatformView = NSView
 public typealias EditorFont = NSFont
 public typealias EditorFontDescriptor = NSFontDescriptor
 #else
 import UIKit
 public typealias EditorColor = UIColor
+typealias EditorPlatformView = UIView
 public typealias EditorFont = UIFont
 public typealias EditorFontDescriptor = UIFontDescriptor
 #endif

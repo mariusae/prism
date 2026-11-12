@@ -17,6 +17,7 @@
 use prism_github::http as wire;
 use prism_relay::apns::{self, Device};
 use prism_relay::relay::{self, Message, Reply, Route, Told, WebhookAction, PING, PONG};
+use prism_relay::scribe;
 use std::cell::RefCell;
 use std::collections::BTreeMap;
 use worker::wasm_bindgen::JsValue;
@@ -37,6 +38,7 @@ async fn fetch(mut request: Request, env: Env, _ctx: Context) -> Result<Response
         Route::Register => devices(&mut request, &env, false).await,
         Route::Unregister => devices(&mut request, &env, true).await,
         Route::Events => events(request, &env).await,
+        Route::ScribeToken => scribe_token(&request, &env).await,
         Route::Root => Ok(Err(Reply::new(200, "prism-relay\n"))),
         Route::NotFound => Ok(Err(Reply::new(404, "Not found\n"))),
     };
@@ -161,6 +163,33 @@ async fn events(request: Request, env: &Env) -> Answer {
     let token = check!(relay::bearer(authorization.as_deref()));
     let id = check!(repository_id(token, &repository).await?);
     Ok(Ok(hub(env, id)?.fetch_with_request(request).await?))
+}
+
+// --- Dictation ---------------------------------------------------------------
+
+/// A token to dictate with, for a device whose GitHub user may: asked of
+/// ElevenLabs with the key kept here. Who a token is, is remembered a few
+/// minutes, under a hash of it.
+async fn scribe_token(request: &Request, env: &Env) -> Answer {
+    let Some(key) = env.secret("ELEVENLABS_API_KEY").ok().map(|s| s.to_string()).filter(|s| !s.is_empty()) else {
+        return Ok(Err(scribe::no_key()));
+    };
+    let allowed = env.var("SCRIBE_USERS").map(|v| v.to_string()).unwrap_or_default();
+    let authorization = header(request, "Authorization");
+    let token = check!(relay::bearer(authorization.as_deref()));
+    let cache = Cache::default();
+    let remembered = format!("https://access.cache/{}", scribe::who_cache_key(token));
+    let known = match cache.get(remembered.as_str(), false).await? {
+        Some(mut cached) => Some(cached.text().await?).filter(|login| scribe::may_dictate(login, &allowed)),
+        None => None,
+    };
+    if known.is_none() {
+        let login = check!(scribe::who(&send(scribe::who_request(token)).await?, &allowed));
+        let keep = Response::builder().with_header("Cache-Control", &format!("max-age={}", relay::ACCESS_CACHE_SECONDS))?.fixed(login.into_bytes());
+        cache.put(remembered.as_str(), keep).await?;
+    }
+    let given = check!(scribe::token(&send(scribe::token_request(&key)).await?));
+    Ok(Ok(Response::from_json(&given)?))
 }
 
 // --- The hub -----------------------------------------------------------------

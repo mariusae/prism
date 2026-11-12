@@ -154,6 +154,7 @@ public struct NoteEditorView: NSViewRepresentable {
         view.delegate = context.coordinator
         view.coordinator = context.coordinator
         context.coordinator.view = view
+        view.enlist()
         _ = context.coordinator.takeFolds(anew: true)
         context.coordinator.load()
         return view
@@ -421,6 +422,17 @@ final class OfferList {
 
 /// The text view: TextKit 1, so that the layout manager can draw.
 public final class NoteTextView: NSTextView {
+    /// The view showing a note, among those on screen: for what is done to a
+    /// note from outside it — words said into one just made.
+    public static func showing(_ editor: NoteEditor) -> NoteTextView? {
+        live.allObjects.first { $0.window != nil && $0.coordinator?.parent.editor === editor }
+    }
+
+    private static let live = NSHashTable<NoteTextView>.weakObjects()
+
+    /// Told once the view is the coordinator's: it is on screen from then.
+    func enlist() { Self.live.add(self) }
+
     weak var coordinator: NoteEditorView.Coordinator?
     /// How far down the app's own block views reach.
     var blocksBottom: CGFloat = 0
@@ -724,6 +736,80 @@ public final class NoteTextView: NSTextView {
             if case .web(let address) = link, !event.modifierFlags.contains(.command), coordinator?.parent.webTitle != nil, editLink(address, at: pressed.point) { return }
             coordinator?.parent.onFollow(link)
         }
+    }
+
+    // MARK: Words said into the note
+
+    /// Whether the caret is put away: while words are said, a bar of light stands for it.
+    var hidesCaret = false {
+        didSet {
+            guard hidesCaret != oldValue else { return }
+            insertionPointColor = hidesCaret ? .clear : (coordinator?.parent.theme.accent ?? .controlAccentColor)
+            needsDisplay = true
+        }
+    }
+
+    var dictationAccent: NSColor { coordinator?.parent.theme.accent ?? .controlAccentColor }
+
+    /// Where a caret before a character would stand, in the view: as tall as the words.
+    func caretBar(at location: Int) -> CGRect? {
+        guard let manager = layoutManager, let container = textContainer, let storage = textStorage, location <= storage.length else { return nil }
+        let font = (location > 0 ? storage.attribute(.font, at: min(location, storage.length) - 1, effectiveRange: nil) as? NSFont : nil) ?? coordinator?.parent.theme.body ?? .systemFont(ofSize: 14)
+        let tall = (font.ascender - font.descender).rounded(.up) + 2
+        let origin = textContainerOrigin
+        if storage.length == 0 || location == storage.length, manager.extraLineFragmentRect.height > 0 {
+            let rect = manager.extraLineFragmentRect
+            return CGRect(x: rect.minX + origin.x + container.lineFragmentPadding, y: rect.minY + origin.y, width: 2, height: min(rect.height, tall))
+        }
+        guard storage.length > 0 else { return CGRect(x: origin.x, y: origin.y, width: 2, height: tall) }
+        // After the last character of a line, or before any other.
+        let after = location == storage.length
+        let glyph = manager.glyphIndexForCharacter(at: after ? location - 1 : location)
+        let fragment = manager.lineFragmentRect(forGlyphAt: glyph, effectiveRange: nil)
+        var x = manager.location(forGlyphAt: glyph).x
+        if after { x += manager.boundingRect(forGlyphRange: NSRange(location: glyph, length: 1), in: container).width }
+        return CGRect(x: fragment.minX + x + origin.x, y: fragment.minY + origin.y, width: 2, height: min(fragment.height, tall))
+    }
+
+    /// Writes words in place of some of the note's, as if typed: what is said, as it is heard.
+    func write(_ words: String, in range: NSRange) {
+        insertText(words, replacementRange: range)
+    }
+
+    /// ⌃⌥Space, held: what is said is written at the caret for as long as it is held.
+    private var holdsToTalk = false
+
+    public override func keyDown(with event: NSEvent) {
+        let flags = event.modifierFlags.intersection([.command, .shift, .option, .control])
+        if event.keyCode == 49, flags == [.control, .option] {
+            if !event.isARepeat, !holdsToTalk {
+                holdsToTalk = true
+                Task { @MainActor [weak self] in
+                    guard let self else { return }
+                    // Let go before it could start: nothing.
+                    if await NoteDictation.start(in: self), !self.holdsToTalk { await NoteDictation.stop() }
+                }
+            }
+            return
+        }
+        super.keyDown(with: event)
+    }
+
+    public override func keyUp(with event: NSEvent) {
+        if event.keyCode == 49, holdsToTalk { return letGoOfTalk() }
+        super.keyUp(with: event)
+    }
+
+    public override func flagsChanged(with event: NSEvent) {
+        // ⌃ or ⌥ let go first: let go all the same.
+        if holdsToTalk, !event.modifierFlags.contains([.control, .option]) { letGoOfTalk() }
+        super.flagsChanged(with: event)
+    }
+
+    private func letGoOfTalk() {
+        holdsToTalk = false
+        guard NoteDictation.isGoing(in: self) else { return }
+        Task { @MainActor in await NoteDictation.stop() }
     }
 
     /// The caret is as tall as the words it stands among, and no taller:

@@ -25,7 +25,25 @@ one Durable Object per repository, and outbound `fetch`.
 | `DELETE /devices` | an iPhone | Forgets it: `{repository, token}`. |
 | `GET /events?repository=owner/name` | a Mac | A WebSocket, sent `{"type":"push","after":"<commit>"}` on each push. `ping` is answered `pong`. |
 
-`/devices` and `/events` take `Authorization: Bearer <GitHub token>`.
+| `POST /scribe-token` | an app | A token to dictate with: `{"token": "…"}`, one ElevenLabs realtime transcription's worth. Only for the GitHub users named in `SCRIBE_USERS`. |
+
+`/devices`, `/events` and `/scribe-token` take `Authorization: Bearer <GitHub token>`.
+
+### Dictation
+
+The apps write down what is said into them with ElevenLabs' realtime
+transcription, which a device reaches itself with a single-use token.
+The relay hands those out, so the account's key is a secret here and
+never in an app. To turn it on:
+
+```sh
+npx wrangler secret put ELEVENLABS_API_KEY
+```
+
+and name who may use it in `wrangler.toml` (`SCRIBE_USERS`, GitHub
+logins, comma-separated), then deploy. Without the key — or for anyone
+not named — the relay answers no token, and the apps dictate with
+Apple's own recognition instead.
 
 ## Building
 

@@ -48,5 +48,9 @@
 			<string>com.mariusae.weft.card</string>
 		</dict>
 	</array>
+	<key>NSMicrophoneUsageDescription</key>
+	<string>Weft writes down what you say into a note while you hold the dictation keys.</string>
+	<key>NSSpeechRecognitionUsageDescription</key>
+	<string>When Weft is offline, what you say is recognised on this Mac.</string>
 </dict>
 </plist>

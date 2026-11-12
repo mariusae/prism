@@ -187,6 +187,10 @@ enum Snapshot {
                 (view as? NoteTextView).map { [$0] } ?? view.subviews.flatMap(editors)
             }
             let notes = editors(in: window.contentView ?? NSView()).sorted { $0.convert(NSPoint.zero, to: nil).y > $1.convert(NSPoint.zero, to: nil).y }
+            // WEFT_SAY="hello|hello there": words written into the first note shown as if said, each what was heard so far.
+            if let said = environment["WEFT_SAY"], let note = notes.first {
+                NoteDictation.rehearse(in: note, heard: said.split(separator: "|").map(String.init))
+            }
             // WEFT_CARRY="0:1>1:0:0": row 1 of the first note shown, put before row 0 of the second, at depth 0.
             if let carry = environment["WEFT_CARRY"] {
                 let parts = carry.split(separator: ">").map { $0.split(separator: ":").compactMap { Int($0) } }

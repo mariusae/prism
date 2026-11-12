@@ -41,6 +41,7 @@
 
 pub mod apns;
 pub mod relay;
+pub mod scribe;
 
 #[cfg(feature = "client")]
 pub mod client;

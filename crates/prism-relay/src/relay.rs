@@ -55,6 +55,8 @@ pub enum Route {
     Unregister,
     /// A device listening on a WebSocket.
     Events,
+    /// A device asking for a token to dictate with: see [`crate::scribe`].
+    ScribeToken,
     /// A hello, for whoever checks the relay is up.
     Root,
     NotFound,
@@ -66,6 +68,7 @@ pub fn route(method: &str, path: &str) -> Route {
         ("POST", "/devices") => Route::Register,
         ("DELETE", "/devices") => Route::Unregister,
         ("GET", "/events") => Route::Events,
+        ("POST", "/scribe-token") => Route::ScribeToken,
         ("GET", "/") => Route::Root,
         _ => Route::NotFound,
     }
@@ -231,6 +234,7 @@ mod tests {
     fn requests_are_routed() {
         assert_eq!(route("POST", "/github"), Route::Webhook);
         assert_eq!(route("POST", "/devices"), Route::Register);
+        assert_eq!(route("POST", "/scribe-token"), Route::ScribeToken);
         assert_eq!(route("DELETE", "/devices"), Route::Unregister);
         assert_eq!(route("GET", "/events"), Route::Events);
         assert_eq!(route("GET", "/"), Route::Root);

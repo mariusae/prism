@@ -128,6 +128,7 @@ public struct NoteEditorView: UIViewRepresentable {
         view.coordinator = context.coordinator
         view.tintColor = theme.accent
         context.coordinator.view = view
+        view.enlist()
         _ = context.coordinator.takeFolds(anew: true)
         context.coordinator.load()
         return view
@@ -348,6 +349,17 @@ extension NoteTextView {
 
 /// The text view: TextKit 1, so that the layout manager can draw.
 public final class NoteTextView: UITextView {
+    /// The view showing a note, among those on screen: for what is done to a
+    /// note from outside it — words said into one just made.
+    public static func showing(_ editor: NoteEditor) -> NoteTextView? {
+        live.allObjects.first { $0.window != nil && $0.coordinator?.parent.editor === editor }
+    }
+
+    private static let live = NSHashTable<NoteTextView>.weakObjects()
+
+    /// Told once the view is the coordinator's: it is on screen from then.
+    func enlist() { Self.live.add(self) }
+
     weak var coordinator: NoteEditorView.Coordinator?
     /// How far down the app's own block views reach.
     var blocksBottom: CGFloat = 0
@@ -463,8 +475,40 @@ public final class NoteTextView: UITextView {
         }
     }
 
-    /// The caret on an empty last row stands where that row's words will.
+    // MARK: Words said into the note
+
+    /// Whether the caret is put away: while words are said, a bar of light stands for it.
+    var hidesCaret = false {
+        didSet {
+            guard hidesCaret != oldValue else { return }
+            // Asked again where the caret is: nowhere, or where it was.
+            let kept = selectedRange
+            selectedRange = kept
+            setNeedsLayout()
+        }
+    }
+
+    var dictationAccent: UIColor { coordinator?.parent.theme.accent ?? tintColor }
+
+    /// Where a caret before a character would stand, in the view.
+    func caretBar(at location: Int) -> CGRect? {
+        guard location <= textStorage.length, let place = position(from: beginningOfDocument, offset: location) else { return nil }
+        return standingCaret(for: place)
+    }
+
+    /// Writes words in place of some of the note's, as if typed: what is said, as it is heard.
+    func write(_ words: String, in range: NSRange) {
+        guard NSMaxRange(range) <= textStorage.length, let start = position(from: beginningOfDocument, offset: range.location),
+              let end = position(from: start, offset: range.length), let place = textRange(from: start, to: end) else { return }
+        replace(place, withText: words)
+    }
+
     public override func caretRect(for position: UITextPosition) -> CGRect {
+        hidesCaret ? .zero : standingCaret(for: position)
+    }
+
+    /// The caret on an empty last row stands where that row's words will.
+    private func standingCaret(for position: UITextPosition) -> CGRect {
         var rect = super.caretRect(for: position)
         let at = offset(from: beginningOfDocument, to: position)
         let text = textStorage.string as NSString
@@ -518,6 +562,13 @@ public final class NoteTextView: UITextView {
         get {
             if madeBar == nil {
                 madeBar = EditorKeyboardBar(tint: tintColor) { [weak self] tool in self?.use(tool) }
+                // The microphone shows whether this note is being said into.
+                NotificationCenter.default.addObserver(forName: NoteDictation.changed, object: nil, queue: .main) { [weak self] _ in
+                    MainActor.assumeIsolated {
+                        guard let self else { return }
+                        self.madeBar?.showDictating(NoteDictation.isGoing(in: self))
+                    }
+                }
                 showTools()
                 noteSettled()
             }
@@ -562,7 +613,15 @@ public final class NoteTextView: UITextView {
             if let row = coordinator.caretRow { coordinator.perform(.toggleFold, onRows: [row]) }
         case .timeBlock: coordinator.newTimeBlock()
         case .title: coordinator.parent.onTitle()
-        case .done: resignFirstResponder()
+        case .dictate:
+            // Said where the caret is, until the microphone is tapped again.
+            Task { @MainActor [weak self] in
+                guard let self else { return }
+                if NoteDictation.isGoing(in: self) { await NoteDictation.stop() } else { await NoteDictation.start(in: self) }
+            }
+        case .done:
+            if NoteDictation.isGoing(in: self) { Task { @MainActor in await NoteDictation.stop() } }
+            resignFirstResponder()
         }
         noteSettled()
     }

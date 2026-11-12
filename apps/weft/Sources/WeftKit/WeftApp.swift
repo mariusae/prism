@@ -1,6 +1,7 @@
 #if os(macOS)
 import AppKit
 import Prism
+import PrismEditor
 import SwiftUI
 
 /// Weft on the Mac.
@@ -98,6 +99,8 @@ public struct WeftMacApp: App {
                 Button("Today") { today() }.keyboardShortcut("d")
                 Button("Go to Date…") { actions.calendar += 1 }.keyboardShortcut("d", modifiers: [.command, .shift])
                 Button("River Overview") { actions.overview += 1 }.keyboardShortcut("e")
+                // Said into the note being written in, where its caret is — or, hold ⌃⌥Space there for as long as you speak.
+                Button(NoteDictation.isGoing() ? "Stop Dictating" : "Dictate") { dictate() }.keyboardShortcut("d", modifiers: [.control, .option])
                 Button("Close All Cards") { closeAll() }.keyboardShortcut("w", modifiers: [.command, .shift])
                 Button("Reopen Closed Note") { withAnimation(.snappy(duration: 0.28)) { _ = store?.reopenClosed() } }.keyboardShortcut("t", modifiers: [.command, .shift])
                 Divider()
@@ -156,6 +159,15 @@ public struct WeftMacApp: App {
 
     private func newPage() {
         withAnimation(.snappy(duration: 0.28)) { _ = store?.newNote() }
+    }
+
+    /// Starts writing down what is said, in the note with the caret — or stops.
+    private func dictate() {
+        Task { @MainActor in
+            if NoteDictation.isGoing() { return _ = await NoteDictation.stop() }
+            guard let note = NSApp.keyWindow?.firstResponder as? NoteTextView else { return NSSound.beep() }
+            if await !NoteDictation.start(in: note) { NSSound.beep() }
+        }
     }
 
     /// A new note of what was copied: its words, as they are — or its picture, kept in the graph.

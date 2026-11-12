@@ -1,227 +1,101 @@
 #if os(iOS)
-import AVFoundation
-import Speech
+import PrismDictation
+import PrismEditor
 import SwiftUI
 import UIKit
 
-/// Words spoken, written down by Apple's own speech recognition — on the
-/// device when it can be. What was said so far told as it comes, and all
-/// of it when let go.
-@MainActor
-final class Listening {
-    enum Failure: Error { case notAllowed, unavailable }
-
-    private let engine = AVAudioEngine()
-    private var request: SFSpeechAudioBufferRecognitionRequest?
-    private var task: SFSpeechRecognitionTask?
-    /// What has been heard so far.
-    private(set) var text = ""
-    /// What was said before the utterance being heard now: the recogniser,
-    /// after a pause, starts each utterance afresh — what it reports is
-    /// then that alone.
-    private var before = ""
-    /// The utterance being heard now, as last reported.
-    private var utterance = ""
-    /// An utterance just ended: the next report may start another.
-    private var utteranceEnded = false
-    private var finished: CheckedContinuation<Void, Never>?
-    private var isFinal = false
-
-    /// Asks, once, to hear and to recognise speech: both are needed.
-    static func allowed() async -> Bool {
-        if SFSpeechRecognizer.authorizationStatus() == .notDetermined {
-            _ = await withCheckedContinuation { (done: CheckedContinuation<SFSpeechRecognizerAuthorizationStatus, Never>) in
-                SFSpeechRecognizer.requestAuthorization { done.resume(returning: $0) }
-            }
-        }
-        guard SFSpeechRecognizer.authorizationStatus() == .authorized else { return false }
-        return await AVAudioApplication.requestRecordPermission()
-    }
-
-    /// Listening, from now: `heard` told what has been said so far.
-    func start(heard: @escaping @MainActor (String) -> Void) throws {
-        guard SFSpeechRecognizer.authorizationStatus() == .authorized else { throw Failure.notAllowed }
-        guard let recognizer = SFSpeechRecognizer(locale: .current) ?? SFSpeechRecognizer(), recognizer.isAvailable else { throw Failure.unavailable }
-        text = ""
-        before = ""
-        utterance = ""
-        utteranceEnded = false
-        isFinal = false
-        let session = AVAudioSession.sharedInstance()
-        try session.setCategory(.record, mode: .measurement, options: .duckOthers)
-        try session.setActive(true, options: .notifyOthersOnDeactivation)
-        let request = SFSpeechAudioBufferRecognitionRequest()
-        request.shouldReportPartialResults = true
-        request.addsPunctuation = true
-        if recognizer.supportsOnDeviceRecognition { request.requiresOnDeviceRecognition = true }
-        let input = engine.inputNode
-        let format = input.outputFormat(forBus: 0)
-        // No microphone to hear with — a simulator without one: said, not crashed on.
-        guard format.sampleRate > 0, format.channelCount > 0 else {
-            try? session.setActive(false, options: .notifyOthersOnDeactivation)
-            throw Failure.unavailable
-        }
-        input.removeTap(onBus: 0)
-        Self.tap(input, format: format, into: request)
-        engine.prepare()
-        do {
-            try engine.start()
-        } catch {
-            input.removeTap(onBus: 0)
-            try? session.setActive(false, options: .notifyOthersOnDeactivation)
-            throw error
-        }
-        self.request = request
-        task = Self.recognise(request, with: recognizer) { [weak self] said, ended, final in
-            guard let self else { return }
-            if let said {
-                self.take(said, ended: ended)
-                heard(self.text)
-            }
-            if final { self.end() }
-        }
-    }
-
-    // What the microphone hears and what the recogniser says come on
-    // threads of their own: neither closure is the main actor's.
-    private nonisolated static func tap(_ input: AVAudioInputNode, format: AVAudioFormat, into request: SFSpeechAudioBufferRecognitionRequest) {
-        input.installTap(onBus: 0, bufferSize: 1024, format: format) { buffer, _ in request.append(buffer) }
-    }
-
-    private nonisolated static func recognise(_ request: SFSpeechAudioBufferRecognitionRequest, with recognizer: SFSpeechRecognizer,
-                                              told: @escaping @MainActor (String?, Bool, Bool) -> Void) -> SFSpeechRecognitionTask {
-        recognizer.recognitionTask(with: request) { result, error in
-            let said = result?.bestTranscription.formattedString
-            // Told how it was said: the utterance is over.
-            let ended = result?.speechRecognitionMetadata != nil
-            let final = result?.isFinal == true || error != nil
-            DispatchQueue.main.async { MainActor.assumeIsolated { told(said, ended, final) } }
-        }
-    }
-
-    /// Let go: what was said, once the last of it is recognised — waited
-    /// for a moment at most.
-    func stop() async -> String {
-        guard request != nil else { return text }
-        engine.stop()
-        engine.inputNode.removeTap(onBus: 0)
-        request?.endAudio()
-        if !isFinal {
-            await withCheckedContinuation { (done: CheckedContinuation<Void, Never>) in
-                finished = done
-                DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { [weak self] in self?.end() }
-            }
-        }
-        task?.cancel()
-        task = nil
-        request = nil
-        try? AVAudioSession.sharedInstance().setActive(false, options: .notifyOthersOnDeactivation)
-        return text.trimmingCharacters(in: .whitespacesAndNewlines)
-    }
-
-    /// Given up on: the microphone let go, nothing waited for.
-    func cancel() {
-        guard request != nil else { return }
-        engine.stop()
-        engine.inputNode.removeTap(onBus: 0)
-        task?.cancel()
-        task = nil
-        request = nil
-        try? AVAudioSession.sharedInstance().setActive(false, options: .notifyOthersOnDeactivation)
-    }
-
-    /// What the recogniser reports, added to what came before it: a report
-    /// that starts over — after an utterance ended, or one much shorter
-    /// that doesn't begin as the last did — is a new utterance, the last kept.
-    private func take(_ said: String, ended: Bool) {
-        let continues = Self.opening(said) == Self.opening(utterance) || utterance.isEmpty
-        if !continues, utteranceEnded || said.count < utterance.count / 2 { before = Self.join(before, utterance) }
-        utterance = said
-        utteranceEnded = ended
-        text = Self.join(before, utterance)
-    }
-
-    /// The first words, to tell whether a report goes on from the last.
-    private static func opening(_ text: String) -> String {
-        String(text.lowercased().filter { $0.isLetter || $0.isNumber || $0 == " " }.prefix(12))
-    }
-
-    private static func join(_ a: String, _ b: String) -> String {
-        let a = a.trimmingCharacters(in: .whitespaces), b = b.trimmingCharacters(in: .whitespaces)
-        return a.isEmpty ? b : b.isEmpty ? a : a + " " + b
-    }
-
-    private func end() {
-        isFinal = true
-        finished?.resume()
-        finished = nil
-    }
-}
-
-/// + held: what is said, heard, and shown over the bar as it comes. Let
-/// go, a new note of it at the top of the river — or, slid well up from
-/// the + first, or nothing said, nothing.
+/// + held: a new note at once, and what is said written straight into it
+/// as it is heard — the same way words are said into any note, in place.
+/// Let go, the note is kept; slid well up from the + first, or nothing
+/// said, it is taken away again.
 @MainActor
 @Observable
 final class HeldDictation {
     /// + held, as a microphone.
     private(set) var listening = false
-    /// What has been heard so far.
-    private(set) var heard = ""
     /// Why it can't listen, said for a moment.
     private(set) var problem: String?
-    @ObservationIgnored private var dictation: Listening?
+    /// The note made to say into, and its river.
+    @ObservationIgnored private var made: (card: Card.ID, river: River)?
+    /// Whether the words are going into it yet.
+    @ObservationIgnored private var started = false
+    /// Let go before the words could go in: how — given up, or kept.
+    @ObservationIgnored private var letGo: Bool?
     @ObservationIgnored private var asking = false
 
-    func begin() {
-        guard dictation == nil, !asking else { return }
+    func begin(store: GraphStore) {
+        guard made == nil, !asking else { return }
         listening = true
         problem = nil
-        heard = ""
+        letGo = nil
+        started = false
         UIImpactFeedbackGenerator(style: .medium).impactOccurred()
         asking = true
         Task { @MainActor in
-            let allowed = await Listening.allowed()
-            asking = false
-            guard allowed else {
+            defer { asking = false }
+            guard await Dictation.allowed() else {
                 listening = false
-                return say("Weft can\u{2019}t listen: allow the microphone and speech recognition in Settings.")
+                return say("Weft can\u{2019}t listen: allow the microphone in Settings.")
             }
             // Let go while being asked: nothing.
             guard listening else { return }
-            let dictation = Listening()
-            do {
-                try dictation.start { [weak self, weak dictation] text in
-                    guard let self, let dictation, self.dictation === dictation else { return }
-                    self.heard = text
-                }
-                self.dictation = dictation
-            } catch {
+            guard let card = withAnimation(.snappy(duration: 0.28), { store.newNote(written: "") }) else {
                 listening = false
-                say("Dictation isn\u{2019}t available right now.")
+                return
             }
+            made = (card.id, store.river)
+            // Its own view, once it is on screen: where the words go.
+            let editor = store.draft(path: card.path, title: card.title).editor
+            var view: NoteTextView?
+            for _ in 0..<40 {
+                view = NoteTextView.showing(editor)
+                if view != nil { break }
+                try? await Task.sleep(for: .milliseconds(50))
+            }
+            guard let view, await NoteDictation.start(in: view) else {
+                listening = false
+                discard(store)
+                return say("Dictation isn\u{2019}t available right now.")
+            }
+            started = true
+            // Let go meanwhile: concluded now.
+            if let letGo { await conclude(cancelled: letGo, store: store) }
         }
     }
 
     /// Let go: kept, or — `cancelled`, slid away first — given up.
     func end(cancelled: Bool, store: GraphStore) {
         listening = false
-        guard let dictation else { return }
-        self.dictation = nil
-        Task { @MainActor in
-            if cancelled {
-                dictation.cancel()
-                heard = ""
-                UINotificationFeedbackGenerator().notificationOccurred(.warning)
-                return
-            }
-            let text = await dictation.stop()
-            heard = ""
-            // Nothing said: no note.
-            guard !text.isEmpty else { return }
-            withAnimation(.snappy(duration: 0.28)) { _ = store.newNote(saying: text) }
-            UINotificationFeedbackGenerator().notificationOccurred(.success)
+        guard made != nil || asking else { return }
+        guard started else {
+            letGo = cancelled
+            return
         }
+        Task { @MainActor in await conclude(cancelled: cancelled, store: store) }
+    }
+
+    private func conclude(cancelled: Bool, store: GraphStore) async {
+        guard let made else { return }
+        started = false
+        letGo = nil
+        if cancelled {
+            NoteDictation.cancel()
+            discard(store)
+            UINotificationFeedbackGenerator().notificationOccurred(.warning)
+            return
+        }
+        let said = await NoteDictation.stop()
+        // Nothing said: no note.
+        guard !said.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return discard(store) }
+        self.made = nil
+        if let card = made.river.card(made.card) { store.draft(path: card.path, title: card.title).saveNow() }
+        UINotificationFeedbackGenerator().notificationOccurred(.success)
+    }
+
+    private func discard(_ store: GraphStore) {
+        guard let made else { return }
+        self.made = nil
+        withAnimation(.snappy(duration: 0.28)) { store.discard(made.card, in: made.river) }
     }
 
     private func say(_ words: String) {

@@ -400,8 +400,9 @@ struct PhoneBar: View {
         // Over it while + is held, what is heard as it comes; or, for a
         // moment, why it can't listen.
         .overlay(alignment: .bottom) {
-            if let said = held.problem ?? (held.listening ? (held.heard.isEmpty ? "Listening\u{2026} Let go to keep it, or slide up to give it up." : held.heard) : nil) {
-                HeardBubble(text: said, quiet: held.problem == nil && held.heard.isEmpty)
+            // What is said is written in the note itself: over the bar is only how to end it.
+            if let said = held.problem ?? (held.listening ? "Let go to keep it, or slide up to give it up." : nil) {
+                HeardBubble(text: said, quiet: held.problem == nil)
                     .padding(.horizontal, 14)
                     // Its foot a little above the bar's top.
                     .padding(.bottom, 48 + 12)
@@ -460,7 +461,7 @@ struct PhoneBar: View {
                         try? await Task.sleep(for: .seconds(Self.hold))
                         guard !Task.isCancelled else { return }
                         wasHeld = true
-                        held.begin()
+                        held.begin(store: store)
                     }
                 case .up(let moved):
                     pressed?.cancel()

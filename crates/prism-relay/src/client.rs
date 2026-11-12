@@ -20,6 +20,13 @@ pub fn register_request(relay: &str, github_token: &str, registration: &Registra
     Request::post(format!("{}/devices", base(relay))).bearer(github_token).json(registration)
 }
 
+/// Asks a relay for a token to dictate with: one transcription's worth,
+/// from ElevenLabs, whose key the relay keeps. The answer is a
+/// [`crate::scribe::Token`], as JSON.
+pub fn scribe_token_request(relay: &str, github_token: &str) -> Request {
+    Request::post(format!("{}/scribe-token", base(relay))).bearer(github_token)
+}
+
 /// Takes a device's push token back.
 pub fn unregister_request(relay: &str, github_token: &str, registration: &Registration) -> Request {
     Request::new("DELETE", format!("{}/devices", base(relay))).bearer(github_token).json(registration)

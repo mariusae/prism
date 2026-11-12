@@ -11,6 +11,7 @@ let package = Package(
         .library(name: "Prism", targets: ["Prism"]),
         .library(name: "PrismEditor", targets: ["PrismEditor"]),
         .library(name: "PrismEmblem", targets: ["PrismEmblem"]),
+        .library(name: "PrismDictation", targets: ["PrismDictation"]),
     ],
     targets: [
         .binaryTarget(name: "PrismFFI", path: "PrismFFI.xcframework"),
@@ -28,7 +29,12 @@ let package = Package(
         // The editor: one component for every app on the engine. It shows a
         // note the engine holds open (`NoteEditor`), as an outline or as
         // text, and knows nothing of the app around it.
-        .target(name: "PrismEditor", dependencies: ["Prism"]),
+        .target(name: "PrismEditor", dependencies: ["Prism", "PrismDictation"]),
+        // Words spoken, written down: by ElevenLabs' realtime transcription
+        // while there is a token for it, else by Apple's own recognition.
+        // The microphone, the socket, and how what is heard is typed out —
+        // nothing of where it goes, which is the editor's.
+        .target(name: "PrismDictation"),
         // What stands for a page or a river wherever it is shown small: its
         // icon, or a letter of its name, in its colour. A decision about
         // looks, so not the engine's — but one every app should make the

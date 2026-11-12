@@ -22,6 +22,8 @@ final class EditorKeyboardBar: UIInputView {
         case timeBlock
         /// The first line, made the title.
         case title
+        /// What is said, written at the caret — or, being written, no more.
+        case dictate
         /// The keys put away.
         case done
     }
@@ -49,6 +51,7 @@ final class EditorKeyboardBar: UIInputView {
     private weak var redo: UIButton?
     private weak var titleButton: UIButton?
     private weak var foldButton: UIButton?
+    private weak var micButton: UIButton?
     private weak var timeButton: UIButton?
     private let tick = UISelectionFeedbackGenerator()
     /// Whether Aa's tools are the capsule's, in place of its own.
@@ -105,6 +108,7 @@ final class EditorKeyboardBar: UIInputView {
         redo = undos.arrangedSubviews.last as? UIButton
 
         fill(tools, [
+            ("mic", .dictate, "Dictate"),
             ("rectangle.compress.vertical", .fold, "Fold"),
             ("checkmark.square", .command(.cycleChecklist), "Checklist"),
             ("checkmark.circle", .command(.toggleTask), "Task"),
@@ -113,7 +117,8 @@ final class EditorKeyboardBar: UIInputView {
             ("clock", .timeBlock, "New Time Block"),
             ("textformat.size.larger", .title, "Title"),
         ], size: 17)
-        foldButton = tools.arrangedSubviews.first as? UIButton
+        micButton = tools.arrangedSubviews.first as? UIButton
+        foldButton = tools.arrangedSubviews.dropFirst().first as? UIButton
         foldButton?.isEnabled = false
         timeButton = tools.arrangedSubviews.dropLast().last as? UIButton
         titleButton = tools.arrangedSubviews.last as? UIButton
@@ -282,6 +287,14 @@ final class EditorKeyboardBar: UIInputView {
     func showUndo(canUndo: Bool, canRedo: Bool) {
         undo?.isEnabled = canUndo
         redo?.isEnabled = canRedo
+    }
+
+    /// The microphone, as it is: listening — red, and filled — or not.
+    func showDictating(_ listening: Bool) {
+        guard let micButton else { return }
+        micButton.setImage(UIImage(systemName: listening ? "mic.fill" : "mic", withConfiguration: UIImage.SymbolConfiguration(pointSize: 17, weight: .regular)), for: .normal)
+        micButton.tintColor = listening ? .systemRed : nil
+        micButton.accessibilityLabel = listening ? "Stop Dictating" : "Dictate"
     }
 
     /// Fold, for a row with rows under it; Unfold, for one folded;

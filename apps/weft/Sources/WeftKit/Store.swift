@@ -1,6 +1,7 @@
 import Foundation
 import Observation
 import Prism
+import PrismDictation
 import PrismEditor
 import PrismEmblem
 
@@ -91,6 +92,57 @@ public final class GraphStore {
             note("relay", host == nil ? "No relay in this build" : "Not listening to the relay: not signed in")
         }
         if !Days.isHeadless { pollForChanges() }
+        setUpDictation(token: token, relay: host)
+    }
+
+    // MARK: - Dictation
+
+    /// Words said are written down by ElevenLabs, through the relay — which
+    /// keeps the key, and hands out a token for each dictation to whoever
+    /// is signed in and allowed — or, with no relay or no token, by Apple's
+    /// own recognition. What is favoured: the names of notes lately written.
+    private func setUpDictation(token: TokenProvider?, relay host: String?) {
+        Dictation.log = { [weak self] words in self?.note("dictation", words) }
+        NoteDictation.keyterms = { [weak self] in self?.dictationTerms() ?? [] }
+        guard let token, let host, !Days.isHeadless else {
+            Dictation.scribeToken = nil
+            return
+        }
+        Dictation.scribeToken = {
+            // The account's token is asked for off the main thread: it may be renewed on the way.
+            let github = try await Task.detached { try token.token() }.value
+            var request = URLRequest(url: URL(string: host.contains("://") ? "\(host)/scribe-token" : "https://\(host)/scribe-token")!, timeoutInterval: 5)
+            request.httpMethod = "POST"
+            request.setValue("Bearer \(github)", forHTTPHeaderField: "Authorization")
+            let (data, response) = try await URLSession.shared.data(for: request)
+            let status = (response as? HTTPURLResponse)?.statusCode ?? 0
+            guard (200..<300).contains(status), let given = (try? JSONSerialization.jsonObject(with: data) as? [String: Any])?["token"] as? String, !given.isEmpty else {
+                throw DictationRefused(said: "The relay answered \(status): \(String(decoding: data, as: UTF8.self).trimmingCharacters(in: .whitespacesAndNewlines))")
+            }
+            return given
+        }
+        // One ready ahead of time, so that the first words go straight to it.
+        Dictation.prepare()
+    }
+
+    private struct DictationRefused: LocalizedError {
+        var said: String
+        var errorDescription: String? { said }
+    }
+
+    /// The names dictation should know: of the notes pinned, and those written in lately.
+    func dictationTerms() -> [String] {
+        let pages = ((try? engine.runQuery(body: "is: pinned\nsort: pinned", this: nil).pages) ?? []) + ((try? engine.runQuery(body: "sort: -modified\nlimit: 80", this: nil).pages) ?? [])
+        return Dictation.terms(from: pages.filter { !$0.path.hasPrefix("daily/") && !$0.path.hasPrefix("weekly/") && !$0.isUntitled }.map(\.label))
+    }
+
+    /// Takes a card away with its note, quietly: one made a moment ago, and nothing put in it.
+    func discard(_ id: Card.ID, in river: River) {
+        guard let card = river.card(id) else { return }
+        river.close(id)
+        _ = try? engine.delete(path: card.path)
+        forget(path: card.path)
+        rememberRivers()
     }
 
     /// Lets go of the graph: before it is opened again, as another account.
