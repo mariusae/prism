@@ -165,7 +165,18 @@ public struct PhoneRoot: View {
             }
         }
         .tint(Color.inkAccent)
-        .onAppear { session.open() }
+        .onAppear {
+            session.open()
+            #if DEBUG
+            // -Read notes/a.md: that note's pages open in the reader, to look at it without tapping there.
+            let arguments = ProcessInfo.processInfo.arguments
+            if let flag = arguments.firstIndex(of: "-Read"), arguments.indices.contains(flag + 1), let store = session.store {
+                let path = arguments[flag + 1]
+                store.show(path: path, title: ((try? store.engine.page(path: path)) ?? nil)?.title ?? path, in: store.river)
+                store.river.reading = River.Place(path: path, title: path)
+            }
+            #endif
+        }
         .onChange(of: scenePhase) { _, phase in
             switch phase {
             case .active: session.activated()

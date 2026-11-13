@@ -46,6 +46,18 @@ struct ReaderPanel: View {
                         web.show(source, reading: reading && !source.isPDF, marks: store.highlights(in: place.path, of: source.address), root: store.root)
                     }
                     .overlay(alignment: .bottom) { if inInbox { queueBar } }
+                    .overlay {
+                        if web.isFetching {
+                            VStack(spacing: 10) {
+                                ProgressView()
+                                Text("Reading the page…").font(.footnote).foregroundStyle(Color.inkSecondary)
+                            }
+                            .frame(maxWidth: .infinity, maxHeight: .infinity)
+                            .background(Color.inkCard)
+                            .transition(.opacity)
+                        }
+                    }
+                    .animation(.easeOut(duration: 0.2), value: web.isFetching)
             } else {
                 ContentUnavailableView("Nothing to Read", systemImage: "doc.richtext", description: Text("\u{201C}\(label)\u{201D} links to no page."))
                     .frame(maxHeight: .infinity)
@@ -123,6 +135,8 @@ struct ReaderPanel: View {
         .font(.callout.weight(.medium))
         .buttonStyle(.plain)
         .foregroundStyle(Color.inkAccent)
+        // Its words whole, whatever the pane it is in proposes.
+        .fixedSize()
         .padding(.horizontal, 20)
         .padding(.vertical, 12)
         .glassEffect(.regular.interactive(), in: .capsule)
@@ -500,6 +514,10 @@ private final class WeakMessages: NSObject, WKScriptMessageHandler {
 final class ReaderWeb: NSObject, WKNavigationDelegate, WKScriptMessageHandler {
     /// The page's title, once its words are in.
     var title: String?
+    /// Whether the page's words are being taken out of it — which, for a
+    /// page not read before, can take a while: shown, so that it does not
+    /// look like nothing.
+    var isFetching = false
     @ObservationIgnored let view: WKWebView
     @ObservationIgnored private var shown: (url: URL, reading: Bool, set: String)?
     @ObservationIgnored private var marks: [String] = []
@@ -526,12 +544,14 @@ final class ReaderWeb: NSObject, WKNavigationDelegate, WKScriptMessageHandler {
         shown = (source.url, reading, set)
         self.marks = marks
         title = nil
+        isFetching = false
         guard reading else {
             if source.url.isFileURL { view.loadFileURL(source.url, allowingReadAccessTo: root) } else { view.load(URLRequest(url: source.url)) }
             return
         }
         let present: @MainActor (ReaderArticle?) -> Void = { [weak self] article in
             guard let self, self.shown?.url == source.url, self.shown?.reading == true else { return }
+            self.isFetching = false
             guard let article else {
                 // No words to take out: the site, then.
                 self.view.load(URLRequest(url: source.url))
@@ -540,7 +560,10 @@ final class ReaderWeb: NSObject, WKNavigationDelegate, WKScriptMessageHandler {
             self.title = article.title
             self.view.loadHTMLString(ReaderPage.html(article), baseURL: source.url)
         }
-        if let cached = ReaderArticle.cached(source.url) { present(cached) } else { ReaderArticle.fetch(source.url, done: present) }
+        if let cached = ReaderArticle.cached(source.url) { present(cached) } else {
+            isFetching = true
+            ReaderArticle.fetch(source.url, done: present)
+        }
     }
 
     /// The words chosen in the page, marked there, and handed over.

@@ -36,8 +36,31 @@ final class PhoneState {
 struct PhoneShell: View {
     let store: GraphStore
     @State private var state = PhoneState()
+    /// Whether the window is wide enough for two panes: an iPhone Duo
+    /// opened, an iPad. A note's pages are then read beside the river,
+    /// not over it.
+    @State private var isWide = false
+
+    /// How wide a window is, at least, to be read beside.
+    static let twoPanes: CGFloat = 600
 
     var body: some View {
+        Group {
+            if isWide, let reading = store.river.reading {
+                SidePanes {
+                    shell
+                } secondary: {
+                    ReaderPanel(store: store, river: store.river, place: reading).id(reading.path)
+                }
+            } else {
+                shell
+            }
+        }
+        .onGeometryChange(for: Bool.self) { $0.size.width >= Self.twoPanes } action: { isWide = $0 }
+        .animation(.snappy(duration: 0.3), value: store.river.reading?.path)
+    }
+
+    private var shell: some View {
         GeometryReader { room in
             let width = room.size.width
             ZStack {
@@ -62,6 +85,7 @@ struct PhoneShell: View {
                 }
             }
             .environment(\.riverWidth, width)
+            .environment(\.riverHeight, room.size.height)
         }
         .foregroundStyle(Color.inkText)
         .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardWillShowNotification)) { _ in state.keyboardUp = true }
@@ -73,7 +97,8 @@ struct PhoneShell: View {
         .simultaneousGesture(MagnifyGesture().onEnded { if $0.magnification < 0.75, !store.river.all.isEmpty { state.showsCards = true } })
         .sheet(isPresented: $state.showsSettings) { PhoneSettings(store: store) }
         // A note's pages read, over the river.
-        .sheet(isPresented: Binding(get: { store.river.reading != nil }, set: { if !$0 { store.river.reading = nil } })) {
+        // Over it on a phone; beside it, where the window is wide (above).
+        .sheet(isPresented: Binding(get: { store.river.reading != nil && !isWide }, set: { if !$0, !isWide { store.river.reading = nil } })) {
             if let reading = store.river.reading {
                 ReaderPanel(store: store, river: store.river, place: reading).id(reading.path).presentationDetents([.large])
             }
@@ -101,10 +126,19 @@ struct PhoneShell: View {
 }
 
 private struct RiverWidthKey: EnvironmentKey { static let defaultValue: CGFloat = 390 }
+private struct RiverHeightKey: EnvironmentKey { static let defaultValue: CGFloat = 700 }
 extension EnvironmentValues {
     var riverWidth: CGFloat {
         get { self[RiverWidthKey.self] }
         set { self[RiverWidthKey.self] = newValue }
+    }
+
+    /// How tall the room the river is shown in is: the window's, as it is
+    /// now — never the screen's, which an iPhone Duo opened or closed is
+    /// not the size of.
+    var riverHeight: CGFloat {
+        get { self[RiverHeightKey.self] }
+        set { self[RiverHeightKey.self] = newValue }
     }
 }
 
@@ -310,6 +344,7 @@ struct PhoneBar: View {
     let store: GraphStore
     let state: PhoneState
     @Environment(\.riverWidth) private var width
+    @Environment(\.riverHeight) private var height
     @Namespace private var glass
     /// + held: what is said, into a new note.
     @State private var held = HeldDictation()
@@ -505,7 +540,7 @@ struct PhoneBar: View {
             wasJumping = true
             state.swipe = 0
             UIImpactFeedbackGenerator(style: .medium).impactOccurred()
-            let room = (UIScreen.main.bounds.height * 0.62 / JumpList.row).rounded(.down) * JumpList.row
+            let room = (height * 0.62 / JumpList.row).rounded(.down) * JumpList.row
             var shown = JumpList.Shown(
                 rows: cards.map { JumpList.Row(id: $0.id, label: store.label(path: $0.path, title: $0.title), emblem: store.emblem(path: $0.path, title: $0.title)) },
                 height: min(CGFloat(cards.count) * JumpList.row, room), here: river.selected

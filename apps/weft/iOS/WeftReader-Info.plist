@@ -8,6 +8,10 @@
 	<string>$(GITHUB_CLIENT_ID)</string>
 	<key>GitHubClientSecret</key>
 	<string>$(GITHUB_CLIENT_SECRET)</string>
+	<key>NSMicrophoneUsageDescription</key>
+	<string>To hear what you say while dictating into a note.</string>
+	<key>NSSpeechRecognitionUsageDescription</key>
+	<string>To write down what you say while dictating into a note.</string>
 	<key>SharesSignIn</key>
 	<true/>
 	<key>SyncRelayHost</key>

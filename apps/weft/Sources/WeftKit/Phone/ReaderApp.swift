@@ -66,13 +66,28 @@ struct ReaderQueue: View {
     @State private var loaded = false
     /// The note begun: this app's own, kept across launches.
     @AppStorage("Reader.begun") private var begun = ""
+    /// Whether the window is wide enough for the page and its note side
+    /// by side: an iPhone Duo opened, an iPad.
+    @State private var isWide = false
 
     private var current: PageInfo? { pages.first { $0.path == begun } ?? pages.first }
 
     var body: some View {
         Group {
             if let page = current {
-                ReaderPanel(store: store, place: River.Place(path: page.path, title: page.title)) { snooze in finish(page, snooze) }
+                let place = River.Place(path: page.path, title: page.title)
+                Group {
+                    if isWide {
+                        // The page, and beside it the note it is read for: its highlights, what is written of it.
+                        SidePanes {
+                            ReaderPanel(store: store, place: place) { snooze in finish(page, snooze) }
+                        } secondary: {
+                            ReaderNote(store: store, place: place)
+                        }
+                    } else {
+                        ReaderPanel(store: store, place: place) { snooze in finish(page, snooze) }
+                    }
+                }
                     .id(page.path)
                     .onAppear { begun = page.path }
                     .transition(.asymmetric(insertion: .move(edge: .trailing).combined(with: .opacity), removal: .move(edge: .leading).combined(with: .opacity)))
@@ -84,6 +99,7 @@ struct ReaderQueue: View {
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(Color.inkCard.ignoresSafeArea())
+        .onGeometryChange(for: Bool.self) { $0.size.width >= PhoneShell.twoPanes } action: { isWide = $0 }
         .overlay(alignment: .bottom) { PhoneUndo(store: store).padding(.bottom, 84) }
         // Found again whenever the graph moves: a sync brought more, or a note was done with.
         .task(id: store.indexRevision) { refresh() }
@@ -120,6 +136,31 @@ struct ReaderQueue: View {
         begun = ""
         // Out of the queue at once, ahead of the index catching up with the note.
         withAnimation(.snappy(duration: 0.3)) { pages.removeAll { $0.path == page.path } }
+    }
+}
+/// The note a page is read for, beside the page: as a card, to be read
+/// and written in — its highlights come into it as they are made. The
+/// Reader's river holds only it.
+struct ReaderNote: View {
+    let store: GraphStore
+    let place: River.Place
+
+    var body: some View {
+        let river = store.river
+        ScrollView {
+            if let card = river.all.first(where: { $0.path == place.path && $0.focus == nil }) {
+                PhoneCard(store: store, river: river, card: card)
+                    .padding(.horizontal, 12)
+                    .padding(.vertical, 16)
+            }
+        }
+        .scrollDismissesKeyboard(.interactively)
+        .background(Color.inkPage)
+        .task(id: place.path) {
+            guard !river.all.contains(where: { $0.path == place.path && $0.focus == nil }) else { return }
+            river.cards = [Card(path: place.path, title: place.title)]
+            store.rememberRivers()
+        }
     }
 }
 #endif
