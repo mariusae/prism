@@ -19,6 +19,9 @@ struct RiverView: View {
     @State private var carried: Card.ID?
     /// How far down the window's bar reaches over the river.
     @State private var barDepth: CGFloat = 52
+    /// Where the river was read to, kept and gone back to.
+    @State private var scroll = RiverScroll()
+    @State private var position = ScrollPosition()
 
     /// How far into a card its title's line ends.
     private static let titleDepth: CGFloat = 46
@@ -69,7 +72,10 @@ struct RiverView: View {
                         ForEach(river.all) { card in
                             CardView(store: store, river: river, card: card)
                                 .onGeometryChange(for: CGFloat.self) { $0.size.height.rounded() } action: { heights[card.id] = $0 }
-                                .onGeometryChange(for: CGRect.self) { $0.frame(in: .scrollView) } action: { place(card.id, at: $0) }
+                                .onGeometryChange(for: CGRect.self) { $0.frame(in: .scrollView) } action: { frame in
+                                    place(card.id, at: frame)
+                                    scroll.saw(card, at: frame, in: river)
+                                }
                                 .onScrollVisibilityChange(threshold: 0.001) { visible in
                                     if visible { showing.insert(card.id) } else { showing.remove(card.id) }
                                 }
@@ -106,6 +112,17 @@ struct RiverView: View {
                 }
             }
             .background(Color.inkPage)
+            .scrollPosition($position)
+            .onScrollGeometryChange(for: CGPoint.self) { CGPoint(x: $0.contentInsets.top, y: $0.contentOffset.y) } action: { _, at in
+                scroll.offset = at.y
+                scroll.inset = at.x
+            }
+            // Shown again: back where it was read to. Let go of: remembered.
+            .task {
+                try? await Task.sleep(for: .milliseconds(40))
+                scroll.restore(river, proxy: proxy, position: $position)
+            }
+            .onScrollPhaseChange { _, phase in if phase == .idle { store.rememberRiversSoon() } }
             .onGeometryChange(for: CGFloat.self) { $0.safeAreaInsets.top } action: { barDepth = $0 }
             // A card closed, or the river left: no card's title stays in the bar.
             .onChange(of: river.all.map(\.id)) { _, ids in

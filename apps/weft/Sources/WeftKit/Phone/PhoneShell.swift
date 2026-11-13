@@ -163,6 +163,9 @@ struct RiverColumn: View {
     @State private var lastY: CGFloat = 0
     @State private var byHand = false
     @State private var carried: Card.ID?
+    /// Where the river was read to, kept and gone back to.
+    @State private var scroll = RiverScroll()
+    @State private var position = ScrollPosition()
     /// Whether the card held is being dragged — and so drawn faint; held for its menu only, it is not.
     @State private var dragging = false
 
@@ -191,6 +194,7 @@ struct RiverColumn: View {
                         }
                         ForEach(river.all) { card in
                             PhoneCard(store: store, river: river, card: card)
+                                .onGeometryChange(for: CGRect.self) { $0.frame(in: .scrollView) } action: { scroll.saw(card, at: $0, in: river) }
                                 .opacity(dragging && carried == card.id ? 0.45 : 1)
                                 .onDrop(of: [PhoneCardMove.type], delegate: PhoneCardMove(target: card.id, river: river, store: store, carried: $carried, dragging: $dragging))
                                 .environment(\.carriedCard, $carried)
@@ -207,6 +211,16 @@ struct RiverColumn: View {
                 }
             }
             .scrollDismissesKeyboard(.interactively)
+            .scrollPosition($position)
+            .onScrollGeometryChange(for: CGPoint.self) { CGPoint(x: $0.contentInsets.top, y: $0.contentOffset.y) } action: { _, at in
+                scroll.offset = at.y
+                scroll.inset = at.x
+            }
+            // Shown again: back where it was read to.
+            .task {
+                try? await Task.sleep(for: .milliseconds(40))
+                scroll.restore(river, proxy: proxy, position: $position)
+            }
             .refreshable { _ = await store.syncAndWait() }
             // Pinched together, every card folds; apart, every one opens.
             .simultaneousGesture(MagnifyGesture().onEnded { pinch in
@@ -214,7 +228,10 @@ struct RiverColumn: View {
                 if pinch.magnification > 1.25 { withAnimation(.snappy(duration: 0.3)) { river.setAllFolded(false) } }
                 store.rememberRivers()
             })
-            .onScrollPhaseChange { _, phase in byHand = phase == .interacting || phase == .decelerating }
+            .onScrollPhaseChange { _, phase in
+                byHand = phase == .interacting || phase == .decelerating
+                if phase == .idle { store.rememberRiversSoon() }
+            }
             .onScrollGeometryChange(for: CGFloat.self) { $0.contentOffset.y + $0.contentInsets.top } action: { _, y in follow(y) }
             // A card closed or folded: what is left is brought into sight, once it has settled.
             .onChange(of: river.settleTarget?.tick) { _, _ in

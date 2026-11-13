@@ -1458,7 +1458,24 @@ public final class River: Identifiable {
         var hidden: [String]?
         var opened: [String]?
         var mentions: String?
+        /// Where it was read to, and the card chosen: by the cards' spots.
+        var scrolled: ScrollPlace?
+        var selected: String?
     }
+
+    /// Where a river was read to: the card at the top of what showed, by
+    /// its spot, and how far down into it.
+    public struct ScrollPlace: Codable, Equatable {
+        public var spot: String
+        public var offset: Double
+    }
+
+    /// Where the river was read to: kept as it is scrolled, and gone back
+    /// to when it is shown again — here, or after the app is opened again.
+    @ObservationIgnored public var scrolled: ScrollPlace?
+    /// The card chosen when the river was last remembered, by its spot:
+    /// chosen again once a query has found it.
+    @ObservationIgnored var choosing: String?
 
     /// What of a river is saved in its file: what tells whether it was changed.
     struct Signature: Hashable {
@@ -1476,7 +1493,10 @@ public final class River: Identifiable {
         Signature(folds: cards.map { $0.folds ?? [] }, cards: cards.map { card in card.focus.map { "\(card.name)^\($0)" } ?? card.name }, folded: Set(cards.filter(\.folded).map(\.name)), icon: icon, color: color, query: query, hidden: query == nil ? [] : hidden, opened: query == nil ? [] : opened)
     }
 
-    var kept: Kept { Kept(id: id, name: name, cards: cards, icon: icon, color: color, query: query, hidden: hidden, opened: Array(opened), mentions: mentions) }
+    var kept: Kept {
+        Kept(id: id, name: name, cards: cards, icon: icon, color: color, query: query, hidden: hidden, opened: Array(opened), mentions: mentions,
+             scrolled: scrolled, selected: selected.flatMap { card($0)?.spot } ?? choosing)
+    }
 
     /// For a river of every page that speaks of one: that page's path. Each
     /// card it finds shows where it speaks of it, and is open to begin with.
@@ -1502,6 +1522,11 @@ public final class River: Identifiable {
             return card
         }
         foundTotal = total
+        // Chosen when last remembered, and found only now.
+        if let spot = choosing, let card = found.first(where: { $0.spot == spot }) {
+            selected = card.id
+            choosing = nil
+        }
     }
 
     public func card(_ id: Card.ID) -> Card? { all.first { $0.id == id } }
@@ -1561,7 +1586,13 @@ public final class River: Identifiable {
         hidden = kept.hidden ?? []
         opened = Set(kept.opened ?? [])
         mentions = kept.mentions
+        scrolled = kept.scrolled
+        selected = kept.selected.flatMap { spot in cards.first { $0.spot == spot }?.id }
+        if selected == nil { choosing = kept.selected }
     }
+
+    /// The card shown at a spot: held, or found.
+    public func card(spot: String) -> Card? { all.first { $0.spot == spot } }
 
     public var title: String {
         name ?? cards.first.map { Days.shown($0.title) } ?? (query == nil ? "New River" : "Query")

@@ -181,6 +181,18 @@ enum Snapshot {
                     clip.scroll(to: NSPoint(x: clip.bounds.minX, y: clip.bounds.minY + points))
                     river.reflectScrolledClipView(clip)
                 }
+                // WEFT_SWITCH=1: then to another river and back, as a tab is clicked away and back.
+                if environment["WEFT_SWITCH"] != nil {
+                    let here = store.currentRiver
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) {
+                        print("scrolled before: \(String(describing: store.river.scrolled))")
+                        store.currentRiver = here == 0 ? 1 : 0
+                        DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) {
+                            store.currentRiver = here
+                            print("scrolled after: \(String(describing: store.river.scrolled))")
+                        }
+                    }
+                }
             }
             if let typed = environment["WEFT_TYPE"], let view = window.firstResponder as? NSTextView {
                 view.insertText(typed.replacingOccurrences(of: "\\n", with: "\n"), replacementRange: view.selectedRange())
@@ -259,7 +271,7 @@ enum Snapshot {
                     }
                 }
             }
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.8) {
+            DispatchQueue.main.asyncAfter(deadline: .now() + (environment["WEFT_SWITCH"] != nil ? 1.6 : 0.8)) {
                 guard let view = window.contentView?.superview ?? window.contentView, let bitmap = view.bitmapImageRepForCachingDisplay(in: view.bounds) else { exit(3) }
                 window.layoutIfNeeded()
                 view.cacheDisplay(in: view.bounds, to: bitmap)
