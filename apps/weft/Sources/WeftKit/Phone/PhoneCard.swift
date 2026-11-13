@@ -315,6 +315,14 @@ struct PhoneCard: View {
                     .submitLabel(.done)
                     .onSubmit { finishRenaming() }
                     .onChange(of: titleFocused) { _, focused in if !focused { finishRenaming() } }
+            } else if let address = linkAddress, LinkNoteHeader.isAvailable(address, cover: linkCover) {
+                // A link note: headed by the card of the page it keeps.
+                LinkNoteHeader(address: address, title: draft.title, cover: linkCover, titleFont: titleFont)
+                    .contentShape(Rectangle())
+                    .onTapGesture(count: 2) { startRenaming() }
+                    .onTapGesture { fold() }
+                    .contextMenu { holdMenu }
+                    .onDrag { carry() } preview: { carriedLabel }
             } else {
                 HStack(alignment: .firstTextBaseline, spacing: TextSettings.titleSize * 0.3) {
                     lead(size: TextSettings.titleSize)
@@ -334,6 +342,18 @@ struct PhoneCard: View {
                 if draft.isMarked("pinned") { Image(systemName: "pin.fill").font(.caption).foregroundStyle(Color.inkAccent) }
             }
         }
+        .task(id: linkAddress) { if let linkAddress { WebCards.shared.look(linkAddress) } }
+    }
+
+    /// The page a link note keeps: its `URL:` row's address; nil for any other note.
+    private var linkAddress: String? {
+        _ = draft.revision
+        return isDay ? nil : ReaderSource.ownAddress(in: draft.markdown)
+    }
+
+    /// The note's own picture for its page, `cover:`.
+    private var linkCover: PlatformImage? {
+        draft.editor.field(key: "cover").flatMap { Pictures.image(at: $0, in: store) }
     }
 
     private func editor(_ shown: NoteEditor, isFocus: Bool) -> some View {
@@ -357,6 +377,10 @@ struct PhoneCard: View {
                     // One picture, or several side by side: a carousel.
                     if block.info == EditorBlock.picture, let line = PictureLine(line: block.source) {
                         return AnyView(PhonePictures(store: store, pictures: line.pictures, room: block.room))
+                    }
+                    // A link alone on its row, shown as its card.
+                    if block.info == EditorBlock.card {
+                        return AnyView(LinkCardBlock(store: store, source: block.source, open: { follow($0) }, showAsLink: block.showAsLink))
                     }
                     guard block.info == "query" else { return nil }
                     return AnyView(PhoneQuery(store: store, source: block.source, this: draft.title) { page in
@@ -1112,6 +1136,17 @@ struct PhoneLinkSheet: View {
                         dismiss()
                     } label: {
                         Label("Replace Link with Its Title", systemImage: "textformat")
+                    }
+                    .buttonStyle(SheetButton())
+                }
+                // A link alone on its row: shown as its card, or as its words again.
+                if let at = draft.cardRow(for: .web(link.address)) {
+                    Button {
+                        draft.toggleCard(row: at.row)
+                        UIImpactFeedbackGenerator(style: .light).impactOccurred()
+                        dismiss()
+                    } label: {
+                        Label(at.isCard ? "Show as Link" : "Show as Card", systemImage: at.isCard ? "link" : "rectangle.on.rectangle")
                     }
                     .buttonStyle(SheetButton())
                 }

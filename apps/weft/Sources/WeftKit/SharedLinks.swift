@@ -115,6 +115,10 @@ enum LinkNote {
         var rows = [
             "- URL: <\(page.url)>",
             "- Description:" + (page.description.isEmpty ? "" : " " + oneLine(page.description)),
+        ]
+        // A post's author, said: what it is by is what it is.
+        if let author = page.author, !author.isEmpty { rows.append("- Author: " + oneLine(author)) }
+        rows += [
             "- Type: #link",
         ]
         let selected = page.selection.components(separatedBy: .newlines).map { $0.trimmingCharacters(in: .whitespaces) }.filter { !$0.isEmpty }

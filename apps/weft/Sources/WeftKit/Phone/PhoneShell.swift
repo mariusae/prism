@@ -389,12 +389,22 @@ struct PhoneBar: View {
                     .foregroundStyle(Color.inkSecondary)
             } else {
                 HStack(spacing: 8) {
-                    Button { state.start = .add } label: {
-                        Image(systemName: "magnifyingglass").font(.system(size: 18, weight: .semibold)).frame(width: 48, height: 48)
-                    }
-                    .buttonStyle(.plain)
-                    .glassEffect(.regular.interactive(), in: .circle)
-                    .glassEffectID("find", in: glass)
+                    // Today: tapped, today's note; held, any date. (Finding is the river's name, beside it.)
+                    Image(systemName: "calendar").font(.system(size: 18, weight: .semibold)).frame(width: 48, height: 48)
+                        .contentShape(Circle())
+                        .onTapGesture {
+                            withAnimation(.snappy(duration: 0.28)) { store.open(name: Days.name(Date()), after: river.selected) }
+                            store.rememberRivers()
+                        }
+                        .onLongPressGesture(minimumDuration: 0.4) {
+                            UIImpactFeedbackGenerator(style: .medium).impactOccurred()
+                            showsCalendar = true
+                        }
+                        .accessibilityLabel("Today")
+                        .accessibilityHint("Hold to go to another date")
+                        .accessibilityAddTraits(.isButton)
+                        .glassEffect(.regular.interactive(), in: .circle)
+                        .glassEffectID("find", in: glass)
                     .highPriorityGesture(turning)
                     HStack(spacing: 0) {
                         more
@@ -633,7 +643,6 @@ struct PhoneBar: View {
             if !river.all.isEmpty { Button("Overview", systemImage: "square.grid.2x2") { state.showsCards = true } }
             if store.rivers.count > 1 { Button("All Rivers", systemImage: "square.on.square") { state.showsOverview = true } }
             Section {
-                Button("Today", systemImage: "calendar") { withAnimation(.snappy(duration: 0.28)) { store.open(name: Days.name(Date()), after: river.selected) } }
                 Button("Go to Date…", systemImage: "calendar.badge.clock") { showsCalendar = true }
                 Button("New To-Do", systemImage: "circle") {
                     withAnimation(.snappy(duration: 0.28)) {

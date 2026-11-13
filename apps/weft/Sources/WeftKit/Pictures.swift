@@ -2,6 +2,7 @@ import Prism
 import PrismEditor
 import SwiftUI
 import LinkPresentation
+import WeftShared
 #if os(macOS)
 import AppKit
 public typealias PlatformImage = NSImage
@@ -313,7 +314,9 @@ struct LinkCard: View {
         (URL(string: address)?.host ?? address).replacingOccurrences(of: "www.", with: "")
     }
 
-    @ViewBuilder private func web(_ address: String, title: String?, cover: NSImage?) -> some View {
+    /// A page on the web: its picture, title and site. `written` is the link as the note has it —
+    /// the address, or the name of the note kept of the page.
+    @ViewBuilder private func web(_ address: String, title: String?, cover: NSImage?, written: EditorLink? = nil) -> some View {
         let found = WebCards.shared.found[address]
         VStack(alignment: .leading, spacing: 0) {
             if let image = cover ?? found?.image, image.size.width >= 120 {
@@ -325,6 +328,7 @@ struct LinkCard: View {
                     Text(title ?? found?.title ?? Self.host(address)).font(.system(size: 13, weight: .semibold)).lineLimit(2)
                 }
                 Text(Self.host(address)).font(.caption).foregroundStyle(Color.inkSecondary).lineLimit(1)
+                showAsCard(written ?? .web(address))
                 // An address written bare: written again as a link, with the page's title for words.
                 if title == nil, let named = found?.title, let draft, draft.hasBareLink(address) {
                     Button {
@@ -343,13 +347,28 @@ struct LinkCard: View {
         .onAppear { if title == nil || cover == nil { WebCards.shared.look(address) } }
     }
 
+    /// A link alone on its row, offered shown as its card — or, being one, as its words.
+    @ViewBuilder private func showAsCard(_ shown: EditorLink) -> some View {
+        if let draft, let at = draft.cardRow(for: shown) {
+            Button {
+                draft.toggleCard(row: at.row)
+                NotificationCenter.default.post(name: NoteEditorView.hoverCardDone, object: nil)
+            } label: {
+                Label(at.isCard ? "Show as Link" : "Show as Card", systemImage: at.isCard ? "link" : "rectangle.on.rectangle").font(.system(size: 12, weight: .medium)).frame(maxWidth: .infinity)
+            }
+            .buttonStyle(.bordered)
+            .controlSize(.regular)
+            .padding(.top, 8)
+        }
+    }
+
     /// A note: one kept of a page on the web as that page's card; any other as its first lines.
     @ViewBuilder private func note(_ name: String) -> some View {
         if let path = store.resolve(name)?.path, let source = (try? store.engine.read(path: path)) ?? nil {
             let editor = NoteEditor.open(source: source, mode: .text)
             let label = editor.label(path: path)
             if let address = Self.address(in: source), editor.field(key: "icon") == "link" || editor.field(key: "cover") != nil {
-                web(address, title: label, cover: editor.field(key: "cover").flatMap { Pictures.image(at: $0, in: store) })
+                web(address, title: label, cover: editor.field(key: "cover").flatMap { Pictures.image(at: $0, in: store) }, written: .page(name))
             } else {
                 let lines = editor.text().split(whereSeparator: { $0 == "\n" || $0 == "\u{2028}" }).map { inlinePlainText(text: String($0)) }.filter { !$0.isEmpty && $0 != label }
                 VStack(alignment: .leading, spacing: 5) {
@@ -357,6 +376,7 @@ struct LinkCard: View {
                     if !lines.isEmpty {
                         Text(lines.prefix(6).joined(separator: "\n")).font(.system(size: 12)).foregroundStyle(Color.inkSecondary).lineLimit(7)
                     }
+                    showAsCard(.page(name))
                 }
                 .padding(12)
             }
@@ -381,6 +401,8 @@ final class WebCards {
     struct Found {
         var title: String?
         var image: PlatformImage?
+        /// A line more of what it is: a post's words, and who said them.
+        var detail: String?
     }
 
     private(set) var found: [String: Found] = [:]
@@ -389,6 +411,23 @@ final class WebCards {
     func look(_ address: String) {
         guard !asked.contains(address), let url = URL(string: address), url.scheme == "https" || url.scheme == "http" else { return }
         asked.insert(address)
+        // A post on a social site: read from the site — its author and words — where the page would say only "X".
+        if SocialPost.recognizes(address) {
+            Task {
+                guard let post = await SocialPost.read(address) else { return self.metadata(of: url, for: address) }
+                let detail = post.site == .youtube ? post.byline : "\(post.byline) · \(post.text)"
+                self.found[address] = Found(title: post.title, image: nil, detail: detail)
+                guard let picture = post.image.flatMap(URL.init(string:)), let (data, _) = try? await URLSession.shared.data(from: picture),
+                      let image = PlatformImage(data: data) else { return }
+                self.found[address] = Found(title: post.title, image: image, detail: detail)
+            }
+            return
+        }
+        metadata(of: url, for: address)
+    }
+
+    /// What the page says of itself, as Apple's link previews read it.
+    private func metadata(of url: URL, for address: String) {
         let provider = LPMetadataProvider()
         provider.timeout = 8
         provider.startFetchingMetadata(for: url) { metadata, _ in

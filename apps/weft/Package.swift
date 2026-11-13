@@ -21,7 +21,7 @@ let package = Package(
         // The Mac app around them. Wrapped as Weft.app by scripts/build-app.sh.
         .executableTarget(name: "WeftMac", dependencies: ["WeftKit"]),
         // What can be checked without a screen: `swift test`.
-        .testTarget(name: "WeftKitTests", dependencies: ["WeftKit", .product(name: "Prism", package: "apple"), .product(name: "PrismEditor", package: "apple")]),
+        .testTarget(name: "WeftKitTests", dependencies: ["WeftKit", "WeftShared", .product(name: "Prism", package: "apple"), .product(name: "PrismEditor", package: "apple")]),
     ],
     swiftLanguageModes: [.v5]
 )

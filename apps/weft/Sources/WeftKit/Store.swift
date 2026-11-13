@@ -1881,6 +1881,35 @@ public final class PageDraft {
         return bareLink(address) != nil
     }
 
+    /// The row of the note that is this link and nothing else — in an
+    /// outline — and whether it is shown as the link's card; nil where no
+    /// row is.
+    public func cardRow(for link: EditorLink) -> (row: Int, isCard: Bool)? {
+        _ = revision
+        let layout = editor.layout()
+        guard !layout.markersInText else { return nil }
+        let wanted: String
+        switch link {
+        case .web(let address): wanted = "web:" + address
+        case .page(let name): wanted = "page:" + nameKey(name: name)
+        case .tag: return nil
+        }
+        let text = editor.text() as NSString
+        for (index, line) in layout.lines.enumerated() {
+            let range = NSRange(location: Int(line.content), length: max(Int(line.end) - Int(line.content), 0))
+            guard NSMaxRange(range) <= text.length, var found = EditorBlock.cardLink(text.substring(with: range)) else { continue }
+            if found.hasPrefix("page:") { found = "page:" + nameKey(name: String(found.dropFirst(5))) }
+            if found == wanted { return (index, line.isCard) }
+        }
+        return nil
+    }
+
+    /// A row shown as its link's card, or as its words again.
+    public func toggleCard(row: Int) {
+        _ = editor.performOn(rows: [UInt32(row)], selectionStart: 0, selectionEnd: 0, command: .toggleCard)
+        changed()
+    }
+
     /// Writes a bare address as a link with its page's title for words.
     @discardableResult
     public func titleLink(_ address: String, as title: String) -> Bool {

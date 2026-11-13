@@ -20,6 +20,8 @@ public enum SharedPages {
         /// Where it goes: a link note of its own, or a row at the top of
         /// the day it was shared. Kept before there was a choice: a note.
         public var destination: Destination?
+        /// Who said it, for a post on a social site: `Name (@who)`.
+        public var author: String?
 
         public init(url: String, title: String, description: String = "", selection: String = "", shared: Date = Date(), destination: Destination = .note) {
             self.url = url

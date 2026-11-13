@@ -184,6 +184,14 @@ struct BodyStyler {
         var markupEnd: [Int: Int] = [:]
         for run in layout.runs where run.kind == .markup { markupEnd[Int(run.start)] = Int(run.end) }
         let markupEnds = Set(markupEnd.values)
+        // Rows drawn as their link's card: their words are put away under the card, and
+        // are given no link's look — its icon would stand out in the margin.
+        let text = storage.string as NSString
+        let cardLines = Set(layout.lines.indices.filter { index in
+            let line = layout.lines[index]
+            let range = NSRange(location: Int(line.content), length: max(Int(line.end) - Int(line.content), 0))
+            return line.isCard && !revealed.contains(index) && NSMaxRange(range) <= text.length && EditorBlock.cardLink(text.substring(with: range)) != nil
+        })
         for run in layout.runs {
             let range = NSRange(location: Int(run.start), length: Int(run.end - run.start))
             guard range.length > 0, NSMaxRange(range) <= storage.length, !layout.lines.isEmpty else { continue }
@@ -191,6 +199,7 @@ struct BodyStyler {
             while lineIndex > 0, Int(layout.lines[lineIndex].start) > range.location { lineIndex -= 1 }
             let line = layout.lines[lineIndex]
             let shown = revealed.contains(lineIndex)
+            if cardLines.contains(lineIndex) { continue }
             switch run.kind {
             case .markup:
                 hide(storage, range, shown: shown)

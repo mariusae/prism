@@ -935,6 +935,20 @@ impl Session {
                     };
                 }
             }
+            Command::ToggleCard => {
+                // One way for all of them: as cards, unless every one is one already.
+                let mut chosen = Vec::new();
+                while let Some(at) = self.next_chosen(false) {
+                    chosen.push(at);
+                }
+                let on = !chosen.iter().all(|at| self.body.get(at).is_some_and(|block| block.card));
+                for at in chosen {
+                    if let Some(block) = self.body.get_mut(&at).filter(|block| block.can_have_children()) {
+                        any |= block.card != on;
+                        block.card = on;
+                    }
+                }
+            }
             Command::FoldAll => any = fold_all(&mut self.body.blocks, true),
             Command::UnfoldAll => any = fold_all(&mut self.body.blocks, false),
             Command::MoveDoneToBottom => {
@@ -1147,6 +1161,11 @@ impl Session {
             .iter()
             .map(|row| self.body.get(&row.path).map_or((false, false), |block| (block.folded && !block.children.is_empty(), !block.children.is_empty())))
             .collect()
+    }
+
+    /// Of each row shown, whether it is shown as the card of its link.
+    pub fn row_cards(&self) -> Vec<bool> {
+        self.rows.iter().map(|row| self.body.get(&row.path).is_some_and(|block| block.card)).collect()
     }
 
     /// What can be done to a row shown: what a menu for it offers.
@@ -1517,6 +1536,11 @@ fn visible(document: &Document) -> Vec<Path> {
 /// every river and on every device. A comment, which nothing shows.
 pub const FOLDED: &str = "<!-- folded -->";
 
+/// What a row shown as the card of its link ends with, in the note's
+/// file: how a link is shown is the note's own, the same everywhere. A
+/// comment, which other readers of Markdown do not show.
+pub const CARD: &str = "<!-- card -->";
+
 /// A row's name, as the note's file has it after the row's first line:
 /// `<!-- ^k3f9 -->`.
 fn written_anchor(name: &str) -> String {
@@ -1542,6 +1566,10 @@ fn read_marks(mut document: Document) -> Document {
                     let kept = kept.trim_end().len();
                     block.text.replace_range(kept..line, "");
                     block.folded = !block.children.is_empty();
+                } else if let Some(kept) = first.strip_suffix(CARD) {
+                    let kept = kept.trim_end().len();
+                    block.text.replace_range(kept..line, "");
+                    block.card = true;
                 } else if let Some((at, name)) = first.rfind("<!--").and_then(|at| Some((at, read_anchor(&first[at..])?))) {
                     // The first written is the one kept, were there two.
                     block.anchor = Some(name.to_owned());
@@ -1564,7 +1592,14 @@ fn written_marks(document: &Document) -> std::borrow::Cow<'_, Document> {
     fn write(blocks: &mut [Block]) {
         for block in blocks {
             let folded = block.folded && !block.children.is_empty();
-            let marks: Vec<String> = block.anchor.as_deref().map(written_anchor).into_iter().chain(folded.then(|| FOLDED.to_owned())).collect();
+            let marks: Vec<String> = block
+                .anchor
+                .as_deref()
+                .map(written_anchor)
+                .into_iter()
+                .chain(block.card.then(|| CARD.to_owned()))
+                .chain(folded.then(|| FOLDED.to_owned()))
+                .collect();
             if !marks.is_empty() {
                 let line = block.text.find('\n').unwrap_or(block.text.len());
                 let gap = if block.text[..line].is_empty() { "" } else { " " };
@@ -1573,7 +1608,7 @@ fn written_marks(document: &Document) -> std::borrow::Cow<'_, Document> {
             write(&mut block.children);
         }
     }
-    if !document.walk().any(|block| block.anchor.is_some() || (block.folded && !block.children.is_empty())) {
+    if !document.walk().any(|block| block.anchor.is_some() || block.card || (block.folded && !block.children.is_empty())) {
         return std::borrow::Cow::Borrowed(document);
     }
     let mut marked = document.clone();
@@ -2270,6 +2305,27 @@ mod tests {
         // A fence with words after it on its line is only words.
         let (mut session, view) = outline("- ``` and `more`\n");
         assert!(!session.perform(view.len()..view.len(), Command::Newline).is_some_and(|_| session.markdown().contains("```\n")));
+    }
+
+    #[test]
+    fn a_link_shown_as_its_card_is_marked_so_in_the_note() {
+        const NOTE: &str = "- [A page](https://a.example) <!-- card -->\n- plain\n";
+        let (mut session, view) = outline(NOTE);
+        // The mark is no part of the row's words, and the note is written as it was read.
+        assert_eq!(view, "[A page](https://a.example)\nplain");
+        assert_eq!(session.row_cards(), [true, false]);
+        assert_eq!(session.markdown(), NOTE);
+        // Toggled: written without the mark, and back.
+        session.perform_on(&[0], 0..0, Command::ToggleCard).unwrap();
+        assert_eq!((session.markdown().as_str(), session.row_cards()), ("- [A page](https://a.example)\n- plain\n", vec![false, false]));
+        session.perform_on(&[0, 1], 0..0, Command::ToggleCard).unwrap();
+        assert_eq!(session.markdown(), "- [A page](https://a.example) <!-- card -->\n- plain <!-- card -->\n");
+        session.undo().unwrap();
+        assert_eq!(session.markdown(), "- [A page](https://a.example)\n- plain\n");
+        // Beside a name and a fold, each read back as itself.
+        const BOTH: &str = "- [A](https://a.example) <!-- ^k3f9 --> <!-- card --> <!-- folded -->\n  - under\n";
+        let (session, _) = outline(BOTH);
+        assert_eq!((session.row_cards(), session.markdown()), (vec![true], BOTH.to_owned()));
     }
 
     #[test]

@@ -85,6 +85,9 @@ pub struct BodyLine {
     pub is_folded: bool,
     /// In an outline: whether the row has rows under it, shown or not.
     pub has_children: bool,
+    /// In an outline: whether the row, a link alone, is shown as the card
+    /// of what it links to (`<!-- card -->` in the note).
+    pub is_card: bool,
 }
 
 /// What a stretch of a line means.
@@ -154,12 +157,12 @@ pub struct BodyLayout {
 /// of it means.
 #[uniffi::export]
 pub fn body_layout(body: String) -> BodyLayout {
-    layout_of(editor::layout(&body), &body, &[])
+    layout_of(editor::layout(&body), &body, &[], &[])
 }
 
 /// A layout in the view's own offsets. `folds` says of each line of an
 /// outline whether it is folded, and whether it has rows under it.
-fn layout_of(read: Layout, body: &str, folds: &[(bool, bool)]) -> BodyLayout {
+fn layout_of(read: Layout, body: &str, folds: &[(bool, bool)], cards: &[bool]) -> BodyLayout {
     let offsets = Offsets::of(body);
     let markers_in_text = read.markers_in_text;
     let lines = read
@@ -185,6 +188,7 @@ fn layout_of(read: Layout, body: &str, folds: &[(bool, bool)]) -> BodyLayout {
             depth: line.depth as u32,
             is_folded: folds.get(index).is_some_and(|fold| fold.0),
             has_children: folds.get(index).is_some_and(|fold| fold.1),
+            is_card: cards.get(index).copied().unwrap_or(false),
         })
         .collect();
     let runs = read
@@ -253,6 +257,8 @@ pub enum EditCommand {
     Fold,
     Unfold,
     ToggleFold,
+    /// Shown as the card of what it links to, or as its words again.
+    ToggleCard,
     /// Each row folded, with every row under it that has rows of its own.
     FoldCompletely,
     UnfoldCompletely,
@@ -318,6 +324,7 @@ fn command(command: EditCommand) -> Command {
         EditCommand::Fold => Command::Fold,
         EditCommand::Unfold => Command::Unfold,
         EditCommand::ToggleFold => Command::ToggleFold,
+        EditCommand::ToggleCard => Command::ToggleCard,
         EditCommand::FoldCompletely => Command::FoldCompletely,
         EditCommand::UnfoldCompletely => Command::UnfoldCompletely,
         EditCommand::FoldAll => Command::FoldAll,
@@ -454,7 +461,7 @@ impl NoteEditor {
     /// What the view shows, read for drawing.
     pub fn layout(&self) -> BodyLayout {
         let session = self.session();
-        layout_of(session.layout(), session.text(), &session.row_folds())
+        layout_of(session.layout(), session.text(), &session.row_folds(), &session.row_cards())
     }
 
     /// What was typed, pasted or deleted in the view: a range of what it

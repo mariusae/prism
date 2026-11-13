@@ -200,9 +200,33 @@ public struct EditorBlock: Hashable {
     /// its size, and the note is to be laid out around it again: how a
     /// picture being resized moves what is under it as it goes.
     public var resized: (() -> Void)?
+    /// A card's row shown as its words again: what its menu's Show as
+    /// Link does.
+    public var showAsLink: (() -> Void)?
 
     /// The `info` of a line that is only pictures: one, or several.
     public static let picture = "picture"
+
+    /// The `info` of a row shown as the card of its link (`<!-- card -->`
+    /// in the note). Its `source` says what it links to: `web:` and an
+    /// address, or `page:` and a page's name.
+    public static let card = "card"
+
+    /// What a row's words link to, if they are a link and nothing else —
+    /// `[words](address)`, an address alone, `<address>`, `[[A page]]` —
+    /// as a card's `source` says it; nil for any other words.
+    public static func cardLink(_ words: String) -> String? {
+        let words = words.trimmingCharacters(in: .whitespaces)
+        func whole(_ pattern: String) -> String? {
+            guard let regex = try? NSRegularExpression(pattern: "^" + pattern + "$"),
+                  let match = regex.firstMatch(in: words, range: NSRange(words.startIndex..., in: words)), match.numberOfRanges > 1,
+                  let range = Range(match.range(at: 1), in: words) else { return nil }
+            return String(words[range])
+        }
+        if let page = whole(#"\[\[([^\[\]|]+)(?:\|[^\[\]]*)?\]\]"#) { return "page:" + page }
+        if let address = whole(#"\[[^\]]*\]\((https?://[^\s)]+)\)"#) ?? whole(#"<?(https?://[^\s>]+)>?"#) { return "web:" + address }
+        return nil
+    }
 
     public init(info: String, source: String, rewrite: ((String) -> Void)? = nil) {
         self.info = info

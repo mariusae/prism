@@ -385,6 +385,10 @@ final class RowHands: NSObject, UIGestureRecognizerDelegate, @preconcurrency UIE
             actions.append(command(done ? "Mark Not Done" : "Mark Done", done ? "circle" : "checkmark.circle", .toggleCheckbox, true, false))
         }
         if info.hasChecklist { actions.append(command("Move Done to Bottom", "arrow.down.to.line", .moveDoneToBottom, info.doneToMove, true)) }
+        // A link alone on its row: shown as its card, or as its words.
+        if let isCard = coordinator.linkRowIsCard(row) {
+            actions.append(command(isCard ? "Show as Link" : "Show as Card", isCard ? "link" : "rectangle.on.rectangle", .toggleCard, true, true))
+        }
         actions.append(action("Copy", "doc.on.doc", []) { [weak self] in self?.copy([row]) })
         actions.append(action("Cut", "scissors", []) { [weak self] in
             guard let self, self.copy([row]) else { return }

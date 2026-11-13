@@ -213,8 +213,16 @@ extension NoteEditorView {
                     found.append((EditorBlock(info: info, source: parts.dropFirst().dropLast().joined(separator: "\n")), index...index, range))
                 }
             }
+            // A row shown as the card of its link, its words a link alone: the card, in its place.
+            var cards = Set<Int>()
+            for (index, line) in layout.lines.enumerated() where line.isCard {
+                let range = NSRange(location: Int(line.content), length: max(Int(line.end) - Int(line.content), 0))
+                guard NSMaxRange(range) <= text.length, let link = EditorBlock.cardLink(part(range)) else { continue }
+                cards.insert(index)
+                found.append((EditorBlock(info: EditorBlock.card, source: link), index...index, NSRange(location: Int(line.start), length: Int(line.end - line.start))))
+            }
             // A line that is only pictures — one, or several — in either mode.
-            for (index, line) in layout.lines.enumerated() where line.kind != .fence && line.kind != .code {
+            for (index, line) in layout.lines.enumerated() where line.kind != .fence && line.kind != .code && !cards.contains(index) {
                 let range = NSRange(location: Int(line.content), length: max(Int(line.end) - Int(line.content), 0))
                 guard range.length > 4, NSMaxRange(range) <= text.length else { continue }
                 let words = part(range)
@@ -262,8 +270,12 @@ extension NoteEditorView {
                 let width = max(width - indent, 120)
                 block.room = width
                 block.resized = { [weak self] in self?.restyle() }
+                if block.info == EditorBlock.card {
+                    let row = found.lines.lowerBound
+                    block.showAsLink = { [weak self] in self?.toggleCard(row: row) }
+                }
                 guard !found.lines.contains(where: revealed.contains), let content = parent.blockView(block) else { continue }
-                let key = "\(index)|\(found.block.info)|\(found.block.info == EditorBlock.picture ? found.block.source : "")"
+                let key = "\(index)|\(found.block.info)|\(found.block.info == EditorBlock.picture || found.block.info == EditorBlock.card ? found.block.source : "")"
                 used.insert(key)
                 let host = hosts[key] ?? {
                     let host = BlockHost(in: view)
@@ -480,6 +492,23 @@ extension NoteEditorView {
             guard let edit = editor.moveRows(rows: rows.map { UInt32($0) }, before: UInt32(before), depth: UInt32(depth), selectionStart: UInt32(kept.location), selectionEnd: UInt32(NSMaxRange(kept))) else { return false }
             settle(edit)
             return true
+        }
+
+        /// Of a row of an outline that is a link alone — and so can be shown
+        /// as the link's card — whether it is shown so; nil for any other row.
+        func linkRowIsCard(_ row: Int) -> Bool? {
+            guard !layout.markersInText, layout.lines.indices.contains(row) else { return nil }
+            let line = layout.lines[row]
+            let text = shown as NSString
+            let range = NSRange(location: Int(line.content), length: max(Int(line.end) - Int(line.content), 0))
+            guard NSMaxRange(range) <= text.length, EditorBlock.cardLink(text.substring(with: range)) != nil else { return nil }
+            return line.isCard
+        }
+
+        /// A row shown as its link's card, or as its words again. Says whether it changed.
+        @discardableResult
+        func toggleCard(row: Int) -> Bool {
+            perform(.toggleCard, onRows: [row])
         }
 
         /// Writes other words in place of some of the note's: a link's, renamed.

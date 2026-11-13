@@ -423,6 +423,9 @@ pub enum Command {
     Unfold,
     /// Folded, or — being folded — unfolded.
     ToggleFold,
+    /// Shown as the card of what it links to, or — being shown so — as
+    /// its words again. Only a row that is a link alone is drawn as one.
+    ToggleCard,
     /// Each selected row folded, and every row under it that has rows
     /// under it.
     FoldCompletely,
@@ -744,6 +747,7 @@ pub fn perform(body: &str, selection: Range<usize>, command: Command) -> Option<
         | Command::Fold
         | Command::Unfold
         | Command::ToggleFold
+        | Command::ToggleCard
         | Command::FoldCompletely
         | Command::UnfoldCompletely
         | Command::FoldAll

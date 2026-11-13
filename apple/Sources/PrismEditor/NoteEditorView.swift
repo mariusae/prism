@@ -1067,6 +1067,26 @@ public final class NoteTextView: NSTextView {
         return layout.lines
     }
 
+    /// Right-clicked: the text's own menu, and — on a link alone on its
+    /// row — showing it as its card, or as its words again.
+    public override func menu(for event: NSEvent) -> NSMenu? {
+        let menu = super.menu(for: event) ?? NSMenu()
+        let point = convert(event.locationInWindow, from: nil)
+        let at = characterIndexForInsertion(at: point)
+        guard let row = row(at: at), let isCard = coordinator?.linkRowIsCard(row) else { return menu }
+        let item = NSMenuItem(title: isCard ? "Show as Link" : "Show as Card", action: #selector(toggleCardFromMenu(_:)), keyEquivalent: "")
+        item.target = self
+        item.tag = row
+        item.image = NSImage(systemSymbolName: isCard ? "link" : "rectangle.on.rectangle", accessibilityDescription: nil)
+        menu.insertItem(item, at: 0)
+        menu.insertItem(.separator(), at: 1)
+        return menu
+    }
+
+    @objc private func toggleCardFromMenu(_ item: NSMenuItem) {
+        coordinator?.toggleCard(row: item.tag)
+    }
+
     private func row(at location: Int) -> Int? {
         let lines = outlineLines
         return lines.lastIndex { Int($0.start) <= location } ?? (lines.isEmpty ? nil : 0)

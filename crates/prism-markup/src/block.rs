@@ -164,6 +164,11 @@ pub struct Block {
     /// [`Session`](crate::Session)'s to read and write; held here so
     /// that a block moved, or written in, keeps its name.
     pub anchor: Option<String>,
+    /// Whether the block, a link alone on its line, is shown as the
+    /// card of what it links to. Written after its first line as a
+    /// comment (`<!-- card -->`); like `folded`, an editing
+    /// [`Session`](crate::Session)'s to read and write.
+    pub card: bool,
 }
 
 /// A fenced code block's parts.
@@ -186,7 +191,7 @@ pub struct Callout<'a> {
 
 impl Block {
     pub fn new(kind: BlockKind, text: impl Into<String>) -> Block {
-        Block { kind, text: text.into(), children: Vec::new(), layout: Layout::default(), folded: false, anchor: None }
+        Block { kind, text: text.into(), children: Vec::new(), layout: Layout::default(), folded: false, anchor: None, card: false }
     }
 
     pub fn paragraph(text: impl Into<String>) -> Block {

@@ -373,6 +373,13 @@ struct CardView: View {
                         .onSubmit { finishRenaming() }
                         .onExitCommand { isRenaming = false }
                         .onChange(of: titleFocused) { _, focused in if !focused { finishRenaming() } }
+                } else if let address = linkAddress, LinkNoteHeader.isAvailable(address, cover: linkCover) {
+                    // A link note: headed by the card of the page it keeps.
+                    LinkNoteHeader(address: address, title: draft.title, cover: linkCover, titleFont: titleFont)
+                        .contentShape(Rectangle())
+                        .onTapGesture(count: 2) { startRenaming() }
+                        .onTapGesture { fold() }
+                        .help("Click to fold, double-click to rename")
                 } else {
                     // The icon is the title's first character: on its line, at its edge.
                     HStack(alignment: .firstTextBaseline, spacing: TextSettings.titleSize * 0.3) {
@@ -395,7 +402,19 @@ struct CardView: View {
                 actions
             }
             .frame(minHeight: 30)
+            .task(id: linkAddress) { if let linkAddress { WebCards.shared.look(linkAddress) } }
         }
+    }
+
+    /// The page a link note keeps: its `URL:` row's address; nil for any other note.
+    private var linkAddress: String? {
+        _ = draft.revision
+        return isDay ? nil : ReaderSource.ownAddress(in: draft.markdown)
+    }
+
+    /// The note's own picture for its page, `cover:`.
+    private var linkCover: PlatformImage? {
+        draft.editor.field(key: "cover").flatMap { Pictures.image(at: $0, in: store) }
     }
 
     /// The strip of what is done to a card most.
@@ -464,6 +483,10 @@ struct CardView: View {
                             return AnyView(HStack(alignment: .top, spacing: 8) {
                                 ForEach(Array(pictures.enumerated()), id: \.offset) { _, picture in PictureView(store: store, picture: picture, rewrite: nil, room: each) }
                             })
+                        }
+                        // A link alone on its row, shown as its card.
+                        if block.info == EditorBlock.card {
+                            return AnyView(LinkCardBlock(store: store, source: block.source, open: { follow($0) }, showAsLink: block.showAsLink))
                         }
                         guard block.info == "query" else { return nil }
                         return AnyView(QueryView(store: store, source: block.source, this: draft.title) { page in

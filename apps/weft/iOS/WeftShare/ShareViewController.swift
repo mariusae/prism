@@ -127,6 +127,16 @@ final class ShareViewController: UIViewController {
                 }
             }
         }
+        // A post on a social site, read from the site: its author and its words, not the page's "X".
+        if var post = found, SocialPost.recognizes(post.url) {
+            status.text = "Reading the post…"
+            if let read = await SocialPost.read(post.url) {
+                post.title = read.title
+                post.description = read.text
+                post.author = read.byline
+                found = post
+            }
+        }
         show(found)
     }
 
