@@ -82,6 +82,16 @@ final class PhoneFeaturesTests: XCTestCase {
 
     // MARK: Back places
 
+    func testRowsAtTheTopOfADay() {
+        let rows = "- [Page](https://a.example)\n"
+        // A day of rows: before them.
+        XCTAssertEqual(LinkNote.atTop(rows, of: "- one\n- two\n"), "- [Page](https://a.example)\n- one\n- two\n")
+        // Under frontmatter and a title.
+        XCTAssertEqual(LinkNote.atTop(rows, of: "---\ntags: [a]\n---\n# Day\n\n- one\n"), "---\ntags: [a]\n---\n# Day\n\n- [Page](https://a.example)\n- one\n")
+        // A day with nothing in it yet.
+        XCTAssertEqual(LinkNote.atTop(rows, of: ""), rows)
+    }
+
     func testOneCardOfANote() {
         let river = River()
         let whole = Card(path: "notes/cos.md", title: "Cos")

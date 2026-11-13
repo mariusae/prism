@@ -3,9 +3,10 @@ import UniformTypeIdentifiers
 import WeftShared
 
 /// Share ▸ Weft: a web page kept as a link note — its title, its address,
-/// what it says of itself, what was selected on it — stamped with today.
-/// A card shows what will be kept, its title editable; Save leaves it for
-/// Weft, which makes the note when it next comes to the front.
+/// what it says of itself, what was selected on it — stamped with today;
+/// or, chosen, a row linking to it at the top of today's note. A card
+/// shows what will be kept, its title editable; Save leaves it for Weft,
+/// which keeps it when it next comes to the front.
 final class ShareViewController: UIViewController {
     private let card = UIView()
     private let heading = UILabel()
@@ -13,6 +14,8 @@ final class ShareViewController: UIViewController {
     private let address = UILabel()
     private let about = UILabel()
     private let status = UILabel()
+    /// Where it goes: a note of its own, or the top of today. The last choice, again.
+    private let destination = UISegmentedControl(items: ["New Note", "Today"])
     private let save = UIButton(type: .system)
     private let cancel = UIButton(type: .system)
     private var page: SharedPages.Page?
@@ -72,7 +75,14 @@ final class ShareViewController: UIViewController {
         cancel.addAction(UIAction { [weak self] _ in self?.close(cancelled: true) }, for: .touchUpInside)
 
         let buttons = UIStackView(arrangedSubviews: [cancel, UIView(), save])
-        let stack = UIStackView(arrangedSubviews: [heading, titleField, address, about, status, buttons])
+        destination.selectedSegmentIndex = SharedPages.lastDestination == .today ? 1 : 0
+        destination.addAction(UIAction { [weak self] _ in
+            guard let self else { return }
+            SharedPages.lastDestination = isToday ? .today : .note
+            describe()
+        }, for: .valueChanged)
+
+        let stack = UIStackView(arrangedSubviews: [heading, titleField, address, about, destination, status, buttons])
         stack.axis = .vertical
         stack.spacing = 10
         stack.setCustomSpacing(18, after: status)
@@ -127,14 +137,27 @@ final class ShareViewController: UIViewController {
             titleField.isHidden = true
             address.isHidden = true
             about.isHidden = true
+            destination.isHidden = true
             return
         }
         titleField.text = found.title.trimmingCharacters(in: .whitespacesAndNewlines)
         address.text = found.url
         about.text = found.selection.isEmpty ? found.description : "“\(found.selection)”"
         about.isHidden = about.text?.isEmpty ?? true
-        status.text = found.selection.isEmpty ? "Kept as a link note, stamped with today." : "Kept as a link note with this highlight, stamped with today."
+        describe()
         save.isEnabled = true
+    }
+
+    private var isToday: Bool { destination.selectedSegmentIndex == 1 }
+
+    /// What saving will do, as chosen.
+    private func describe() {
+        guard let page else { return }
+        if isToday {
+            status.text = page.selection.isEmpty ? "Added to the top of today, as a link." : "Added to the top of today, as a link, this highlight under it."
+        } else {
+            status.text = page.selection.isEmpty ? "Kept as a link note to read, stamped with today." : "Kept as a link note to read, with this highlight, stamped with today."
+        }
     }
 
     // MARK: Keeping it
@@ -143,6 +166,7 @@ final class ShareViewController: UIViewController {
         guard var page else { return }
         page.title = titleField.text?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         page.shared = Date()
+        page.destination = isToday ? .today : .note
         do {
             try SharedPages.leave(page)
         } catch {

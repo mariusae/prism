@@ -17,14 +17,31 @@ public enum SharedPages {
         public var description: String
         public var selection: String
         public var shared: Date
+        /// Where it goes: a link note of its own, or a row at the top of
+        /// the day it was shared. Kept before there was a choice: a note.
+        public var destination: Destination?
 
-        public init(url: String, title: String, description: String = "", selection: String = "", shared: Date = Date()) {
+        public init(url: String, title: String, description: String = "", selection: String = "", shared: Date = Date(), destination: Destination = .note) {
             self.url = url
             self.title = title
             self.description = description
             self.selection = selection
             self.shared = shared
+            self.destination = destination
         }
+    }
+
+    public enum Destination: String, Codable, Sendable {
+        /// A link note, stamped with the day, in the inbox to be read.
+        case note
+        /// A row linking to the page at the top of the day's note, what was selected under it.
+        case today
+    }
+
+    /// Where the last page shared went: where the next goes, unless changed.
+    public static var lastDestination: Destination {
+        get { UserDefaults(suiteName: group)?.string(forKey: "ShareDestination").flatMap(Destination.init(rawValue:)) ?? .note }
+        set { UserDefaults(suiteName: group)?.set(newValue.rawValue, forKey: "ShareDestination") }
     }
 
     /// Where pages wait, or nil where the app group is not to be had.

@@ -16,14 +16,36 @@ extension GraphStore {
     public func takeSharedPages() -> Int {
         var taken = 0
         for (page, file) in SharedPages.waiting() {
-            guard let path = linkNote(for: page) else { continue }
-            SharedPages.taken(file)
-            river.open(Card(path: path, title: LinkNote.title(page.title, url: page.url)), after: river.selected)
+            if page.destination == .today {
+                guard let day = addToDay(page) else { continue }
+                SharedPages.taken(file)
+                river.open(Card(path: day, title: Days.name(page.shared)), after: river.selected)
+            } else {
+                guard let path = linkNote(for: page) else { continue }
+                SharedPages.taken(file)
+                river.open(Card(path: path, title: LinkNote.title(page.title, url: page.url)), after: river.selected)
+            }
             taken += 1
         }
         if taken > 0 { rememberRivers() }
         if taken > 0 { note("share", "Took in \(taken) shared page\(taken == 1 ? "" : "s")") }
         return taken
+    }
+
+    /// A page shared to the day: a row linking to it at the top of the
+    /// day's note — what was selected on it a row under it. The day's path.
+    private func addToDay(_ page: SharedPages.Page) -> String? {
+        let path = engine.pathForTitle(title: Days.name(page.shared))
+        // What is being written in it is written first: the file is what is added to.
+        openDraft(path: path)?.saveNow()
+        let text = ((try? engine.read(path: path)) ?? nil) ?? ""
+        let title = LinkNote.title(page.title, url: page.url)
+        var rows = "- [\(title)](\(page.url))\n"
+        let selected = page.selection.components(separatedBy: .newlines).map { $0.trimmingCharacters(in: .whitespaces) }.filter { !$0.isEmpty }
+        if !selected.isEmpty { rows += "  - " + selected.joined(separator: " ") + "\n" }
+        guard (try? engine.write(path: path, content: LinkNote.atTop(rows, of: text))) != nil else { return nil }
+        openDraft(path: path)?.fileChanged()
+        return path
     }
 
     /// The link note for a page shared — made, or found and stamped. Its path.
@@ -53,6 +75,25 @@ extension GraphStore {
 
 /// A web page's note, as the graph's link notes are written.
 enum LinkNote {
+    /// Rows put at the top of a note's body: under its frontmatter and its
+    /// title, if it has them, and before what it says.
+    static func atTop(_ rows: String, of text: String) -> String {
+        var lines = text.components(separatedBy: "\n")
+        var at = 0
+        if lines.first == "---", let close = lines.dropFirst().firstIndex(of: "---") { at = close + 1 }
+        while at < lines.count, lines[at].trimmingCharacters(in: .whitespaces).isEmpty { at += 1 }
+        if at < lines.count, lines[at].hasPrefix("# ") {
+            at += 1
+            while at < lines.count, lines[at].trimmingCharacters(in: .whitespaces).isEmpty { at += 1 }
+        }
+        if at >= lines.count || text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            let kept = text.trimmingCharacters(in: .whitespacesAndNewlines)
+            return kept.isEmpty ? rows : kept + "\n\n" + rows
+        }
+        lines.insert(contentsOf: rows.split(separator: "\n", omittingEmptySubsequences: false).dropLast().map(String.init), at: at)
+        return lines.joined(separator: "\n")
+    }
+
     /// The note's id: `link-` and the SHA-256 of the address, as the
     /// graph's other link notes have it.
     static func id(for url: String) -> String {
