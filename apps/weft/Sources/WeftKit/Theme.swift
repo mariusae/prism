@@ -68,7 +68,7 @@ public enum Measures {
     public static let xs: CGFloat = 4, s: CGFloat = 8, m: CGFloat = 12, l: CGFloat = 16, xl: CGFloat = 20
     public static let controlRadius: CGFloat = 6
     #if os(macOS)
-    public static let cardRadius: CGFloat = 12
+    public static let cardRadius: CGFloat = 10
     /// Margin and gutter: a card's words start at their sum.
     public static let margin: CGFloat = 24, gutter: CGFloat = 24
     public static let cardTrailing: CGFloat = 20
@@ -80,7 +80,7 @@ public enum Measures {
     public static let riverSides: CGFloat = 46, riverEnds: CGFloat = 16
     public static let partGap: CGFloat = 8
     #else
-    public static let cardRadius: CGFloat = 14
+    public static let cardRadius: CGFloat = 11
     public static let margin: CGFloat = 0, gutter: CGFloat = 16
     public static let cardTrailing: CGFloat = 16
     public static let cardGap: CGFloat = 22, foldedGap: CGFloat = 11

@@ -16,13 +16,21 @@ final class LinkLabel: NSObject {
 }
 
 final class Pill: NSObject {
+    /// An icon before the words: an internal link's page's own.
     let symbol: String?
     let tint: EditorColor
     let isMissing: Bool
-    init(symbol: String?, tint: EditorColor, isMissing: Bool) {
+    /// A small ↗ after the words: a link that leaves the graph.
+    let leaves: Bool
+    /// Whether the room for the ↗ is on the link's own last character — an
+    /// address written bare — and so inside what its words take.
+    let roomInside: Bool
+    init(symbol: String?, tint: EditorColor, isMissing: Bool, leaves: Bool = false, roomInside: Bool = false) {
         self.symbol = symbol
         self.tint = tint
         self.isMissing = isMissing
+        self.leaves = leaves
+        self.roomInside = roomInside
     }
 }
 
@@ -77,14 +85,18 @@ struct BodyStyler {
     var linkIcon: (String) -> String? = { _ in nil }
 
     static let hiddenFont = EditorFont.systemFont(ofSize: 0.1)
-    static let headingScales: [CGFloat] = [1.45, 1.25, 1.12, 1.05, 1, 1]
+    /// A note's first heading is its own; those under it are structure, and read
+    /// as a section's name — at the body's size, set apart by weight and room.
+    static let headingScales: [CGFloat] = [1.3, 1.02, 1, 1, 0.95, 0.95]
     /// How far each level of a list written as text is set in.
     static let levelIndent: CGFloat = 20
 
     var size: CGFloat { theme.size }
     var iconSide: CGFloat { (size * 0.72).rounded() }
     /// The room before a pill's words for its icon.
-    var leadWidth: CGFloat { 4 + iconSide + 3 }
+    var leadWidth: CGFloat { iconSide + 5 }
+    /// The room a ↗ after a link takes, with the space before it.
+    var arrowRoom: CGFloat { (size * 0.7).rounded() + 3 }
     var taskRoom: CGFloat { (size * 1.5).rounded(.up) }
 
     var baseAttributes: [NSAttributedString.Key: Any] {
@@ -216,7 +228,8 @@ struct BodyStyler {
             case .pageLink(let target, _):
                 let isRiver = riverName(linkTarget: target) != nil
                 let missing = !isRiver && !pageExists(target)
-                let symbol = isRiver ? "square.stack" : (linkIcon(target) ?? (isDate(target) ? "calendar" : "doc.text"))
+                // Its icon before it only where the page has one of its own — a day's is the calendar.
+                let symbol = isRiver ? "square.stack" : (linkIcon(target) ?? (isDate(target) ? "calendar" : nil))
                 link(storage, range, to: .page(target), symbol: symbol, missing: missing, line: line, shown: shown, markupEnd: markupEnd)
                 // A link written with its page's file's name shows the page's title — off the lines being written in.
                 if !shown, !isRiver, (storage.string as NSString).substring(with: range) == target, let label = linkLabel(target) {
@@ -225,7 +238,7 @@ struct BodyStyler {
             case .webLink(let url):
                 // An address shown as itself is cut to what says where it leads.
                 let bare = (storage.string as NSString).substring(with: range) == url
-                link(storage, range, to: .web(url), symbol: markupEnds.contains(range.location) || bare ? "link" : nil, missing: false, line: line, shown: shown, markupEnd: markupEnd)
+                link(storage, range, to: .web(url), symbol: nil, missing: false, line: line, shown: shown, markupEnd: markupEnd, leaves: true)
                 if bare, !shown { shorten(storage, range, address: url as NSString, lead: range.location == Int(line.start)) }
             case .tag(let name):
                 link(storage, range, to: .tag(name), symbol: nil, missing: false, line: line, shown: shown, markupEnd: markupEnd)
@@ -296,7 +309,7 @@ struct BodyStyler {
         }
     }
 
-    private func link(_ storage: NSTextStorage, _ range: NSRange, to target: EditorLink, symbol: String?, missing: Bool, line: BodyLine, shown: Bool, markupEnd: [Int: Int]) {
+    private func link(_ storage: NSTextStorage, _ range: NSRange, to target: EditorLink, symbol: String?, missing: Bool, line: BodyLine, shown: Bool, markupEnd: [Int: Int], leaves: Bool = false) {
         let tint = missing ? theme.secondary : theme.accent
         storage.addAttributes([.foregroundColor: tint, .prismLink: LinkBox(target)], range: range)
         if missing {
@@ -314,14 +327,19 @@ struct BodyStyler {
             }
             return
         }
-        storage.addAttribute(.prismPill, value: Pill(symbol: symbol, tint: tint, isMissing: missing), range: range)
+        let closes = markupEnd[NSMaxRange(range)].map { $0 > NSMaxRange(range) } ?? false
+        storage.addAttribute(.prismPill, value: Pill(symbol: symbol, tint: tint, isMissing: missing, leaves: leaves, roomInside: leaves && !closes), range: range)
         // Room for the icon, on the last character of the markup before the words…
         if symbol != nil, range.location > Int(line.start) {
             storage.addAttribute(.kern, value: leadWidth, range: NSRange(location: range.location - 1, length: 1))
         }
-        // …and a little after them, on the last of the markup that closes.
+        // …and after them, for the ↗ of a link that leaves: on the last of the
+        // markup that closes, or — an address written bare — its own last character.
+        let after = leaves ? arrowRoom : 0
         if let end = markupEnd[NSMaxRange(range)], end > NSMaxRange(range) {
-            storage.addAttribute(.kern, value: CGFloat(3), range: NSRange(location: end - 1, length: 1))
+            storage.addAttribute(.kern, value: after, range: NSRange(location: end - 1, length: 1))
+        } else if leaves, range.length > 0 {
+            storage.addAttribute(.kern, value: after, range: NSRange(location: NSMaxRange(range) - 1, length: 1))
         }
     }
 
@@ -599,6 +617,9 @@ final class BodyLayoutManager: NSLayoutManager {
         // An outline's marks, beside the rows being drawn.
         for row in rows where Int(row.start) <= NSMaxRange(characters) && Int(row.end) >= characters.location {
             guard case .item(let number, let done, let bullet) = row.kind, let line = firstLine(of: row) else { continue }
+            // A plain row with nothing in it is where words will go while the note is
+            // written in; read, it is nothing — no bullet left standing on its own.
+            if row.end <= row.start, done == nil, number == nil, !row.hasChildren, !isWriting, !(lead != nil && leadStart == Int(row.start)) { continue }
             let box = markBox(of: row, on: line).offsetBy(dx: origin.x, dy: origin.y)
             let baseline = line.baseline + origin.y
             if let lead, leadStart == Int(row.start), done == nil, number == nil {
@@ -626,9 +647,9 @@ final class BodyLayoutManager: NSLayoutManager {
         storage.enumerateAttribute(.prismPill, in: characters) { value, range, _ in
             guard let pill = value as? Pill else { return }
             let glyphs = glyphRange(forCharacterRange: range, actualCharacterRange: nil)
-            let pad: CGFloat = pill.symbol == nil ? 3 : 1
             let side = (size * 0.72).rounded()
             var first = true
+            var last: (rect: CGRect, baseline: CGFloat)?
             enumerateEnclosingRects(forGlyphRange: glyphs, withinSelectedGlyphRange: NSRange(location: NSNotFound, length: 0), in: container) { whole, _ in
                 var rect = whole
                 // What of a link's hidden name fell onto another line is nothing to draw around.
@@ -646,16 +667,22 @@ final class BodyLayoutManager: NSLayoutManager {
                 // The icon's room is before the link — but for one that opens its line, whose room is
                 // its own first, hidden characters': there the pill begins where the line does.
                 let opens = range.location == 0 || (storage.string as NSString).character(at: range.location - 1) == 10
-                let lead: CGFloat = first && pill.symbol != nil && !opens ? side + 6 : 0
-                let box = CGRect(x: rect.minX - pad - lead, y: baseline - font.ascender.rounded(.up) - 2, width: rect.width + 2 * pad + lead, height: font.ascender.rounded(.up) + (-font.descender).rounded(.up) + 4)
-                    .offsetBy(dx: origin.x, dy: origin.y)
-                pill.tint.withAlphaComponent(pill.isMissing ? 0.10 : 0.12).setFill()
-                Self.roundedPath(box, radius: 5).fill()
+                // Nothing behind a link: its colour says it is one. Its page's icon before it…
                 if first, let symbol = pill.symbol {
-                    let icon = CGRect(x: box.minX + 4, y: box.midY - side / 2, width: side, height: side)
-                    Self.draw(symbol: symbol, in: icon, pointSize: side * 0.9, weight: .medium, colors: [pill.tint])
+                    let x = opens ? rect.minX - side - 5 : rect.minX - side - 5
+                    let icon = CGRect(x: x, y: baseline - font.xHeight / 2 - side / 2, width: side, height: side).offsetBy(dx: origin.x, dy: origin.y)
+                    Self.draw(symbol: symbol, in: icon, pointSize: side * 0.9, weight: .regular, colors: [pill.tint.withAlphaComponent(0.85)])
                 }
+                last = (rect, baseline)
                 first = false
+            }
+            // …and after one that leaves the graph, a small ↗, faint.
+            if pill.leaves, let last {
+                let side = (size * 0.7).rounded()
+                let x = (pill.roomInside ? last.rect.maxX - (side + 3) : last.rect.maxX) + 2
+                // Its middle a little over the words' middle: raised, as a mark after a word is.
+                let mark = CGRect(x: x, y: last.baseline - font.xHeight * 0.75 - side / 2, width: side, height: side).offsetBy(dx: origin.x, dy: origin.y)
+                Self.draw(symbol: "arrow.up.right", in: mark, pointSize: side * 0.8, weight: .regular, colors: [pill.tint.withAlphaComponent(0.7)])
             }
         }
 

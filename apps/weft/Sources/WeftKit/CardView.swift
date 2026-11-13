@@ -25,13 +25,6 @@ struct CardView: View {
     @State private var tags: [String] = []
     /// The pointer over the strip of actions at an untitled note's corner.
     @State private var overCorner = false
-    /// The pile of pages that link here, fanned out under the pointer.
-    // WEFT_FAN=1, to picture it: fanned from the first.
-    @State private var fanned = ProcessInfo.processInfo.environment["WEFT_FAN"]?.isEmpty == false
-    @State private var pileHovered = false
-    @State private var fanHovered = false
-    /// How long the line of pages that link here is.
-    @State private var mentionsWidth: CGFloat = 600
     @FocusState private var titleFocused: Bool
 
     init(store: GraphStore, river: River, card: Card) {
@@ -133,7 +126,7 @@ struct CardView: View {
         .background(RoundedRectangle(cornerRadius: Measures.cardRadius, style: .continuous).fill(card.folded ? Color.inkPaper : Color.inkCard))
         .overlay(
             RoundedRectangle(cornerRadius: Measures.cardRadius, style: .continuous)
-                .strokeBorder(isSelected ? Color.inkAccent.opacity(0.85) : Color.inkRule, lineWidth: isSelected ? 1.5 : 1)
+                .strokeBorder(isSelected ? Color.inkAccent.opacity(0.5) : Color.inkRule, lineWidth: 1)
         )
         .shadow(color: .black.opacity(card.folded ? 0.03 : 0.07), radius: card.folded ? 4 : 10, y: card.folded ? 1 : 3)
         .contentShape(Rectangle())
@@ -428,25 +421,13 @@ struct CardView: View {
                 CardButton("chevron.left", help: "The Day Before") { step(-1) }
                 CardButton("chevron.right", help: "The Day After") { step(1) }
             }
-            if !card.folded {
-                CardButton(draft.mode == .outline ? "text.alignleft" : "list.bullet.indent", help: draft.mode == .outline ? "Write as Text (⌥⌘↩)" : "Write as an Outline (⌥⌘↩)") {
-                    draft.setMode(draft.mode == .outline ? .text : .outline)
-                }
-            }
-            if draft.exists, !isDay {
-                CardButton(draft.isMarked("pinned") ? "pin.fill" : "pin", help: draft.isMarked("pinned") ? "Unpin" : "Pin", isOn: draft.isMarked("pinned")) { draft.toggleMark("pinned") }
-                CardButton(draft.isMarked("inbox") ? "tray.fill" : "tray.and.arrow.down", help: draft.isMarked("inbox") ? "Done with It" : "Add to Inbox", isOn: draft.isMarked("inbox")) {
-                    draft.toggleMark("inbox")
-                }
-            }
+            // Few, and quiet: writing as text or an outline, pinning, the inbox and deleting are under "…".
             Menu { menu } label: { CardButtonFace(symbol: "ellipsis") }
                 .menuStyle(.button)
                 .buttonStyle(.plain)
                 .menuIndicator(.hidden)
                 .fixedSize()
                 .help("More")
-            // Deleted at once, and for a few seconds undone as easily: nothing asks.
-            if draft.exists { CardButton("trash", help: "Delete Note (⌘⌫)") { withAnimation(.snappy(duration: 0.28)) { store.delete(card.id, in: river) } } }
             CardButton("xmark", help: "Close (⌘W)") { withAnimation(.snappy(duration: 0.28)) { close() } }
         }
         .opacity(showsActions ? 1 : 0)
@@ -568,107 +549,14 @@ struct CardView: View {
         }
     }
 
-    /// The pages that link here, on one line: as many as it holds, and the
-    /// rest piled at its end — fanned out over the card under the pointer.
+    /// The pages that link here: one line of quiet text, each name a way there.
     private var mentions: some View {
         row {
-            let label = "Linked from"
-            let room = mentionsWidth - Self.width(of: label, size: 11) - 18
-            let widths = backlinks.map { Self.pillWidth($0.title, emblem: $0.emblem) }
-            let fit = Self.fitting(widths, in: room)
-            let shown = fit.whole + (fit.cut == nil ? 0 : 1)
-            HStack(spacing: 6) {
-                // Clicked: a river of every page that speaks of this one, each showing where.
-                Button { withAnimation(.snappy(duration: 0.24)) { store.openMentions(of: card.path) } } label: {
-                    HStack(spacing: 3) {
-                        Text(label)
-                        Image(systemName: "arrow.up.right").font(.system(size: 8, weight: .bold))
-                    }
-                    .font(.caption)
-                    .foregroundStyle(Color.inkSecondary)
-                    .padding(.vertical, 3)
-                    .contentShape(Rectangle())
-                }
-                .buttonStyle(.plain)
-                .hint("Every Mention, as a River")
-                .fixedSize()
-                ForEach(backlinks.prefix(fit.whole), id: \.self) { source in
-                    FootPill(title: source.title, emblem: source.emblem, tint: Color.inkSecondary) { openMention(source) }
-                        .fixedSize()
-                }
-                // The next, cut short to the room left: better read in part than not at all.
-                if let cut = fit.cut {
-                    let source = backlinks[fit.whole]
-                    FootPill(title: source.title, emblem: source.emblem, tint: Color.inkSecondary) { openMention(source) }
-                        .frame(maxWidth: cut, alignment: .leading)
-                        .help(source.title)
-                }
-                if shown < backlinks.count {
-                    let rest = Array(backlinks.dropFirst(shown))
-                    BacklinkPile(sources: rest.map { ($0.title, $0.emblem) })
-                        .onHover { inside in pileHovered = inside; settleFan() }
-                        // Fanned out of the pile, over everything — the cards around it too: each, to be clicked.
-                        .popover(isPresented: Binding(get: { fanned }, set: { if !$0 { fanned = false } }), arrowEdge: .top) {
-                            VStack(alignment: .leading, spacing: 4) {
-                                ForEach(rest, id: \.self) { source in
-                                    FootPill(title: source.title, emblem: source.emblem, tint: Color.inkSecondary) {
-                                        fanned = false
-                                        openMention(source)
-                                    }
-                                    .fixedSize()
-                                }
-                            }
-                            .padding(10)
-                            .onHover { inside in fanHovered = inside; settleFan() }
-                        }
-                        .zIndex(1)
-                }
-            }
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .onGeometryChange(for: CGFloat.self) { $0.size.width.rounded() } action: { mentionsWidth = $0 }
+            MentionLine(titles: backlinks.map(\.title), open: { openMention(backlinks[$0]) }, openAll: {
+                withAnimation(.snappy(duration: 0.24)) { store.openMentions(of: card.path) }
+            })
             .padding(.top, tags.isEmpty && draft.related.isEmpty ? 4 : 0)
         }
-        .zIndex(1)
-    }
-
-    /// Open while the pointer is on the pile or on what fanned out of it; shut
-    /// a moment after it leaves both, so that it can pass from one to the other.
-    private func settleFan() {
-        if pileHovered || fanHovered {
-            if !fanned { withAnimation(.snappy(duration: 0.22)) { fanned = true } }
-            return
-        }
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.18) {
-            if !pileHovered, !fanHovered, fanned { withAnimation(.snappy(duration: 0.18)) { fanned = false } }
-        }
-    }
-
-    /// How wide words are, in the system's face at a size.
-    private static func width(of words: String, size: CGFloat) -> CGFloat {
-        ceil((words as NSString).size(withAttributes: [.font: NSFont.systemFont(ofSize: size)]).width)
-    }
-
-    /// How wide a pill at a card's foot is: its words, its icon, its padding.
-    private static func pillWidth(_ title: String, emblem: Emblem) -> CGFloat {
-        width(of: emblem.caption(title), size: 12) + (emblem.isShown ? 15 : 0) + 14
-    }
-
-    /// How many of pills so wide fit in a line so long — leaving room, if
-    /// any are left over, for the pile they are put in.
-    private static func fitting(_ widths: [CGFloat], in room: CGFloat) -> (whole: Int, cut: CGFloat?) {
-        let pile: CGFloat = 92, gap: CGFloat = 6
-        var used: CGFloat = 0
-        for (index, width) in widths.enumerated() {
-            let next = used + width + gap
-            let left = index + 1 < widths.count
-            if next + (left ? pile : 0) > room {
-                // What room is left, if a pill cut short is still worth reading there.
-                let leftover = room - used - gap - (left ? pile : 0)
-                return (index, leftover >= 80 ? leftover : nil)
-            }
-            used = next
-        }
-        return (widths.count, nil)
     }
 
     /// A page that links here, opened after this card — showing where it does.
@@ -941,39 +829,6 @@ struct CardButtonFace: View {
             // An arrow over a button, though the note's text lies under it.
             .onContinuousHover { phase in if case .active = phase { NSCursor.arrow.set() } }
             .animation(.easeOut(duration: 0.1), value: isHovered)
-    }
-}
-
-/// Many pages that link to a note, piled: a few pills, each a little
-/// behind and turned from the last, and how many there are.
-struct BacklinkPile: View {
-    let sources: [(title: String, emblem: Emblem)]
-
-    var body: some View {
-        HStack(spacing: 8) {
-            ZStack(alignment: .leading) {
-                ForEach(Array(sources.prefix(3).enumerated().reversed()), id: \.offset) { index, source in
-                    HStack(spacing: 3) {
-                        if source.emblem.isShown { EmblemView(source.emblem, size: 12, style: .plain, quiet: Color.inkSecondary) }
-                        Text(source.emblem.caption(source.title)).font(.system(size: 12)).lineLimit(1)
-                    }
-                    .frame(maxWidth: 140, alignment: .leading)
-                    .padding(.horizontal, 7)
-                    .padding(.vertical, 2.5)
-                    .foregroundStyle(Color.inkSecondary)
-                    .background(Capsule().fill(Color.inkCard))
-                    .background(Capsule().fill(Color.inkSecondary.opacity(0.10)))
-                    .overlay(Capsule().strokeBorder(Color.inkRule, lineWidth: 0.5))
-                    .rotationEffect(.degrees(Double(index) * -3), anchor: .bottomLeading)
-                    .offset(x: CGFloat(index) * 9, y: CGFloat(index) * -1.5)
-                    .opacity(1 - Double(index) * 0.18)
-                }
-            }
-            .padding(.trailing, 18)
-            Text("+\(sources.count)").font(.caption.monospacedDigit().weight(.semibold)).foregroundStyle(Color.inkSecondary)
-        }
-        .contentShape(Rectangle())
-        .help("\(sources.count) more pages link here")
     }
 }
 
