@@ -364,62 +364,6 @@ pub struct BodyRowInfo {
     pub can_move_down: bool,
 }
 
-/// A time block starting at a row of an outline: what is drawn there.
-/// See `prism_markup::time`.
-#[derive(Debug, Clone, PartialEq, uniffi::Record)]
-pub struct BodyTimeHead {
-    /// Which timeline, and which of its blocks.
-    pub timeline: u32,
-    pub index: u32,
-    /// How deep its timeline is within others.
-    pub level: u32,
-    /// Minutes from midnight.
-    pub start: u32,
-    pub end: u32,
-    /// `9:00 – 10:30 · 1h 30m`.
-    pub label: String,
-    /// `overlaps Offsite 30m`, when it starts before an earlier one
-    /// ends; and, where that is too long, `30m overlap`.
-    pub overlap: Option<String>,
-    pub overlap_short: Option<String>,
-    /// Where its time is written in what the view shows, with what
-    /// parts it from the words, in UTF-16: hidden where the label is
-    /// drawn instead.
-    pub stamp_start: u32,
-    pub stamp_end: u32,
-    /// The block's last row, and the next block's first.
-    pub last_row: u32,
-    pub next_row: Option<u32>,
-    pub is_done: bool,
-}
-
-/// A time block ending at a row: the room after it.
-#[derive(Debug, Clone, PartialEq, uniffi::Record)]
-pub struct BodyTimeFoot {
-    pub timeline: u32,
-    pub index: u32,
-    pub level: u32,
-    /// Room for its length, in rows.
-    pub length: f64,
-    /// Free time after it, before the next: its minutes, its room in
-    /// rows, and what it says — `2h free`.
-    pub free: u32,
-    pub free_length: f64,
-    pub free_label: Option<String>,
-    /// Whether it is its timeline's last: there the line ends.
-    pub is_last: bool,
-}
-
-/// What an outline draws of a timeline at one of its rows.
-#[derive(Debug, Clone, PartialEq, uniffi::Record)]
-pub struct BodyTimeMark {
-    /// The row, counted among the body's lines.
-    pub row: u32,
-    pub head: Option<BodyTimeHead>,
-    /// Innermost first.
-    pub feet: Vec<BodyTimeFoot>,
-}
-
 /// A text that is a web or mail address and nothing else, trimmed: what,
 /// pasted onto words, links them. `nil` for any other text.
 #[uniffi::export]
@@ -596,63 +540,6 @@ impl NoteEditor {
         self.session().markdown_of(&rows)
     }
 
-    /// A new time block where the caret is: from `now` — minutes from
-    /// midnight, on the clock of whoever asks — for a quarter of an hour,
-    /// put where its time goes among those there. The caret is left after
-    /// its time. `nil` as text.
-    pub fn new_time_block(&self, selection_start: u32, selection_end: u32, now: u32) -> Option<BodyEdit> {
-        self.changing(|session, offsets| {
-            session.perform(offsets.to8(selection_start)..offsets.to8(selection_end.max(selection_start)), Command::NewTimeBlock { now: now % (24 * 60) })
-        })
-    }
-
-    /// What an outline draws of its timelines — lists whose every item
-    /// starts with a time — row by row. `twelve_hour` says how the labels
-    /// tell the time. Empty as text.
-    pub fn time_marks(&self, twelve_hour: bool) -> Vec<BodyTimeMark> {
-        let session = self.session();
-        let marks = session.time_marks(twelve_hour);
-        if marks.is_empty() {
-            return Vec::new();
-        }
-        let offsets = Offsets::of(session.text());
-        marks
-            .into_iter()
-            .map(|mark| BodyTimeMark {
-                row: mark.row as u32,
-                head: mark.head.map(|head| BodyTimeHead {
-                    timeline: head.timeline as u32,
-                    index: head.index as u32,
-                    level: head.level as u32,
-                    start: head.start,
-                    end: head.end,
-                    label: head.label,
-                    overlap: head.overlap,
-                    overlap_short: head.overlap_short,
-                    stamp_start: offsets.to16(head.stamp.start),
-                    stamp_end: offsets.to16(head.stamp.end),
-                    last_row: head.last_row as u32,
-                    next_row: head.next_row.map(|row| row as u32),
-                    is_done: head.done,
-                }),
-                feet: mark
-                    .feet
-                    .into_iter()
-                    .map(|foot| BodyTimeFoot {
-                        timeline: foot.timeline as u32,
-                        index: foot.index as u32,
-                        level: foot.level as u32,
-                        length: foot.length,
-                        free: foot.free,
-                        free_length: foot.free_length,
-                        free_label: foot.free_label,
-                        is_last: foot.is_last,
-                    })
-                    .collect(),
-            })
-            .collect()
-    }
-
     /// Links the words selected to an address — `[words](address)` — or
     /// points the link they are the words of there: what pasting an
     /// address onto words does. `nil` when nothing is selected, when the
@@ -695,6 +582,21 @@ impl NoteEditor {
     /// such a row; if not, the whole note is shown.
     pub fn set_focus(&self, name: Option<String>) -> bool {
         self.session().set_focus(name.as_deref())
+    }
+
+    /// Shows only where a page is spoken of: the first row that links to
+    /// it by any of `names` — its file's name, its title, its aliases —
+    /// with what is under that row. Nothing is named, and nothing in the
+    /// note changes. Says whether there was such a row; if not, the whole
+    /// note is shown.
+    pub fn focus_on_links(&self, names: Vec<String>) -> bool {
+        self.session().focus_on_links(&names)
+    }
+
+    /// Shows only the smallest row that holds every place one of `words`
+    /// is said. Says whether there was one smaller than the note.
+    pub fn focus_on_words(&self, words: Vec<String>) -> bool {
+        self.session().focus_on_words(&words)
     }
 
     /// The name of the row focused on, when one is.
@@ -916,7 +818,7 @@ mod tests {
     }
 
     #[test]
-    fn rows_fold_move_and_tell_the_time_in_the_views_own_offsets() {
+    fn rows_fold_and_move_in_the_views_own_offsets() {
         let editor = NoteEditor::open("- 🚀 one\n  - 9:00–9:30 two\n  - 10:00 three\n- last\n".into(), EditorMode::Outline);
         // Folded from elsewhere: the caret, in "last", stays in its word.
         let caret = editor.text().encode_utf16().count() as u32 - 2;
@@ -928,17 +830,10 @@ mod tests {
         assert_eq!(editor.row_info(0).map(|info| (info.is_folded, info.hidden, info.can_move_down)), Some((true, 2, true)));
         assert!(!editor.set_folded_rows(editor.folded_rows()) && editor.set_folded_rows(Vec::new()));
         assert_eq!(editor.text().lines().count(), 4);
-        // A timeline's marks, where the time is written in UTF-16: after the rocket's two units.
-        let marks = editor.time_marks(false);
-        let head = marks[0].head.clone().unwrap();
-        assert_eq!((marks[0].row, head.label.as_str(), head.stamp_start, head.stamp_end), (1, "9:00 – 9:30 · 30m", 7, 17));
-        // Carried to the top; copied; a time block made; an address pasted on a word.
+        // Carried to the top; copied; an address pasted on a word.
         assert_eq!(editor.drop_depth(vec![3], 0, 4), Some(0));
         editor.move_rows(vec![3], 0, 0, 0, 0).unwrap();
         assert_eq!(editor.markdown_of(vec![0, 1]), "- last\n- 🚀 one\n  - 9:00–9:30 two\n  - 10:00 three\n");
-        let end = editor.text().encode_utf16().count() as u32;
-        editor.new_time_block(end, end, 12 * 60 + 3).unwrap();
-        assert!(editor.markdown().ends_with("  - 10:00 three\n  - 12:00–12:15 \n"), "{}", editor.markdown());
         assert_eq!(web_address(" https://example.com ".into()).as_deref(), Some("https://example.com"));
         let edit = editor.link(0, 4, "https://example.com".into()).unwrap();
         assert!(editor.text().starts_with("[last](https://example.com)\n") && edit.selection_start == 27);

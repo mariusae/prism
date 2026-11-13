@@ -438,13 +438,6 @@ pub enum Command {
     MoveDoneToBottom,
     /// Made a row of this kind, whatever it was.
     Turn(RowKind),
-    /// A new time block, from `now` — minutes from midnight, on the
-    /// clock of whoever asks — for a quarter of an hour: see
-    /// [`time::new_block`](crate::time::new_block). The caret is left
-    /// after its time.
-    NewTimeBlock {
-        now: u32,
-    },
 }
 
 /// A kind a row can be turned into.
@@ -757,8 +750,7 @@ pub fn perform(body: &str, selection: Range<usize>, command: Command) -> Option<
         | Command::UnfoldAll
         | Command::MarkDone
         | Command::MoveDoneToBottom
-        | Command::Turn(_)
-        | Command::NewTimeBlock { .. } => None,
+        | Command::Turn(_) => None,
     }
 }
 

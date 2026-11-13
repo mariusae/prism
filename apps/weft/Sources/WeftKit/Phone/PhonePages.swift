@@ -364,6 +364,8 @@ struct RiverOverview: View {
     let store: GraphStore
     let state: PhoneState
     @Environment(\.dismiss) private var dismiss
+    /// The river held and carried, while it is.
+    @State private var carried: River.ID?
 
     var body: some View {
         ScrollView {
@@ -397,6 +399,17 @@ struct RiverOverview: View {
                         .overlay(RoundedRectangle(cornerRadius: 18, style: .continuous).strokeBorder(current ? Color.inkAccent : Color.inkRule, lineWidth: current ? 2.5 : 1))
                     }
                     .buttonStyle(.plain)
+                    .opacity(carried == river.id ? 0.4 : 1)
+                    // Held and carried, as Safari's tabs are: the others make room as it passes over them.
+                    .onDrag {
+                        carried = river.id
+                        return NSItemProvider(object: river.id.uuidString as NSString)
+                    } preview: {
+                        Text(store.title(of: river)).font(.subheadline.weight(.semibold)).lineLimit(1)
+                            .padding(.horizontal, 14).padding(.vertical, 10)
+                            .background(RoundedRectangle(cornerRadius: 12, style: .continuous).fill(Color.inkPaper))
+                    }
+                    .onDrop(of: [.text], delegate: RiverCarry(target: river.id, store: store, carried: $carried))
                     .overlay(alignment: .topTrailing) {
                         if store.rivers.count > 1 {
                             Button { withAnimation(.snappy(duration: 0.25)) { store.closeRiver(at: index) } } label: {
@@ -411,6 +424,13 @@ struct RiverOverview: View {
                 }
             }
             .padding(14)
+            .animation(.snappy(duration: 0.22), value: store.rivers.map(\.id))
+        }
+        // Let go of anywhere — over no tile — the river is no longer carried.
+        .onDrop(of: [.text], isTargeted: nil) { _ in
+            carried = nil
+            store.rememberRivers()
+            return false
         }
         .safeAreaInset(edge: .bottom) {
             HStack(spacing: 8) {

@@ -76,7 +76,7 @@ public struct WeftMacApp: App {
                 Button("Open Folder…") { choose() }.keyboardShortcut("o", modifiers: [.command, .shift])
                 Divider()
                 Button("Close") { closeFront() }.keyboardShortcut("w")
-                Button("Close River") { closeTab() }.keyboardShortcut("w", modifiers: [.command, .option])
+                Button("Close River") { closeTab() }.keyboardShortcut("w", modifiers: [.command, .shift])
                 Button("Sync Now") { store?.syncNow() }.keyboardShortcut("r")
                 OpenDiagnostics()
                 if Account.shared.isAvailable {
@@ -95,13 +95,58 @@ public struct WeftMacApp: App {
             CommandGroup(replacing: .sidebar) {
                 Button("Show or Hide the Sidebar") { actions.sidebar += 1 }.keyboardShortcut("s", modifiers: [.command, .control])
             }
+            // Formatting, and what is done to rows: each with its keys, which are said here so that they are found.
+            CommandMenu("Format") {
+                Group {
+                    format("Bold", .bold, "b")
+                    format("Italic", .italic, "i")
+                    format("Highlight", .highlight, "h", [.command, .shift])
+                    format("Code", .code, "`", [.command, .shift])
+                    format("Strikethrough", .strikethrough, "-", [.command, .shift])
+                    Button("Link…") { NoteTextView.writing?.askLink() }.keyboardShortcut("k", modifiers: [.command, .option])
+                }
+                Divider()
+                Group {
+                    format("Bullet", .bullet, "8", [.command, .shift])
+                    format("Checkbox", .cycleChecklist, .return)
+                    format("To-Do", .toggleTask, .return, [.command, .shift])
+                }
+                Divider()
+                Group {
+                    format("Indent", .indent, .rightArrow, [.command, .control])
+                    format("Outdent", .outdent, .leftArrow, [.command, .control])
+                    format("Move Up", .moveUp, .upArrow, [.command, .control])
+                    format("Move Down", .moveDown, .downArrow, [.command, .control])
+                    // ⇧⌘D, as Go to Date's is too: the note's while it is written in.
+                    Button("Duplicate Rows (⇧⌘D)") { NoteTextView.writing?.run(.duplicateRows) }
+                    format("Delete Rows", .deleteRows, "k", [.command, .shift])
+                    format("Move Done to Bottom", .moveDoneToBottom, "d", [.command, .control, .shift])
+                }
+                Divider()
+                Group {
+                    format("Fold", .fold, "9")
+                    format("Unfold", .unfold, "0")
+                    format("Fold Completely", .foldCompletely, "9", [.command, .control])
+                    format("Unfold Completely", .unfoldCompletely, "0", [.command, .control])
+                    format("Fold All", .foldAll, "9", [.command, .option])
+                    format("Unfold All", .unfoldAll, "0", [.command, .option])
+                }
+                Divider()
+                Button("Switch Outline and Text") { toggleMode() }.keyboardShortcut(.return, modifiers: [.command, .option])
+                Divider()
+                Button("Focus on Row") { NoteTextView.writing?.focusRow(apart: false) }.keyboardShortcut("]")
+                Button("Open Row as a Card") { NoteTextView.writing?.focusRow(apart: true) }.keyboardShortcut("]", modifiers: [.command, .shift])
+                Button("Show the Row Above") { NoteTextView.writing?.showRowAbove() }.keyboardShortcut("[")
+            }
             CommandMenu("Story") {
                 Button("Today") { today() }.keyboardShortcut("d")
+                // The note in hand, linked to today in its frontmatter: so today's page lists it.
+                Button("Stamp with Today") { if store?.stampToday() != true { NSSound.beep() } }.keyboardShortcut("t", modifiers: [.command, .control])
                 Button("Go to Date…") { actions.calendar += 1 }.keyboardShortcut("d", modifiers: [.command, .shift])
                 Button("River Overview") { actions.overview += 1 }.keyboardShortcut("e")
                 // Said into the note being written in, where its caret is — or, hold ⌃⌥Space there for as long as you speak.
                 Button(NoteDictation.isGoing() ? "Stop Dictating" : "Dictate") { dictate() }.keyboardShortcut("d", modifiers: [.control, .option])
-                Button("Close All Cards") { closeAll() }.keyboardShortcut("w", modifiers: [.command, .shift])
+                Button("Close All Cards") { closeAll() }.keyboardShortcut("w", modifiers: [.command, .option])
                 Button("Reopen Closed Note") { withAnimation(.snappy(duration: 0.28)) { _ = store?.reopenClosed() } }.keyboardShortcut("t", modifiers: [.command, .shift])
                 Divider()
                 Button("Fold or Unfold Card") { toggleFold() }.keyboardShortcut(.return, modifiers: .control)
@@ -159,6 +204,20 @@ public struct WeftMacApp: App {
 
     private func newPage() {
         withAnimation(.snappy(duration: 0.28)) { _ = store?.newNote() }
+    }
+
+    /// The note being written in — else the one chosen — shown the other way: as text, or as an outline.
+    private func toggleMode() {
+        guard let store else { return }
+        let river = store.river
+        guard let id = river.writing ?? river.selected, let card = river.card(id) else { return NSSound.beep() }
+        let draft = store.draft(path: card.path, title: card.title)
+        draft.setMode(draft.mode == .outline ? .text : .outline)
+    }
+
+    /// A Format menu item: a command done to the note being written in, with the keys that do it.
+    private func format(_ title: String, _ command: EditCommand, _ key: KeyEquivalent, _ modifiers: EventModifiers = .command) -> some View {
+        Button(title) { NoteTextView.writing?.run(command) }.keyboardShortcut(key, modifiers: modifiers)
     }
 
     /// Starts writing down what is said, in the note with the caret — or stops.
@@ -300,9 +359,13 @@ enum RiverKeys {
                 return true
             }
         }
-        // ⌘F: finds among the river's own notes — by name, and by what they say.
+        // ⌘F: finds in the river, as in a document; ⌘G and ⇧⌘G go from one place found to the next.
         if pressed == .command, event.charactersIgnoringModifiers == "f", isRiverWindow(window) {
-            actions.findInRiver += 1
+            store.finding.show()
+            return true
+        }
+        if store.finding.isShown, event.charactersIgnoringModifiers?.lowercased() == "g", pressed == .command || pressed == [.command, .shift], isRiverWindow(window) {
+            store.finding.step(back: pressed.contains(.shift))
             return true
         }
         // ⌘1 to ⌘8: the river at that place among the tabs; ⌘9, the last —

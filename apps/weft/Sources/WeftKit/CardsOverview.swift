@@ -218,15 +218,16 @@ extension GraphStore {
     }
 
     /// Takes cards out of one river and puts them at the head of another:
-    /// a card the other already has is only taken out.
-    func send(_ ids: [Card.ID], from river: River, to other: River) {
+    /// a card the other already has is only taken out. `copying`, they
+    /// stay where they were too — the same note, in both rivers.
+    func send(_ ids: [Card.ID], from river: River, to other: River, copying: Bool = false) {
         guard river !== other else { return }
         let sent = ids.compactMap { river.card($0) }
         for card in sent.reversed() {
             draft(path: card.path, title: card.title).saveNow()
-            river.close(card.id)
+            if !copying { river.close(card.id) }
             if !other.cards.contains(where: { $0.spot == card.spot }) {
-                var moved = Card(path: card.path, title: card.title, focus: card.focus)
+                var moved = Card(path: card.path, title: card.title, focus: card.focus, lens: card.lens)
                 moved.folded = card.folded
                 other.cards.insert(moved, at: 0)
             }
@@ -415,6 +416,8 @@ struct CardsOverview: View {
     let river: River
     @Binding var isShown: Bool
     @State private var typed = ""
+    /// The tile held and carried, while it is.
+    @State private var carried: Card.ID?
 
     var body: some View {
         let cards = store.cards(of: river, saying: typed)
@@ -423,6 +426,15 @@ struct CardsOverview: View {
                 LazyVGrid(columns: [GridItem(.flexible(), spacing: 12, alignment: .top), GridItem(.flexible(), spacing: 12, alignment: .top)], spacing: 12) {
                     ForEach(cards) { card in
                         CardTile(store: store, river: river, card: card, isCursor: river.selected == card.id)
+                            .opacity(carried == card.id ? 0.4 : 1)
+                            // Held and carried, as Safari's tabs are: the others make room as it passes over them.
+                            .onDrag {
+                                carried = card.id
+                                return NSItemProvider(object: card.id.uuidString as NSString)
+                            } preview: {
+                                CardTile(store: store, river: river, card: card).frame(width: 170)
+                            }
+                            .onDrop(of: [.text], delegate: TileMove(target: card.id, river: river, store: store, carried: $carried))
                             .onTapGesture {
                                 isShown = false
                                 withAnimation(.snappy(duration: 0.24)) { river.reveal(card.id) }
@@ -463,6 +475,26 @@ struct CardsOverview: View {
     private func act(_ change: () -> Void) {
         withAnimation(.snappy(duration: 0.22)) { change() }
         store.rememberRivers()
+    }
+}
+/// A tile carried over another: the river put in that order as it passes.
+struct TileMove: DropDelegate {
+    let target: Card.ID
+    let river: River
+    let store: GraphStore
+    @Binding var carried: Card.ID?
+
+    func dropEntered(info: DropInfo) {
+        guard let carried, carried != target, let place = river.all.firstIndex(where: { $0.id == target }) else { return }
+        withAnimation(.snappy(duration: 0.22)) { river.move(carried, toPlace: place) }
+    }
+
+    func dropUpdated(info: DropInfo) -> DropProposal? { DropProposal(operation: .move) }
+
+    func performDrop(info: DropInfo) -> Bool {
+        carried = nil
+        store.rememberRivers()
+        return true
     }
 }
 #endif

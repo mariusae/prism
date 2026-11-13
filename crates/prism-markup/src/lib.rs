@@ -90,7 +90,6 @@ pub mod query;
 pub mod river;
 pub mod session;
 pub mod table;
-pub mod time;
 
 pub use block::{Block, BlockKind, Callout, Code, Document, Item, Layout, LineEnding, Marker, Row, Task};
 pub use date::{shown as shown_date, spoken, Day, Spoken, Timestamp, Week, Weekday};

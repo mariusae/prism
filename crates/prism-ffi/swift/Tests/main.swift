@@ -57,10 +57,8 @@ let foldedRow = outline.performOn(rows: [0], selectionStart: 0, selectionEnd: 0,
 expect(foldedRow != nil && outline.text() == "one\nlast" && outline.markdown().contains("three"), "a folded row shows none of what is under it, and the note keeps it")
 expect(outline.layout().lines[0].isFolded && outline.foldedRows() == [RiverFoldedRow(index: 0, text: "one")], "a fold is told as a river keeps it")
 expect(outline.rowInfo(row: 0)?.hidden == 2 && outline.setFoldedRows(rows: []) && !outline.setFoldedRows(rows: []), "and set as an app remembers it")
-expect(outline.timeMarks(twelveHour: false).first?.head?.label == "9:00 – 9:30 · 30m", "a list of times is a timeline")
 expect(outline.dropDepth(rows: [3], before: 1, depth: 9) == 1 && outline.moveRows(rows: [3], before: 1, depth: 9, selectionStart: 0, selectionEnd: 0) != nil, "a row is carried to a place and a depth")
 expect(outline.markdown() == "- one\n  - last\n  - 9:00–9:30 two\n  - 10:00 three\n" && outline.markdownOf(rows: [1]) == "- last\n", "and copied as Markdown of its own")
-expect(outline.newTimeBlock(selectionStart: 0, selectionEnd: 0, now: 615) != nil && outline.markdown().hasSuffix("  - 10:15–10:30 \n"), "a new time block goes where its time does")
 expect(outline.link(selectionStart: 0, selectionEnd: 3, address: " https://example.com ") != nil && outline.text().hasPrefix("[one](https://example.com)"), "an address pasted on words links them")
 expect(webAddress(text: "not one") == nil && outline.perform(selectionStart: 0, selectionEnd: 0, command: .turnTask) != nil && outline.markdown().hasPrefix("+ [ ] [one]"), "a row is turned into another kind")
 

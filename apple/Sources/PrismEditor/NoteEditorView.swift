@@ -66,6 +66,11 @@ public struct NoteEditorView: NSViewRepresentable {
     /// one, so that it is now known by another place or other words.
     var foldedRows: [EditorFoldedRow]?
     var onFolds: ([EditorFoldedRow]) -> Void
+    /// Words found in the note, marked: where a find, or the words a card
+    /// was opened by, are. `markAt`, the one gone to now, is marked more,
+    /// and brought into sight.
+    var marks: [NSRange]
+    var markAt: Int?
     /// Asked to show one row of the outline as a note of its own — only
     /// what is under it: handed the row's name in the note, for the app
     /// to have this card show it (`NoteEditor.setFocus`), or — `apart` —
@@ -84,8 +89,6 @@ public struct NoteEditorView: NSViewRepresentable {
     /// None — as an app that does not take pictures answers — and what
     /// was pasted is pasted as the text view would.
     var savePictures: ([EditorPastedPicture]) -> [String]
-    /// Whether the note is today's: its timelines show the time now.
-    var isToday: Bool
 
     /// - Parameters:
     ///   - editor: the note. Give another to show another — or the same
@@ -107,8 +110,8 @@ public struct NoteEditorView: NSViewRepresentable {
         foldedRows: [EditorFoldedRow]? = nil, onFolds: @escaping ([EditorFoldedRow]) -> Void = { _ in },
         onMoveRows: ((_ markdown: String, _ moved: @escaping () -> Void) -> Void)? = nil,
         savePictures: @escaping ([EditorPastedPicture]) -> [String] = { _ in [] },
-        isToday: Bool = false,
         onZoom: ((_ row: String, _ apart: Bool) -> Void)? = nil, onZoomOut: (() -> Void)? = nil,
+        marks: [NSRange] = [], markAt: Int? = nil,
         onChange: @escaping () -> Void = {}, onFocus: @escaping (Bool) -> Void = { _ in }, onFollow: @escaping (EditorLink) -> Void = { _ in }
     ) {
         self.editor = editor
@@ -130,10 +133,11 @@ public struct NoteEditorView: NSViewRepresentable {
         self.foldedRows = foldedRows
         self.onFolds = onFolds
         self.onZoom = onZoom
+        self.marks = marks
+        self.markAt = markAt
         self.onZoomOut = onZoomOut
         self.onMoveRows = onMoveRows
         self.savePictures = savePictures
-        self.isToday = isToday
         self.onChange = onChange
         self.onFocus = onFocus
         self.onFollow = onFollow
@@ -157,16 +161,18 @@ public struct NoteEditorView: NSViewRepresentable {
         view.enlist()
         _ = context.coordinator.takeFolds(anew: true)
         context.coordinator.load()
+        context.coordinator.showMarks(goingTo: false)
         return view
     }
 
     public func updateNSView(_ view: NoteTextView, context: Context) {
         let coordinator = context.coordinator
         let other = coordinator.parent.editor !== editor
+        let marked = coordinator.parent.marks != marks || coordinator.parent.markAt != markAt
         let folds = other || coordinator.parent.foldedRows != foldedRows
         let looks = coordinator.parent.refresh != refresh || coordinator.parent.theme.size != theme.size || coordinator.parent.theme.face != theme.face || coordinator.parent.lead != lead
-            || coordinator.parent.isToday != isToday
         coordinator.parent = self
+        defer { if marked || other { coordinator.showMarks(goingTo: coordinator.parent.markAt != nil && marked) } }
         let refolded = folds && coordinator.takeFolds(anew: other)
         if other || refolded || coordinator.shownMode != editor.mode() || coordinator.shown != editor.text() {
             // …or the note was changed from outside the view: a link given its title, say.
@@ -531,9 +537,13 @@ public final class NoteTextView: NSTextView {
             NSCursor.pointingHand.set()
         case .box:
             NSCursor.arrow.set()
-        case .block, .elsewhere:
+        case .block:
             // Theirs to shape from here on; an arrow as the pointer leaves the words.
             if under != now { NSCursor.arrow.set() }
+        case .elsewhere:
+            // Over what lies on the text — a card's buttons: an arrow, each time,
+            // whatever the text view's own tracking would make of it.
+            NSCursor.arrow.set()
         }
         return false
     }
@@ -648,17 +658,13 @@ public final class NoteTextView: NSTextView {
         return view
     }
 
-    /// The width the app's views were last placed for: at another, the
-    /// lines above them break elsewhere, and they are placed again.
-    private var placedWidth: CGFloat = 0
-
     public override func setFrameSize(_ newSize: NSSize) {
         super.setFrameSize(newSize)
-        guard abs(newSize.width - placedWidth) > 0.5 else { return }
-        let first = placedWidth == 0
-        placedWidth = newSize.width
-        guard !first, coordinator?.hasBlocks == true else { return }
-        DispatchQueue.main.async { [weak self] in self?.coordinator?.restyle() }
+        guard let coordinator, coordinator.hasBlocks, abs(newSize.width - coordinator.blocksPlacedFor) > 0.5 else { return }
+        DispatchQueue.main.async { [weak self] in
+            guard let self, let coordinator = self.coordinator, abs(self.bounds.width - coordinator.blocksPlacedFor) > 0.5 else { return }
+            coordinator.restyle()
+        }
     }
 
     func height(forWidth width: CGFloat) -> CGFloat {
@@ -812,6 +818,11 @@ public final class NoteTextView: NSTextView {
         Task { @MainActor in await NoteDictation.stop() }
     }
 
+    public override func draw(_ dirtyRect: NSRect) {
+        super.draw(dirtyRect)
+        (layoutManager as? BodyLayoutManager)?.drawEmptyRow(at: textContainerOrigin)
+    }
+
     /// The caret is as tall as the words it stands among, and no taller:
     /// a line's box also holds the room left under it before the next,
     /// which a caret drawn the whole box's height would hang down into.
@@ -937,14 +948,30 @@ public final class NoteTextView: NSTextView {
 
     private var carriesRows: Bool { Self.carried != nil }
 
+    /// Rows carried are moved — or, with ⌥ held, copied: as the Finder does.
+    private func operation(_ sender: any NSDraggingInfo) -> NSDragOperation {
+        sender.draggingSourceOperationMask.contains(.move) ? .move : .copy
+    }
+
     public override func draggingEntered(_ sender: any NSDraggingInfo) -> NSDragOperation {
         guard carriesRows, coordinator?.layout.markersInText == false else { return super.draggingEntered(sender) }
-        return showDrop(sender) ? .move : []
+        return showDrop(sender) ? operation(sender) : []
     }
 
     public override func draggingUpdated(_ sender: any NSDraggingInfo) -> NSDragOperation {
         guard carriesRows, coordinator?.layout.markersInText == false else { return super.draggingUpdated(sender) }
-        return showDrop(sender) ? .move : []
+        return showDrop(sender) ? operation(sender) : []
+    }
+
+    public override func prepareForDragOperation(_ sender: any NSDraggingInfo) -> Bool {
+        // Rows are this view's to take, whatever the text system makes of what is carried.
+        if carriesRows, coordinator?.layout.markersInText == false { return rowsDrop(sender) != nil }
+        return super.prepareForDragOperation(sender)
+    }
+
+    public override func concludeDragOperation(_ sender: (any NSDraggingInfo)?) {
+        if carriesRows { return }
+        super.concludeDragOperation(sender)
     }
 
     public override func draggingExited(_ sender: (any NSDraggingInfo)?) {
@@ -966,21 +993,23 @@ public final class NoteTextView: NSTextView {
         guard let drop = rowsDrop(sender), let carried = Self.carried else { return false }
         (layoutManager as? BodyLayoutManager)?.dropLine = nil
         needsDisplay = true
-        return put(rows: carried.rows, of: Self.carriedFrom, before: drop.before, depth: drop.depth)
+        return put(rows: carried.rows, of: Self.carriedFrom, before: drop.before, depth: drop.depth, copying: operation(sender) == .copy)
     }
 
     /// Puts rows of a note's — this one's, or another's — before a row
     /// here, at a depth: what letting go of rows carried does. Says
     /// whether they were put.
     @discardableResult
-    public func put(rows: [Int], of source: NoteTextView?, before: Int, depth: Int) -> Bool {
+    public func put(rows: [Int], of source: NoteTextView?, before: Int, depth: Int, copying: Bool = false) -> Bool {
         guard let coordinator, let source, let from = source.coordinator, !rows.isEmpty else { return false }
-        if source === self {
+        if source === self, !copying {
             leaveRows()
             return coordinator.moveRows(rows, before: before, depth: depth)
         }
         let markdown = from.editor.markdownOf(rows: rows.map { UInt32($0) })
         guard !markdown.isEmpty, coordinator.insertRows(markdown, before: before, depth: depth) else { return false }
+        // Copied: where they came from, they stay.
+        if copying { return true }
         // Taken out where they came from, once this note has them — and only if they
         // are still what was carried: a card of the same note is by then another's.
         DispatchQueue.main.async { [weak source] in
@@ -1184,10 +1213,6 @@ public final class NoteTextView: NSTextView {
             coordinator?.redo()
             return true
         }
-        if flags == [.command, .option], event.specialKey == .carriageReturn || event.specialKey == .enter || key == "\r" {
-            // Nothing to do as text: the key is whoever's wants it.
-            return coordinator?.newTimeBlock() == true || super.performKeyEquivalent(with: event)
-        }
         if key == "k", flags == [.command, .option] {
             askLink()
             return true
@@ -1287,9 +1312,32 @@ public final class NoteTextView: NSTextView {
     /// The editor's own keys.
     // MARK: A link, asked for
 
+    // MARK: What a menu asks of the note being written in
+
+    /// The note with the caret, in the key window: what a menu's command is done to.
+    public static var writing: NoteTextView? { NSApp.keyWindow?.firstResponder as? NoteTextView }
+
+    /// Does a command, as its keys would. Says whether there was anything to do.
+    @discardableResult
+    public func run(_ command: EditCommand) -> Bool {
+        let done = coordinator?.perform(command) ?? false
+        if done { chooseSelectedRows() } else { NSSound.beep() }
+        return done
+    }
+
+    /// The caret's row as a note of its own: here, or (`apart`) in a card of its own.
+    public func focusRow(apart: Bool) {
+        if coordinator?.zoom(apart: apart) != true { NSSound.beep() }
+    }
+
+    /// More than the row now shown: the row it is under.
+    public func showRowAbove() {
+        if let out = coordinator?.parent.onZoomOut { out() } else { NSSound.beep() }
+    }
+
     /// ⌥⌘K: asks where the words selected should lead, and links them
     /// there; with nothing selected, writes the address itself.
-    func askLink() {
+    public func askLink() {
         guard let window, linkPrompt == nil else { return }
         let range = selectedRange()
         var anchor = convert(window.convertFromScreen(firstRect(forCharacterRange: range, actualRange: nil)), from: nil)

@@ -17,6 +17,23 @@ struct RiverView: View {
     @State private var showing: Set<Card.ID> = []
     /// The card picked up to be moved, while it is carried.
     @State private var carried: Card.ID?
+    /// How far down the window's bar reaches over the river.
+    @State private var barDepth: CGFloat = 52
+
+    /// How far into a card its title's line ends.
+    private static let titleDepth: CGFloat = 46
+
+    /// Whether a card, where it is in the river's sight — measured from
+    /// the bar's lower edge — has its title up under the bar while enough
+    /// of it is still there below: then the bar shows the title.
+    private func place(_ id: Card.ID, at frame: CGRect) {
+        let under = frame.minY + Self.titleDepth < 0 && frame.maxY > 36
+        if under, river.stuck != id {
+            withAnimation(.snappy(duration: 0.22)) { river.stuck = id }
+        } else if !under, river.stuck == id {
+            withAnimation(.snappy(duration: 0.22)) { river.stuck = nil }
+        }
+    }
 
     /// A card's size for its tick: its height, once it has been laid out;
     /// till then, a guess from how much its note holds.
@@ -52,6 +69,7 @@ struct RiverView: View {
                         ForEach(river.all) { card in
                             CardView(store: store, river: river, card: card)
                                 .onGeometryChange(for: CGFloat.self) { $0.size.height.rounded() } action: { heights[card.id] = $0 }
+                                .onGeometryChange(for: CGRect.self) { $0.frame(in: .scrollView) } action: { place(card.id, at: $0) }
                                 .onScrollVisibilityChange(threshold: 0.001) { visible in
                                     if visible { showing.insert(card.id) } else { showing.remove(card.id) }
                                 }
@@ -88,6 +106,11 @@ struct RiverView: View {
                 }
             }
             .background(Color.inkPage)
+            .onGeometryChange(for: CGFloat.self) { $0.safeAreaInsets.top } action: { barDepth = $0 }
+            // A card closed, or the river left: no card's title stays in the bar.
+            .onChange(of: river.all.map(\.id)) { _, ids in
+                if let stuck = river.stuck, !ids.contains(stuck) { river.stuck = nil }
+            }
             // A card let go of anywhere — over no card, off the window — is
             // no longer carried: nothing says so but the button coming up.
             .task(id: carried) {
@@ -100,8 +123,13 @@ struct RiverView: View {
             }
             // The ticks are the river's scroll bar: its own is put away.
             .scrollIndicators(.hidden)
-            // Cards pass straight behind the bar: nothing is dimmed or blurred at the top.
+            // Cards pass under the bar: nothing is dimmed or blurred at the top…
             .scrollEdgeEffectHidden(true, for: .top)
+            // …and the bar is of the page's own paper, opaque, so that what has
+            // gone under it is gone — a card's title, then, shown in it.
+            .overlay(alignment: .top) {
+                Color.inkPage.frame(height: barDepth).ignoresSafeArea(edges: .top).allowsHitTesting(false)
+            }
             .overlay(alignment: .trailing) {
                 let cards = river.all
                 if cards.count > 1 {

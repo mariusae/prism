@@ -131,6 +131,22 @@ enum Snapshot {
         }
         // WEFT_OVERVIEW: the river shown whole, its cards as tiles.
         if environment["WEFT_OVERVIEW"] != nil { DispatchQueue.main.async { actions.overview += 1 } }
+        // WEFT_STAMP: the note chosen stamped with today, as ⌃⌘T does.
+        if environment["WEFT_STAMP"] != nil { DispatchQueue.main.async { store.stampToday() } }
+        // WEFT_MENTION="Meeting|2026-11-12": that note gone to as a backlink pill goes to it — showing where it speaks of the page.
+        if let pair = environment["WEFT_MENTION"]?.split(separator: "|").map(String.init), pair.count == 2, let note = store.resolve(pair[0]), let page = store.resolve(pair[1]) {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { store.openMention(in: note.path, title: pair[0], of: page.path, after: store.river.selected) }
+        }
+        // WEFT_MENTIONS=Ada: a river of every page speaking of that one.
+        if let page = environment["WEFT_MENTIONS"], let found = store.resolve(page), found.exists { DispatchQueue.main.async { store.openMentions(of: found.path) } }
+        // WEFT_FIND="words": the find bar, looking for them; WEFT_FIND_STEPS=2, gone on so many times.
+        if let words = environment["WEFT_FIND"] {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) {
+                store.finding.show()
+                store.finding.typed = words
+                for _ in 0..<(Int(environment["WEFT_FIND_STEPS"] ?? "") ?? 0) { store.finding.step() }
+            }
+        }
         // WEFT_FIND_IN_RIVER="words": the river's own notes, looked through for them.
         if let typed = environment["WEFT_FIND_IN_RIVER"] {
             DispatchQueue.main.async {
@@ -151,6 +167,15 @@ enum Snapshot {
         }
         let delay = Double(environment["WEFT_DELAY"] ?? "") ?? 2
         DispatchQueue.main.asyncAfter(deadline: .now() + delay) {
+            // WEFT_SCROLL=400: the river scrolled down by so many points.
+            if let points = Double(environment["WEFT_SCROLL"] ?? "") {
+                func scrolls(in view: NSView) -> [NSScrollView] { ((view as? NSScrollView).map { [$0] } ?? []) + view.subviews.flatMap(scrolls) }
+                if let river = scrolls(in: window.contentView?.superview ?? NSView()).max(by: { ($0.documentView?.frame.height ?? 0) < ($1.documentView?.frame.height ?? 0) }) {
+                    let clip = river.contentView
+                    clip.scroll(to: NSPoint(x: clip.bounds.minX, y: clip.bounds.minY + points))
+                    river.reflectScrolledClipView(clip)
+                }
+            }
             if let typed = environment["WEFT_TYPE"], let view = window.firstResponder as? NSTextView {
                 view.insertText(typed.replacingOccurrences(of: "\\n", with: "\n"), replacementRange: view.selectedRange())
             }
@@ -159,6 +184,23 @@ enum Snapshot {
                 for key in names("WEFT_KEYS") {
                     // "cmd+]", "cmd+shift+]": a key held with ⌘, as the keyboard sends it; else a command by its name.
                     let now = window.firstResponder as? NSTextView ?? view
+                    // "dump": the text being written in, and the caret, printed.
+                    if key == "dump" {
+                        print("dump \(now.selectedRange()) \(now.string.debugDescription)")
+                        if environment["WEFT_DUMP_STYLE"] != nil, let storage = now.textStorage {
+                            storage.enumerateAttributes(in: NSRange(location: 0, length: storage.length)) { attributes, range, _ in
+                                let font = attributes[.font] as? NSFont
+                                let paragraph = attributes[.paragraphStyle] as? NSParagraphStyle
+                                print("  \(range) \((storage.string as NSString).substring(with: range).debugDescription) \(font?.fontName ?? "-") \(font?.pointSize ?? 0) spacing \(paragraph?.paragraphSpacingBefore ?? 0)/\(paragraph?.paragraphSpacing ?? 0) lh \(paragraph?.minimumLineHeight ?? 0)-\(paragraph?.maximumLineHeight ?? 0) \(attributes.keys.map(\.rawValue).filter { $0.hasPrefix("prism") })")
+                            }
+                        }
+                        continue
+                    }
+                    // "type:words": words typed there, after the keys before.
+                    if key.hasPrefix("type:") {
+                        now.insertText(String(key.dropFirst(5)), replacementRange: now.selectedRange())
+                        continue
+                    }
                     // "key:125": a key by its code, pressed as the keyboard presses it — 125 is ↓, 126 ↑.
                     if key.hasPrefix("key:"), let code = UInt16(key.dropFirst(4)) {
                         for kind in [NSEvent.EventType.keyDown, .keyUp] {

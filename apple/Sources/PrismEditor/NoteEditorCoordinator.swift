@@ -84,8 +84,28 @@ extension NoteEditorView {
             restyle()
         }
 
+        /// Marks what the app says is found, and brings the one gone to into sight.
+        func showMarks(goingTo: Bool) {
+            guard let view, let manager = view.noteLayout as? BodyLayoutManager else { return }
+            let length = (view.noteStorage?.length ?? 0)
+            manager.found = parent.marks.filter { NSMaxRange($0) <= length }
+            manager.foundAt = parent.markAt.flatMap { parent.marks.indices.contains($0) ? parent.marks[$0] : nil }
+            #if os(macOS)
+            view.needsDisplay = true
+            #else
+            view.setNeedsDisplay()
+            #endif
+            guard goingTo, let at = manager.foundAt else { return }
+            view.scrollRangeToVisible(at)
+        }
+
         /// Whether any of the app's views stand in the note: a picture, a query's findings.
         var hasBlocks: Bool { !hosts.isEmpty }
+        /// The view's width when the app's views were last placed: at
+        /// another, the lines above them break elsewhere, and they are
+        /// placed again — the first time too, for a view placed before it
+        /// knew how wide it would be.
+        var blocksPlacedFor: CGFloat = -1
 
         /// Dresses the text again, as the editor reads it.
         func restyle() {
@@ -95,20 +115,18 @@ extension NoteEditorView {
             let writing = view.isWriting
             revealed = writing ? BodyStyler.revealed(layout, selection: view.caret) : []
             let outline = !layout.markersInText
-            let marks = outline ? editor.timeMarks(twelveHour: Self.clockIsTwelveHour) : []
             isApplying = true
             manager.theme = parent.theme
             manager.lines = outline ? layout.lines : []
-            manager.marks = marks
-            manager.written = revealed
-            manager.isToday = parent.isToday
+            manager.isOutline = outline
+            manager.isWriting = writing
             manager.lead = parent.lead
             if let first = layout.lines.first, case .item(let number, let done, _) = first.kind, number == nil, done == nil, first.depth <= 1 {
                 manager.leadStart = Int(first.start)
             } else {
                 manager.leadStart = nil
             }
-            styler.style(storage, layout: layout, revealed: revealed, marks: marks)
+            styler.style(storage, layout: layout, revealed: revealed)
             let replaced = placeBlocks(in: view, storage: storage)
             // A row an app's view stands in place of has no mark of its own to draw.
             manager.rows = layout.markersInText ? [] : layout.lines.enumerated().filter { !replaced.contains($0.offset) }.map(\.element)
@@ -116,12 +134,13 @@ extension NoteEditorView {
             isApplying = false
             view.redraw()
             reportHeight()
+            // A note with nothing written yet has its first row's mark drawn by the view: see `drawEmptyRow`.
+            #if os(macOS)
+            view.needsDisplay = true
+            #else
+            view.setNeedsDisplay()
+            #endif
             placeTitleChip()
-        }
-
-        /// Whether the clock here tells the time in twelve hours.
-        private static var clockIsTwelveHour: Bool {
-            (DateFormatter.dateFormat(fromTemplate: "j", options: 0, locale: .current) ?? "").contains("a")
         }
 
         // MARK: The first line, offered as the title
@@ -235,6 +254,7 @@ extension NoteEditorView {
             var used = Set<String>()
             var placed: [(host: BlockHost, range: NSRange, indent: CGFloat)] = []
             let width = max(view.bounds.width - view.sideInset * 2, 120)
+            blocksPlacedFor = view.bounds.width
             for (index, found) in blocks(in: storage.string as NSString).enumerated() {
                 var block = found.block
                 // A block in a row stands in from the margin as the row's words do.
@@ -475,17 +495,6 @@ extension NoteEditorView {
             guard let view, !view.isComposing else { return false }
             let kept = view.caret
             guard let edit = editor.insertRows(markdown: markdown, before: UInt32(before), depth: UInt32(depth), selectionStart: UInt32(kept.location), selectionEnd: UInt32(NSMaxRange(kept))) else { return false }
-            settle(edit)
-            return true
-        }
-
-        /// A time block from now, a quarter of an hour long, to name.
-        @discardableResult
-        func newTimeBlock() -> Bool {
-            guard let view, !view.isComposing else { return false }
-            let time = Calendar.current.dateComponents([.hour, .minute], from: Date())
-            let selection = view.caret
-            guard let edit = editor.newTimeBlock(selectionStart: UInt32(selection.location), selectionEnd: UInt32(NSMaxRange(selection)), now: UInt32((time.hour ?? 0) * 60 + (time.minute ?? 0))) else { return false }
             settle(edit)
             return true
         }

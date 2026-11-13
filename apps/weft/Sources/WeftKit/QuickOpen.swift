@@ -92,7 +92,9 @@ struct QuickOpen: View {
             Rectangle().fill(Color.inkRule).frame(height: 1)
             ScrollViewReader { proxy in
                 ScrollView {
-                    LazyVStack(alignment: .leading, spacing: 0) {
+                    // Not lazy: a few dozen rows at most, and a lazy stack keeps a row it has
+                    // drawn as it was while the row's place in the list stays the same.
+                    VStack(alignment: .leading, spacing: 0) {
                         // Each row is known by its place in the list — never by what it is of, which two rows may share.
                         ForEach(Array(sections.enumerated()), id: \.offset) { at, section in
                             let start = sections[..<at].reduce(0) { $0 + $1.rows.count }
@@ -181,7 +183,6 @@ struct QuickOpen: View {
             chosen = index
             go()
         }
-        .id(row.id)
     }
 
     private func move(_ step: Int) -> KeyPress.Result {
@@ -331,7 +332,10 @@ struct QuickOpen: View {
             if !hits.isEmpty {
                 found.append(Section(id: "text", title: "In Text", rows: hits.map { hit in
                     Row(id: "text:\(hit.path)", symbol: "text.magnifyingglass", name: hit.title, snippet: hit.snippet.replacingOccurrences(of: "\n", with: " ")) { store in
-                        store.show(path: hit.path, title: hit.title, after: store.river.selected)
+                        // Found by what it says: shown narrowed to where it says it, the words marked.
+                        let words = name.split(whereSeparator: { !$0.isLetter && !$0.isNumber }).map(String.init)
+                        let river = store.river
+                        river.open(Card(path: hit.path, title: hit.title, lens: .words(words)), after: river.selected)
                         store.rememberRivers()
                     }
                 }))

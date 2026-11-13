@@ -29,8 +29,8 @@ public final class WindowActions {
 /// from — a click on it, ⌘O, or simply starting to type, finds a page or
 /// names a new one. The sidebar is there for who wants a list beside the
 /// river, and out of the way until asked for.
-/// Takes the window's own bar from behind its buttons: no fill, and no
-/// line under it, so what scrolls passes straight behind.
+/// Takes the window's own bar's line from under it, and lets the river
+/// run up to the window's top: the bar is filled with the page's paper.
 private struct ClearTitleBar: NSViewRepresentable {
     final class Watcher: NSView {
         override func viewDidMoveToWindow() {
@@ -95,7 +95,15 @@ public struct ContentView: View {
                 }
                 .animation(.easeOut(duration: 0.12), value: showsQuickOpen)
                 .overlay(alignment: .bottom) { UndoToast(store: store).padding(.bottom, 16) }
-                // The bar is only its buttons: the river shows through behind them.
+                // Finding in the river: at its top right, as a document's find is.
+                .overlay(alignment: .topTrailing) {
+                    if store.finding.isShown {
+                        FindBar(find: store.finding).padding(.top, 10).padding(.trailing, 34)
+                            .transition(.opacity.combined(with: .offset(y: -6)))
+                    }
+                }
+                .animation(.easeOut(duration: 0.14), value: store.finding.isShown)
+                // The bar's own fill is none: the river paints the page's paper under it (see RiverView).
                 .toolbarBackgroundVisibility(.hidden, for: .windowToolbar)
                 .background(ClearTitleBar())
                 .toolbar {
@@ -151,7 +159,10 @@ public struct ContentView: View {
         }
         .onChange(of: actions.calendar) { _, _ in showsCalendar = true }
         .onChange(of: actions.overview) { _, _ in showsOverview.toggle() }
-        .onChange(of: store.currentRiver) { _, _ in showsOverview = false }
+        .onChange(of: store.currentRiver) { _, _ in
+            showsOverview = false
+            if store.finding.isShown { store.finding.close() }
+        }
         .onChange(of: actions.findInRiver) { _, _ in
             if showsQuickOpen, findsInRiver { return showsQuickOpen = false }
             seed = actions.typed
@@ -191,6 +202,8 @@ struct RiverBar: View {
     @State private var hovered: UUID?
     /// The river whose name, icon and colour are being chosen.
     @State private var styling: UUID?
+    /// The tab held and carried along the bar, while it is.
+    @State private var carried: River.ID?
 
     private static let plus: CGFloat = 26, small: CGFloat = 36
 
@@ -198,6 +211,8 @@ struct RiverBar: View {
     /// others are shrunk to their letters.
     private var widths: (current: CGFloat, other: CGFloat, shrunk: Bool) {
         let count = store.rivers.count
+        // A card's title in the bar takes its room from the tabs'.
+        let room = shownStuck == nil ? room : max(room - Self.stuckWidth - 8, 120)
         guard count > 1 else { return (min(240, room - Self.plus), 0, false) }
         let space = room - Self.plus - 8 - CGFloat(count - 1) * 2
         let others = CGFloat(count - 1)
@@ -208,9 +223,52 @@ struct RiverBar: View {
         return (max(min(space - others * Self.small, 220), Self.small), Self.small, true)
     }
 
+    /// How wide a card's title, shown in the bar, may be.
+    static let stuckWidth: CGFloat = 260
+
+    /// The card whose title is shown in the bar: the river's current card —
+    /// the one chosen — and only while its title has scrolled up under the
+    /// bar. Another card's title there would say it was the current one.
+    private var shownStuck: Card.ID? {
+        let river = store.river
+        return river.stuck != nil && river.stuck == river.selected ? river.stuck : nil
+    }
+
+    /// The card whose title has scrolled up under the bar: shown before
+    /// the tabs, which move along to make room. Clicked, the card's top.
+    @ViewBuilder private var stuckTitle: some View {
+        let river = store.river
+        if let id = shownStuck, let card = river.card(id) {
+            let label = store.label(path: card.path, title: card.title)
+            // As wide as its words, up to its room: the bar is laid out at its own size, and must be told.
+            let words = ceil((label as NSString).size(withAttributes: [.font: NSFont.systemFont(ofSize: 13, weight: .semibold)]).width)
+            HStack(spacing: 7) {
+                EmblemView(store.emblem(path: card.path, title: card.title), size: 16, quiet: Color.inkSecondary)
+                Text(label)
+                    .font(.system(size: 13, weight: .semibold))
+                    .foregroundStyle(Color.inkText)
+                    .lineLimit(1)
+                    .truncationMode(.tail)
+            }
+            .padding(.leading, 10).padding(.trailing, 12)
+            .frame(width: min(words + 16 + 7 + 22, Self.stuckWidth), height: 28, alignment: .leading)
+            .contentShape(Rectangle())
+            .onTapGesture {
+                river.selected = id
+                river.scrollTarget = (id, (river.scrollTarget?.tick ?? 0) + 1)
+            }
+            .help("To the top of \(store.label(path: card.path, title: card.title))")
+            .transition(.move(edge: .leading).combined(with: .opacity))
+            .id(id)
+            Rectangle().fill(Color.inkRule).frame(width: 1, height: 16).padding(.trailing, 4)
+                .transition(.opacity)
+        }
+    }
+
     var body: some View {
         let widths = widths
         HStack(spacing: 2) {
+            stuckTitle
             ForEach(Array(store.rivers.enumerated()), id: \.element.id) { index, river in
                 let current = index == store.currentRiver
                 // The one shown keeps its name while there is room to say any of it.
@@ -279,15 +337,31 @@ struct RiverBar: View {
                     if current { onFind() } else { withAnimation(.snappy(duration: 0.2)) { store.currentRiver = index } }
                 }
                 .onHover { hovered = $0 ? river.id : (hovered == river.id ? nil : hovered) }
-                // A card carried here — from the river, or from its overview — is sent to this river.
-                .onDrop(of: [CardMove.type], isTargeted: nil) { providers in
-                    guard !current, river.query == nil, let provider = providers.first else { return false }
+                // Held and carried along the bar, as Safari's tabs are: the others make room as it passes.
+                .opacity(carried == river.id ? 0.45 : 1)
+                .onDrag {
+                    carried = river.id
+                    return NSItemProvider(object: river.id.uuidString as NSString)
+                } preview: {
+                    Text(store.title(of: river)).font(.system(size: 12.5, weight: .semibold)).lineLimit(1)
+                        .padding(.horizontal, 12).frame(height: 28)
+                        .background(Capsule().fill(Color.inkCard))
+                        .foregroundStyle(Color.inkText)
+                }
+                // A tab carried over this one takes its place; a card carried
+                // here — from the river, or its overview — is sent to this river.
+                .onDrop(of: [CardMove.type, .text], delegate: RiverCarry(target: river.id, store: store, carried: $carried) { info in
+                    guard !current, river.query == nil, let provider = info.itemProviders(for: [CardMove.type]).first else { return false }
                     _ = provider.loadDataRepresentation(forTypeIdentifier: CardMove.type.identifier) { data, _ in
                         guard let data, let id = UUID(uuidString: String(decoding: data, as: UTF8.self)) else { return }
-                        Task { @MainActor in withAnimation(.snappy(duration: 0.24)) { store.send([id], from: store.river, to: river) } }
+                        // Moved — or, with ⌥ held, shown in both rivers.
+                        Task { @MainActor in
+                            let copying = NSEvent.modifierFlags.contains(.option)
+                            withAnimation(.snappy(duration: 0.24)) { store.send([id], from: store.river, to: river, copying: copying) }
+                        }
                     }
                     return true
-                }
+                })
                 .contextMenu {
                     Button(river.name == nil ? "Name and Save…" : "Rename…", systemImage: "character.cursor.ibeam") { styling = river.id }
                     Button("Icon and Colour…", systemImage: "paintpalette") { styling = river.id }
@@ -313,6 +387,17 @@ struct RiverBar: View {
         .padding(.horizontal, 4)
         .fixedSize()
         .animation(.snappy(duration: 0.2), value: store.currentRiver)
+        .animation(.snappy(duration: 0.22), value: store.rivers.map(\.id))
+        // A tab let go of anywhere — off the bar, say — is no longer carried.
+        .task(id: carried) {
+            guard carried != nil else { return }
+            while !Task.isCancelled, NSEvent.pressedMouseButtons != 0 { try? await Task.sleep(for: .milliseconds(120)) }
+            if !Task.isCancelled, carried != nil {
+                carried = nil
+                store.rememberRivers()
+            }
+        }
+        .animation(.snappy(duration: 0.22), value: shownStuck)
         .animation(.snappy(duration: 0.2), value: store.rivers.count)
         .animation(.easeOut(duration: 0.12), value: CommandKey.shared.isHeld)
         .onChange(of: saves) { _, _ in styling = store.river.id }

@@ -36,6 +36,8 @@ public final class GraphStore {
 
     /// One draft a page, however many rivers show it.
     @ObservationIgnored private var drafts: [String: PageDraft] = [:]
+    /// Finding in the river shown: what is typed, and where it is.
+    public let finding = RiverFind()
     /// What names lead to, kept until the index next moves.
     @ObservationIgnored private var resolved: [String: ResolvedPage?] = [:]
     @ObservationIgnored private var labels: [String: String?] = [:]
@@ -70,6 +72,7 @@ public final class GraphStore {
         // A folder that is no repository yet becomes one: a graph can start anywhere.
         let isRepository = FileManager.default.fileExists(atPath: root.appendingPathComponent(".git").path)
         engine = isRepository ? try PrismEngine.open(root: root.path, options: options, token: token) : try PrismEngine.create(root: root.path, remoteUrl: nil, options: options, token: token)
+        finding.store = self
         let observer = Observer(store: self)
         self.observer = observer
         engine.setObserver(observer: observer)
@@ -358,6 +361,28 @@ public final class GraphStore {
         return Emblem(title: title, icon: icons[path], color: colors[path], kindSymbol: kind, letter: false)
     }
 
+    /// A page a note names as related in its frontmatter (`related:`), as
+    /// its card's foot shows it: called as a link to it is, with its icon —
+    /// a day's, its date and a calendar.
+    public struct Related: Identifiable {
+        /// As the note writes it: `2026-11-12`, or `[[A page]]`.
+        public let written: String
+        public let name: String
+        public let title: String
+        public let emblem: Emblem
+        public var id: String { written }
+    }
+
+    public func related(_ written: [String]) -> [Related] {
+        written.map { value in
+            let name = value.trimmingCharacters(in: CharacterSet(charactersIn: "[] "))
+            let found = resolve(name)
+            let title = found.flatMap { $0.exists ? label(path: $0.path, title: Days.shown(name)) : nil } ?? Days.shown(name)
+            let emblem = found.map { emblem(path: $0.path, title: title) } ?? Emblem(title: title, kindSymbol: Days.shown(name) != name ? "calendar" : nil, letter: false)
+            return Related(written: value, name: name, title: title, emblem: emblem)
+        }
+    }
+
     /// What a note is shown as called: its title, or — never given one —
     /// its first words, as the engine's index has them.
     public func label(path: String, title: String) -> String {
@@ -446,7 +471,46 @@ public final class GraphStore {
     /// What a river is called on its tab: its name — or, having none,
     /// what its first card is shown as called.
     public func title(of river: River) -> String {
-        river.name ?? river.cards.first.map { label(path: $0.path, title: $0.title) } ?? "New River"
+        if river.name == nil, let page = river.mentions { return "Linking to \(label(path: page, title: Prism.linkName(path: page) ?? page))" }
+        return river.name ?? river.cards.first.map { label(path: $0.path, title: $0.title) } ?? "New River"
+    }
+
+    /// Every name a page answers to: its file's, its title, its aliases.
+    func names(of path: String) -> [String] {
+        var names = (try? engine.names(path: path)) ?? []
+        if let own = Prism.linkName(path: path) { names.insert(own, at: 0) }
+        return names
+    }
+
+    /// A page that speaks of another, opened after a card, showing where it does.
+    public func openMention(in path: String, title: String, of page: String, after card: Card.ID?, in river: River? = nil) {
+        let river = river ?? self.river
+        river.open(Card(path: path, title: title, lens: .mentions(page)), after: card)
+        rememberRivers()
+    }
+
+    /// A river of every page that speaks of one, each card showing where:
+    /// the one already open, if there is one.
+    public func openMentions(of page: String) {
+        if let index = rivers.firstIndex(where: { $0.mentions == page }) {
+            currentRiver = index
+            return
+        }
+        let made = River()
+        made.query = "links to: \(Prism.linkName(path: page) ?? page)\nsort: -modified"
+        made.mentions = page
+        rivers.append(made)
+        currentRiver = rivers.count - 1
+        find(for: made)
+        rememberRivers()
+    }
+
+    /// The note being written in — else the one chosen — linked to today
+    /// in its frontmatter. Says whether it was stamped.
+    @discardableResult
+    public func stampToday() -> Bool {
+        guard let id = river.writing ?? river.selected, let card = river.card(id) else { return false }
+        return draft(path: card.path, title: card.title).stamp(Days.name(Date()))
     }
 
     /// A note was given another title: the cards of it say so.
@@ -692,7 +756,9 @@ public final class GraphStore {
     /// looks and what it asks. A card of a note already open keeps its
     /// identity, so nothing jumps.
     private func adopt(_ saved: SavedRiver, into river: River) {
-        var open = Dictionary(river.cards.map { ($0.spot, $0) }, uniquingKeysWith: { first, _ in first })
+        // By note and row — not by how it is shown, which the file does not keep: a
+        // card showing where a page is spoken of stays so as its river is read again.
+        var open = Dictionary(river.cards.map { (Card.spot(path: $0.path, focus: $0.focus), $0) }, uniquingKeysWith: { first, _ in first })
         let folded = Set(saved.folded.map { path(named: $0) })
         river.cards = saved.cards.compactMap { held in
             let path = path(named: held.title)
@@ -1032,6 +1098,15 @@ public final class GraphStore {
         }
     }
 
+    /// Puts a river at another place among the open ones — carried there,
+    /// as a tab is. The one shown stays the one shown.
+    public func moveRiver(_ id: River.ID, to place: Int) {
+        guard let from = rivers.firstIndex(where: { $0.id == id }), rivers.indices.contains(place), from != place else { return }
+        let shown = river.id
+        rivers.insert(rivers.remove(at: from), at: place)
+        currentRiver = rivers.firstIndex { $0.id == shown } ?? currentRiver
+    }
+
     public func closeRiver(at index: Int) {
         guard rivers.indices.contains(index) else { return }
         let closed = rivers.remove(at: index)
@@ -1181,21 +1256,43 @@ public struct Card: Identifiable, Hashable, Codable {
     /// note, when it shows only what is under one: a note within the
     /// note, written in as one. `nil` for a card of the whole page.
     public var focus: String?
+    /// What part of its page it shows, found rather than named: where
+    /// another page is spoken of, or where some words are said. Nothing
+    /// is written in the note for it, and it is not kept in a river's file.
+    public var lens: Lens?
+
+    public enum Lens: Hashable, Codable {
+        /// The row that mentions the page at this path, with what is under it.
+        case mentions(String)
+        /// The smallest row holding every place these are said.
+        case words([String])
+    }
+
+    /// What it shows of its page, as a key: its row's name, its lens, or nothing for the whole page.
+    var viewKey: String? {
+        if let focus { return "^" + focus }
+        switch lens {
+        case .mentions(let path): return "→" + path
+        case .words(let words): return "?" + words.joined(separator: " ")
+        case nil: return nil
+        }
+    }
 
     public struct Fold: Hashable, Codable {
         public var index: Int
         public var text: String
     }
 
-    public init(path: String, title: String, focus: String? = nil) {
+    public init(path: String, title: String, focus: String? = nil, lens: Lens? = nil) {
         self.path = path
         self.title = title
         self.focus = focus
+        self.lens = lens
     }
 
     /// What it shows: its page, and the row of it if it shows only one.
     /// A river has one card of each.
-    public var spot: String { Self.spot(path: path, focus: focus) }
+    public var spot: String { focus == nil && lens != nil ? path + (viewKey ?? "") : Self.spot(path: path, focus: focus) }
     static func spot(path: String, focus: String?) -> String { focus.map { "\(path)^\($0)" } ?? path }
 
     /// What a river keeps it by: its page's own name — its file's.
@@ -1237,6 +1334,9 @@ public final class River: Identifiable {
     public var selected: Card.ID?
     /// The card with the caret in it.
     public var writing: Card.ID?
+    /// The card whose title has gone up under the window's bar while the
+    /// card itself is still in sight: its title is then shown in the bar.
+    public var stuck: Card.ID?
     /// Asks the river's view to scroll a card to the top; moved each time.
     public var scrollTarget: (card: Card.ID, tick: Int)?
     /// Asks the river's view to bring a card into sight, moving no more
@@ -1341,6 +1441,7 @@ public final class River: Identifiable {
         var query: String?
         var hidden: [String]?
         var opened: [String]?
+        var mentions: String?
     }
 
     /// What of a river is saved in its file: what tells whether it was changed.
@@ -1359,7 +1460,11 @@ public final class River: Identifiable {
         Signature(folds: cards.map { $0.folds ?? [] }, cards: cards.map { card in card.focus.map { "\(card.name)^\($0)" } ?? card.name }, folded: Set(cards.filter(\.folded).map(\.name)), icon: icon, color: color, query: query, hidden: query == nil ? [] : hidden, opened: query == nil ? [] : opened)
     }
 
-    var kept: Kept { Kept(id: id, name: name, cards: cards, icon: icon, color: color, query: query, hidden: hidden, opened: Array(opened)) }
+    var kept: Kept { Kept(id: id, name: name, cards: cards, icon: icon, color: color, query: query, hidden: hidden, opened: Array(opened), mentions: mentions) }
+
+    /// For a river of every page that speaks of one: that page's path. Each
+    /// card it finds shows where it speaks of it, and is open to begin with.
+    public var mentions: String?
 
     /// Takes what the query found: each a card, but for those held by
     /// hand already and those taken out. A card keeps its identity from
@@ -1368,8 +1473,13 @@ public final class River: Identifiable {
     func take(found pages: [(path: String, title: String)], total: Int) {
         let held = Set(cards.map(\.path))
         let out = Set(hidden)
+        // How each was being shown — gone to by a backlink, say — is kept as it is found again.
+        let shown = Dictionary(found.map { ($0.path, $0.lens) }, uniquingKeysWith: { first, _ in first })
         found = pages.filter { !held.contains($0.path) && !out.contains(Prism.linkName(path: $0.path) ?? $0.title) }.map { page in
-            var card = Card(path: page.path, title: page.title)
+            var card = Card(path: page.path, title: page.title, lens: mentions.map { .mentions($0) })
+            // A page come to speak of the one a river is of: shown open, to begin with.
+            if mentions != nil, foundIDs[page.path] == nil { opened.insert(card.name) }
+            if let lens = shown[page.path] { card.lens = lens }
             card.id = foundIDs[page.path] ?? card.id
             foundIDs[page.path] = card.id
             card.folded = !opened.contains(card.name)
@@ -1383,7 +1493,21 @@ public final class River: Identifiable {
     /// Has a card show only what is under a row of its page — the row of
     /// that name — or, given none, the whole page again.
     public func setFocus(_ id: Card.ID, _ focus: String?) {
-        if let index = cards.firstIndex(where: { $0.id == id }) { cards[index].focus = focus } else if let index = found.firstIndex(where: { $0.id == id }) { found[index].focus = focus }
+        if let index = cards.firstIndex(where: { $0.id == id }) {
+            cards[index].focus = focus
+            cards[index].lens = nil
+            // Now as another card of the river shows the same: one of them is enough.
+            let spot = cards[index].spot
+            if let other = cards.firstIndex(where: { $0.spot == spot && $0.id != id }) {
+                let kept = cards[other].id
+                cards.remove(at: index)
+                if selected == id { selected = kept }
+                if writing == id { writing = nil }
+            }
+        } else if let index = found.firstIndex(where: { $0.id == id }) {
+            found[index].focus = focus
+            found[index].lens = nil
+        }
     }
 
     /// A card of its own for a row of a card's page, straight after that card.
@@ -1420,6 +1544,7 @@ public final class River: Identifiable {
         query = kept.query
         hidden = kept.hidden ?? []
         opened = Set(kept.opened ?? [])
+        mentions = kept.mentions
     }
 
     public var title: String {
@@ -1432,10 +1557,21 @@ public final class River: Identifiable {
             reveal(open.id, from: after)
             return
         }
+        // A note is one card in a river, however it is gone to: the card of it
+        // there — whole, or showing where a page is spoken of — is gone to, and
+        // shows it as it was asked for this time: by a backlink, where it speaks
+        // of that page; by a link, whole. A row shown as a card of its own stays apart.
+        if card.focus == nil, let index = cards.firstIndex(where: { $0.path == card.path && $0.focus == nil }) {
+            cards[index].lens = card.lens
+            reveal(cards[index].id, from: after)
+            return
+        }
         // Found by the query already: opened out of its line, where it stands.
         if card.focus == nil, query != nil, let index = found.firstIndex(where: { $0.path == card.path }) {
             opened.insert(found[index].name)
             found[index].folded = false
+            // Shown as it was asked for: where it speaks of a page, or whole.
+            found[index].lens = card.lens
             reveal(found[index].id, from: after)
             return
         }
@@ -1547,18 +1683,38 @@ public final class PageDraft {
     /// The note as cards that show one row of it have it: each a note
     /// of its own, read from this one and focused there, good for as
     /// long as nothing but that card has changed the note since.
-    @ObservationIgnored private var views: [Card.ID: (editor: NoteEditor, revision: Int)] = [:]
+    @ObservationIgnored private var views: [Card.ID: (editor: NoteEditor, revision: Int, key: String)] = [:]
 
     /// The note as a card showing only one of its rows writes in it —
     /// `nil` when the note has no row of that name any more.
     public func view(for card: Card.ID, focus: String) -> NoteEditor? {
-        if let open = views[card], open.revision == revision, open.editor.focus() == focus { return open.editor }
+        var shown = Card(path: path, title: title, focus: focus)
+        shown.id = card
+        return view(of: shown)
+    }
+
+    /// The note as a card that shows part of it writes in it — the row it
+    /// names, or the part it finds — or `nil`: a card of the whole note,
+    /// or one whose part is in the note no more.
+    public func view(of card: Card) -> NoteEditor? {
+        guard let key = card.viewKey else { return nil }
+        if let open = views[card.id], open.revision == revision, open.key == key { return open.editor }
         let made = NoteEditor.open(source: editor.markdown(), mode: .outline)
-        guard made.setFocus(name: focus) else {
-            views[card] = nil
+        let found: Bool
+        if let focus = card.focus {
+            found = made.setFocus(name: focus)
+        } else {
+            switch card.lens {
+            case .mentions(let page): found = made.focusOnLinks(names: store?.names(of: page) ?? [])
+            case .words(let words): found = made.focusOnWords(words: words)
+            case nil: found = false
+            }
+        }
+        guard found else {
+            views[card.id] = nil
             return nil
         }
-        views[card] = (made, revision)
+        views[card.id] = (made, revision, key)
         return made
     }
 
@@ -1568,7 +1724,7 @@ public final class PageDraft {
         guard let view = views[card] else { return changed() }
         editor = NoteEditor.open(source: view.editor.markdown(), mode: editor.mode())
         revision += 1
-        views[card] = (view.editor, revision)
+        views[card] = (view.editor, revision, view.key)
         touch()
     }
 
@@ -1782,6 +1938,35 @@ public final class PageDraft {
         setField("tags", values: has + [tag], asList: true)
         saveNow()
         return true
+    }
+
+    /// The pages the note names in its frontmatter as related: `related:`
+    /// — links, each as a page's name, written plain or as `[[a link]]`.
+    public var related: [String] {
+        _ = revision
+        return editor.fields().first { $0.key == "related" }?.values ?? []
+    }
+
+    /// Whether the note names a day — `2026-11-12` — among those it is related to.
+    public func isStamped(_ day: String) -> Bool {
+        related.contains { nameKey(name: $0.trimmingCharacters(in: CharacterSet(charactersIn: "[] "))) == nameKey(name: day) }
+    }
+
+    /// Links the note to a day, in its frontmatter (`related:`), so that
+    /// the day's page lists it among what links there. Says whether it
+    /// was new. A day's or a week's own page is not stamped.
+    @discardableResult
+    public func stamp(_ day: String) -> Bool {
+        guard !path.hasPrefix("daily/"), !path.hasPrefix("weekly/"), !isStamped(day) else { return false }
+        setField("related", values: related + [day], asList: true)
+        saveNow()
+        return true
+    }
+
+    /// Takes a page out of those the note names as related.
+    public func unrelate(_ written: String) {
+        setField("related", values: related.filter { $0 != written }, asList: true)
+        saveNow()
     }
 
     /// Takes a tag out of the note's frontmatter.

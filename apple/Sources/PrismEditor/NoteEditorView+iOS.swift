@@ -44,6 +44,11 @@ public struct NoteEditorView: UIViewRepresentable {
     /// what it is told when they change: see NoteEditorView.swift.
     var foldedRows: [EditorFoldedRow]?
     var onFolds: ([EditorFoldedRow]) -> Void
+    /// Words found in the note, marked: where a find, or the words a card
+    /// was opened by, are. `markAt`, the one gone to now, is marked more,
+    /// and brought into sight.
+    var marks: [NSRange]
+    var markAt: Int?
     /// Asked to show one row of the outline as a note of its own — only
     /// what is under it: handed the row's name in the note, for the app
     /// to have this card show it (`NoteEditor.setFocus`), or — `apart` —
@@ -59,8 +64,6 @@ public struct NoteEditorView: UIViewRepresentable {
     /// Keeps pictures pasted, and says where: a path in the graph for
     /// each, in order. None, and what was pasted is the text view's.
     var savePictures: ([EditorPastedPicture]) -> [String]
-    /// Whether the note is today's: its timelines show the time now.
-    var isToday: Bool
 
     /// - Parameters:
     ///   - editor: the note. Give another to show another — or the same
@@ -81,8 +84,8 @@ public struct NoteEditorView: UIViewRepresentable {
         foldedRows: [EditorFoldedRow]? = nil, onFolds: @escaping ([EditorFoldedRow]) -> Void = { _ in },
         onMoveRows: ((_ markdown: String, _ moved: @escaping () -> Void) -> Void)? = nil,
         savePictures: @escaping ([EditorPastedPicture]) -> [String] = { _ in [] },
-        isToday: Bool = false,
         onZoom: ((_ row: String, _ apart: Bool) -> Void)? = nil, onZoomOut: (() -> Void)? = nil,
+        marks: [NSRange] = [], markAt: Int? = nil,
         onChange: @escaping () -> Void = {}, onFocus: @escaping (Bool) -> Void = { _ in }, onFollow: @escaping (EditorLink) -> Void = { _ in }
     ) {
         self.editor = editor
@@ -103,10 +106,11 @@ public struct NoteEditorView: UIViewRepresentable {
         self.foldedRows = foldedRows
         self.onFolds = onFolds
         self.onZoom = onZoom
+        self.marks = marks
+        self.markAt = markAt
         self.onZoomOut = onZoomOut
         self.onMoveRows = onMoveRows
         self.savePictures = savePictures
-        self.isToday = isToday
         self.onChange = onChange
         self.onFocus = onFocus
         self.onFollow = onFollow
@@ -131,16 +135,18 @@ public struct NoteEditorView: UIViewRepresentable {
         view.enlist()
         _ = context.coordinator.takeFolds(anew: true)
         context.coordinator.load()
+        context.coordinator.showMarks(goingTo: false)
         return view
     }
 
     public func updateUIView(_ view: NoteTextView, context: Context) {
         let coordinator = context.coordinator
         let other = coordinator.parent.editor !== editor
+        let marked = coordinator.parent.marks != marks || coordinator.parent.markAt != markAt
         let folds = other || coordinator.parent.foldedRows != foldedRows
         let looks = coordinator.parent.refresh != refresh || coordinator.parent.theme.size != theme.size || coordinator.parent.theme.face != theme.face || coordinator.parent.lead != lead
-            || coordinator.parent.isToday != isToday
         coordinator.parent = self
+        defer { if marked || other { coordinator.showMarks(goingTo: coordinator.parent.markAt != nil && marked) } }
         if view.tintColor != theme.accent { view.tintColor = theme.accent }
         let refolded = folds && coordinator.takeFolds(anew: other)
         if other || refolded || coordinator.shownMode != editor.mode() || coordinator.shown != editor.text() {
@@ -496,6 +502,11 @@ public final class NoteTextView: UITextView {
         return standingCaret(for: place)
     }
 
+    public override func draw(_ rect: CGRect) {
+        super.draw(rect)
+        (layoutManager as? BodyLayoutManager)?.drawEmptyRow(at: CGPoint(x: textContainerInset.left, y: textContainerInset.top))
+    }
+
     /// Writes words in place of some of the note's, as if typed: what is said, as it is heard.
     func write(_ words: String, in range: NSRange) {
         guard NSMaxRange(range) <= textStorage.length, let start = position(from: beginningOfDocument, offset: range.location),
@@ -611,7 +622,6 @@ public final class NoteTextView: UITextView {
         case .link: coordinator.insertLink()
         case .fold:
             if let row = coordinator.caretRow { coordinator.perform(.toggleFold, onRows: [row]) }
-        case .timeBlock: coordinator.newTimeBlock()
         case .title: coordinator.parent.onTitle()
         case .dictate:
             // Said where the caret is, until the microphone is tapped again.
@@ -771,7 +781,7 @@ public final class NoteTextView: UITextView {
         ("z", [.command], "undo"), ("z", [.command, .shift], "redo"),
         ("b", [.command], "bold"), ("i", [.command], "italic"),
         ("h", [.command, .shift], "highlight"), ("k", [.command, .shift], "deleteRows"), ("d", [.command, .shift], "duplicateRows"),
-        ("8", [.command, .shift], "bullet"), ("9", [.command], "fold"), ("0", [.command], "unfold"), ("\r", [.command, .alternate], "timeBlock"),
+        ("8", [.command, .shift], "bullet"), ("9", [.command], "fold"), ("0", [.command], "unfold"),
         ("\r", [.command], "cycleChecklist"), ("\r", [.command, .shift], "toggleTask"),
         (UIKeyCommand.inputUpArrow, [.command, .control], "moveUp"), (UIKeyCommand.inputDownArrow, [.command, .control], "moveDown"),
         (UIKeyCommand.inputRightArrow, [.command, .control], "indent"), (UIKeyCommand.inputLeftArrow, [.command, .control], "outdent"),
@@ -807,8 +817,6 @@ public final class NoteTextView: UITextView {
             coordinator.undo()
         case "redo":
             coordinator.redo()
-        case "timeBlock":
-            coordinator.newTimeBlock()
         case "escape":
             if coordinator.isOffering { coordinator.dismissOffers() } else { resignFirstResponder() }
         default:

@@ -6,7 +6,9 @@ main = "build/worker/shim.mjs"
 compatibility_date = "2026-09-01"
 
 [build]
-command = "cargo install -q worker-build && worker-build --release"
+# worker-build is held to the line that builds worker 0.8, which this crate is written to:
+# the newest refuses it. To move on, take worker to 0.9 in Cargo.toml and drop the pin.
+command = "cargo install -q worker-build@^0.8 && worker-build --release"
 
 # One hub per repository: its iPhones' push tokens, and the Macs listening.
 [[durable_objects.bindings]]

@@ -221,3 +221,29 @@ struct TagAdder: View {
     }
 }
 
+
+/// A river carried over another's tab, or its tile in the rivers'
+/// overview: the rivers put in that order as it passes, as Safari's tabs
+/// are. Whatever else is dropped there — a card, on the Mac — is `other`'s.
+struct RiverCarry: DropDelegate {
+    let target: River.ID
+    let store: GraphStore
+    @Binding var carried: River.ID?
+    var other: ((DropInfo) -> Bool)? = nil
+
+    func validateDrop(info: DropInfo) -> Bool { carried != nil || other != nil }
+
+    func dropEntered(info: DropInfo) {
+        guard let carried, carried != target, let place = store.rivers.firstIndex(where: { $0.id == target }) else { return }
+        withAnimation(.snappy(duration: 0.22)) { store.moveRiver(carried, to: place) }
+    }
+
+    func dropUpdated(info: DropInfo) -> DropProposal? { DropProposal(operation: .move) }
+
+    func performDrop(info: DropInfo) -> Bool {
+        guard carried != nil else { return other?(info) ?? false }
+        carried = nil
+        store.rememberRivers()
+        return true
+    }
+}

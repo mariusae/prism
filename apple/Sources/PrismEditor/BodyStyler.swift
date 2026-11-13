@@ -49,6 +49,8 @@ extension NSAttributedString.Key {
     static let prismBullet = NSAttributedString.Key("prism.bullet")
     static let prismTask = NSAttributedString.Key("prism.task")
     static let prismQuote = NSAttributedString.Key("prism.quote")
+    /// A code block's fence: its backticks drawn set down into their line.
+    static let prismFence = NSAttributedString.Key("prism.fence")
 }
 
 /// Dresses what a note's editor shows as what it means.
@@ -102,40 +104,11 @@ struct BodyStyler {
         return lines
     }
 
-    /// What a timeline's drawing is measured by: a row's height, the room
-    /// over a block's words for its time, that label's size, and the gap
-    /// after a timeline's last block.
-    struct TimeMeasures {
-        var row: CGFloat
-        var header: CGFloat
-        var labelSize: CGFloat
-        var pad: CGFloat
-
-        /// The room a block ending at a row takes after it: a little for
-        /// its length, its free time, and, its timeline's last, a gap.
-        func extent(_ foot: BodyTimeFoot) -> CGFloat {
-            ((foot.length + foot.freeLength) * row).rounded() + (foot.isLast ? pad : 0)
-        }
-
-        func footHeight(_ mark: BodyTimeMark) -> CGFloat {
-            mark.feet.reduce(0) { $0 + extent($1) }
-        }
-    }
-
-    var timeMeasures: TimeMeasures {
-        let labelSize = (size * 0.7).rounded()
-        return TimeMeasures(row: (theme.body.ascender - theme.body.descender + theme.body.leading).rounded(.up) + 3 + (size * 0.2).rounded(), header: (labelSize * 1.3).rounded(.up), labelSize: labelSize, pad: (size * 0.4).rounded())
-    }
-
     /// Dresses a storage as a layout says. `revealed` is the lines being
-    /// written in; empty when the text is only read. `marks` is what an
-    /// outline's timelines draw at its rows: room is left for it.
-    func style(_ storage: NSTextStorage, layout: BodyLayout, revealed: Set<Int>, marks: [BodyTimeMark] = []) {
+    /// written in; empty when the text is only read.
+    func style(_ storage: NSTextStorage, layout: BodyLayout, revealed: Set<Int>) {
         let whole = NSRange(location: 0, length: storage.length)
         let outline = !layout.markersInText
-        let timed = Dictionary(marks.map { (Int($0.row), $0) }, uniquingKeysWith: { first, _ in first })
-        let measures = timeMeasures
-        var stamps: [NSRange] = []
         storage.beginEditing()
         storage.setAttributes(baseAttributes, range: whole)
 
@@ -152,17 +125,6 @@ struct BodyStyler {
                 paragraph.firstLineHeadIndent = indent
                 paragraph.headIndent = indent
                 paragraph.paragraphSpacing = (size * 0.2).rounded()
-                if let mark = timed[index] {
-                    // Room over a block's words for its time and length, and after its last row for how long it lasts.
-                    if let head = mark.head {
-                        paragraph.paragraphSpacingBefore += measures.header
-                        // Its time is drawn over its words, and written among them only where they are written in.
-                        if !shown, head.stampEnd > head.stampStart, Int(head.stampEnd) <= storage.length {
-                            stamps.append(NSRange(location: Int(head.stampStart), length: Int(head.stampEnd - head.stampStart)))
-                        }
-                    }
-                    paragraph.paragraphSpacing += measures.footHeight(mark)
-                }
             } else if line.indent > 0 {
                 // The spaces that place a line are the list's, not the reader's.
                 storage.addAttributes([.font: Self.hiddenFont, .foregroundColor: EditorColor.clear], range: NSRange(location: range.location, length: Int(line.indent)))
@@ -200,9 +162,13 @@ struct BodyStyler {
                 }
                 storage.addAttribute(.foregroundColor, value: theme.secondary, range: range)
             case .fence:
-                storage.addAttributes([.font: theme.mono(size * 0.92), .foregroundColor: theme.faint], range: range)
+                storage.addAttributes([.font: theme.mono(size * 0.92), .foregroundColor: EditorColor.clear, .prismFence: true], range: range)
             case .code:
                 storage.addAttribute(.font, value: theme.mono(size * 0.92), range: range)
+                // A row of code's fences, there to be edited and not read: faint,
+                // and their backticks — which sit at the top of a line — set down
+                // into it, so the fences stand evenly above and below the code.
+                if outline { dimFences(storage, in: range) }
             case .rule:
                 storage.addAttribute(.foregroundColor, value: theme.faint, range: range)
             default:
@@ -290,8 +256,27 @@ struct BodyStyler {
                 break
             }
         }
-        for stamp in stamps { storage.addAttributes([.font: Self.hiddenFont, .foregroundColor: EditorColor.clear], range: stamp) }
         storage.endEditing()
+    }
+
+    /// The first and last lines of a row of code — its lines parted by
+    /// U+2028 — when they are fences: faint, and set down in their lines.
+    private func dimFences(_ storage: NSTextStorage, in row: NSRange) {
+        let text = storage.string as NSString
+        let parts = text.substring(with: row).components(separatedBy: "\u{2028}")
+        guard parts.count >= 2 else { return }
+        let isFence = { (line: String) in
+            let trimmed = line.trimmingCharacters(in: .whitespaces)
+            return trimmed.hasPrefix("```") || trimmed.hasPrefix("~~~")
+        }
+        let fence: [NSAttributedString.Key: Any] = [.foregroundColor: EditorColor.clear, .prismFence: true]
+        if let first = parts.first, isFence(first) {
+            storage.addAttributes(fence, range: NSRange(location: row.location, length: (first as NSString).length))
+        }
+        if let last = parts.last, isFence(last) {
+            let length = (last as NSString).length
+            storage.addAttributes(fence, range: NSRange(location: NSMaxRange(row) - length, length: length))
+        }
     }
 
     private func hide(_ storage: NSTextStorage, _ range: NSRange, shown: Bool) {
@@ -308,9 +293,18 @@ struct BodyStyler {
         if missing {
             restyle(storage, range) { theme.font($0.pointSize, weight: $0.isBold ? .semibold : .regular, italic: true) }
         }
-        // In a heading, and on a line being written in, a link is only coloured.
+        // In a heading, and on a line being written in, a link is only coloured —
+        // and, being written, set in the code face, its markup with it: written as it is stored.
         if case .heading = line.kind { return }
-        guard !shown else { return }
+        guard !shown else {
+            let mono = theme.mono(size * 0.92)
+            storage.addAttribute(.font, value: mono, range: range)
+            for (start, end) in markupEnd where end == range.location || start == NSMaxRange(range) {
+                guard end <= storage.length, end > start else { continue }
+                storage.addAttribute(.font, value: mono, range: NSRange(location: start, length: end - start))
+            }
+            return
+        }
         storage.addAttribute(.prismPill, value: Pill(symbol: symbol, tint: tint, isMissing: missing), range: range)
         // Room for the icon, on the last character of the markup before the words…
         if symbol != nil, range.location > Int(line.start) {
@@ -423,6 +417,10 @@ final class BodyLayoutManager: NSLayoutManager {
     var lines: [BodyLine] = []
     /// The rows chosen whole, as the characters they cover: marked across the note's width.
     var chosen: ClosedRange<Int>?
+    /// Words found, marked; and the one gone to now, marked more.
+    var found: [NSRange] = []
+    var foundAt: NSRange?
+
     /// Where rows being carried would be put down: a line across the
     /// note at a height, from how far in they would lie.
     var dropLine: (y: CGFloat, x: CGFloat)?
@@ -436,13 +434,6 @@ final class BodyLayoutManager: NSLayoutManager {
         }
         return nil
     }
-    /// What an outline's timelines draw at its rows.
-    var marks: [BodyTimeMark] = []
-    /// The rows being written in: a time block's label is not drawn over
-    /// one, where its time is written out.
-    var written = Set<Int>()
-    /// Whether the note is today's: its timelines show the time now.
-    var isToday = false
     /// What is drawn in place of the first line's bullet, if anything is.
     var lead: EditorLead?
     /// Where the first line begins, when it is a plain bulleted one: the
@@ -495,6 +486,27 @@ final class BodyLayoutManager: NSLayoutManager {
         }
         return total > 0 ? Double(done) / Double(total) : nil
     }
+
+    /// Draws the mark of an outline's only row when nothing is written in
+    /// it yet: the text system draws nothing for no text — not even what
+    /// stands beside it — so the bullet would come only with the first word.
+    func drawEmptyRow(at origin: CGPoint) {
+        guard textStorage?.length == 0, isOutline else { return }
+        if !rows.isEmpty { return drawBackground(forGlyphRange: NSRange(location: 0, length: 0), at: origin) }
+        // No row at all yet — a note just made: the bullet its first row will have, where the caret waits.
+        guard isWriting else { return }
+        let rect = extraLineFragmentRect.height > 0 ? extraLineFragmentRect : CGRect(x: 0, y: 0, width: 0, height: (theme.body.ascender - theme.body.descender).rounded(.up))
+        let baseline = rect.minY + wordsBaseline
+        let box = CGRect(x: 0, y: rect.minY, width: theme.step, height: rect.height)
+        let diameter = max(4.5, (size * 0.3).rounded())
+        theme.secondary.setFill()
+        Self.ovalPath(CGRect(x: box.midX - diameter / 2, y: baseline - theme.body.xHeight / 2 - diameter / 2, width: diameter, height: diameter).offsetBy(dx: origin.x, dy: origin.y)).fill()
+    }
+
+    /// Whether the note is shown as an outline, and whether it is being written in: an empty
+    /// outline being written in shows the bullet its first row will have.
+    var isOutline = false
+    var isWriting = false
 
     /// Whether a point of the container is on the lead.
     func isLead(at point: CGPoint) -> Bool {
@@ -556,19 +568,26 @@ final class BodyLayoutManager: NSLayoutManager {
                 Self.roundedPath(band.insetBy(dx: -4, dy: -1).offsetBy(dx: origin.x, dy: origin.y), radius: 6).fill()
             }
         }
+        // What a find found: a highlighter's yellow behind each, the one gone to brighter.
+        for range in found where range.location <= NSMaxRange(characters) && NSMaxRange(range) >= characters.location {
+            let glyphs = glyphRange(forCharacterRange: range, actualCharacterRange: nil)
+            let current = range == foundAt
+            enumerateEnclosingRects(forGlyphRange: glyphs, withinSelectedGlyphRange: NSRange(location: NSNotFound, length: 0), in: container) { rect, _ in
+                EditorColor.systemYellow.withAlphaComponent(current ? 0.75 : 0.32).setFill()
+                Self.roundedPath(rect.insetBy(dx: -1.5, dy: 0).offsetBy(dx: origin.x, dy: origin.y), radius: 3).fill()
+            }
+        }
         if let dropLine {
             theme.accent.setFill()
             let line = CGRect(x: dropLine.x + origin.x, y: dropLine.y + origin.y - 1, width: max(container.size.width - dropLine.x, 20), height: 2)
             Self.roundedPath(line, radius: 1).fill()
             Self.ovalPath(CGRect(x: line.minX - 3, y: line.midY - 3, width: 6, height: 6)).fill()
         }
-        drawTimeMarks(at: origin, in: characters)
         for (index, line) in lines.enumerated() where line.isFolded && Int(line.start) <= NSMaxRange(characters) && Int(line.end) >= characters.location {
             if let pill = foldPill(ofRow: index) { drawFoldPill(in: pill.offsetBy(dx: origin.x, dy: origin.y)) }
         }
 
         // An outline's marks, beside the rows being drawn.
-        let nodes = Set(marks.filter { $0.head != nil }.compactMap { lines.indices.contains(Int($0.row)) ? Int(lines[Int($0.row)].start) : nil })
         for row in rows where Int(row.start) <= NSMaxRange(characters) && Int(row.end) >= characters.location {
             guard case .item(let number, let done, let bullet) = row.kind, let line = firstLine(of: row) else { continue }
             let box = markBox(of: row, on: line).offsetBy(dx: origin.x, dy: origin.y)
@@ -584,12 +603,11 @@ final class BodyLayoutManager: NSLayoutManager {
                 let attributes: [NSAttributedString.Key: Any] = [.font: EditorFont.monospacedDigitSystemFont(ofSize: size * 0.85, weight: .regular), .foregroundColor: theme.secondary]
                 let width = label.size(withAttributes: attributes).width
                 label.draw(at: CGPoint(x: box.maxX - 6 - width, y: baseline - font.ascender * 0.85 - 1), withAttributes: attributes)
-            } else if !nodes.contains(Int(row.start)), let progress = progress(under: row) {
+            } else if let progress = progress(under: row) {
                 // A row over a checklist: how far along that is, where its bullet would be.
                 let side = (size * 0.74).rounded()
                 drawRing(in: CGRect(x: box.midX - side / 2, y: baseline - font.xHeight / 2 - side / 2, width: side, height: side), fraction: progress, tint: theme.secondary)
-            } else if !nodes.contains(Int(row.start)) {
-                // (A time block's bullet is its node on the timeline, drawn with the line.)
+            } else {
                 let diameter = max(4.5, (size * 0.3).rounded())
                 theme.secondary.setFill()
                 Self.ovalPath(CGRect(x: box.midX - diameter / 2, y: baseline - font.xHeight / 2 - diameter / 2, width: diameter, height: diameter)).fill()
@@ -670,19 +688,45 @@ final class BodyLayoutManager: NSLayoutManager {
             Self.draw(symbol: name, in: box, pointSize: side, weight: .regular, colors: task.isDone ? [.white, theme.accent] : [theme.secondary])
         }
 
+        // A quote's bar beside it: one for quotes that follow one another, as one quote is.
+        var bars: [CGRect] = []
         storage.enumerateAttribute(.prismQuote, in: characters) { value, range, _ in
             guard value != nil else { return }
             let glyphs = glyphRange(forCharacterRange: range, actualCharacterRange: nil)
             var whole = CGRect.null
             var left = CGFloat.greatestFiniteMagnitude
-            enumerateLineFragments(forGlyphRange: glyphs) { _, used, _, _, _ in
-                whole = whole.union(used)
+            enumerateLineFragments(forGlyphRange: glyphs) { fragment, used, _, _, _ in
+                // The whole height of each line: so that the next quote's bar meets this one's.
+                whole = whole.union(CGRect(x: used.minX, y: fragment.minY, width: used.width, height: fragment.height))
                 left = min(left, used.minX)
             }
             guard !whole.isNull else { return }
-            let bar = CGRect(x: max(left - 11, 0), y: whole.minY + 2, width: 3, height: max(whole.height - 4, 2)).offsetBy(dx: origin.x, dy: origin.y)
-            theme.faint.setFill()
-            Self.roundedPath(bar, radius: 1.5).fill()
+            let bar = CGRect(x: max(left - 11, 0), y: whole.minY, width: 3, height: whole.height)
+            if let last = bars.last, abs(last.minX - bar.minX) < 1, bar.minY - last.maxY < size * 0.9 {
+                bars[bars.count - 1] = last.union(bar)
+            } else {
+                bars.append(bar)
+            }
+        }
+        // A fence's backticks sit at the top of their line, leaving it looking
+        // empty under them: they are drawn lower, faint, where the line's
+        // middle is — and the fences stand evenly above and below the code.
+        storage.enumerateAttribute(.prismFence, in: characters) { value, range, _ in
+            guard value != nil else { return }
+            let glyphs = glyphRange(forCharacterRange: range, actualCharacterRange: nil)
+            guard glyphs.length > 0 else { return }
+            let fragment = lineFragmentRect(forGlyphAt: glyphs.location, effectiveRange: nil)
+            let start = location(forGlyphAt: glyphs.location)
+            let font = theme.mono(size * 0.92)
+            let words = NSAttributedString(string: (storage.string as NSString).substring(with: range), attributes: [.font: font, .foregroundColor: theme.faint])
+            let top = fragment.minY + start.y - font.ascender + (size * 0.3).rounded()
+            words.draw(at: CGPoint(x: fragment.minX + start.x + origin.x, y: top + origin.y))
+        }
+
+        theme.faint.setFill()
+        for bar in bars {
+            let drawn = CGRect(x: bar.minX, y: bar.minY + 2, width: bar.width, height: max(bar.height - 4, 2)).offsetBy(dx: origin.x, dy: origin.y)
+            Self.roundedPath(drawn, radius: 1.5).fill()
         }
     }
 
@@ -777,124 +821,6 @@ final class BodyLayoutManager: NSLayoutManager {
         let total = 3 * dot + 2 * gap
         for index in 0..<3 {
             Self.ovalPath(CGRect(x: rect.midX - total / 2 + CGFloat(index) * (dot + gap), y: rect.midY - dot / 2, width: dot, height: dot)).fill()
-        }
-    }
-
-    // MARK: Timelines
-
-    /// A row's node on a timeline: where its bullet would be, on its
-    /// first line — or, for a task, the middle of its box.
-    private func node(of row: BodyLine) -> (point: CGPoint, baseline: CGFloat, isTask: Bool)? {
-        guard let line = firstLine(of: row) else { return nil }
-        var isTask = false
-        if case .item(_, let done, _) = row.kind { isTask = done != nil }
-        let font = theme.body
-        let box = markBox(of: row, on: line)
-        return (CGPoint(x: box.midX, y: line.baseline - (isTask ? font.capHeight : font.xHeight) / 2), line.baseline, isTask)
-    }
-
-    /// Draws the timelines: for each block a line down from its node,
-    /// solid while it lasts and dashed while the time after it is free,
-    /// its time and length over its words, and — in today's note — the
-    /// time now, on the line it falls on.
-    private func drawTimeMarks(at origin: CGPoint, in characters: NSRange) {
-        guard !marks.isEmpty, !lines.isEmpty else { return }
-        let measures = BodyStyler(theme: theme).timeMeasures
-        let feet = Dictionary(marks.map { (Int($0.row), $0) }, uniquingKeysWith: { first, _ in first })
-        let now: Int? = isToday ? {
-            let time = Calendar.current.dateComponents([.hour, .minute], from: Date())
-            return (time.hour ?? 0) * 60 + (time.minute ?? 0)
-        }() : nil
-        for mark in marks {
-            guard let head = mark.head, lines.indices.contains(Int(mark.row)), lines.indices.contains(Int(head.lastRow)) else { continue }
-            let row = lines[Int(mark.row)]
-            // Only those that reach the lines being drawn: a block's line runs on to the next block's node.
-            let reach = lines[min(Int(head.nextRow ?? head.lastRow), lines.count - 1)]
-            guard Int(row.start) <= NSMaxRange(characters), Int(reach.end) >= characters.location, let node = node(of: row) else { continue }
-            // Where the block ends: its last row's foot, after those of blocks nested in it that end there too.
-            let foot = feet[Int(head.lastRow)]
-            var cursor = rect(ofRow: Int(head.lastRow)).maxY - (foot.map(measures.footHeight) ?? 0)
-            var end = cursor
-            var free: ClosedRange<CGFloat>?
-            var freeRoom: ClosedRange<CGFloat>?
-            var freeLabel: String?
-            let nextY = head.nextRow.flatMap { lines.indices.contains(Int($0)) ? self.node(of: lines[Int($0)])?.point.y : nil }
-            for each in foot?.feet ?? [] {
-                let rest = measures.extent(each)
-                if each.timeline == head.timeline, each.index == head.index {
-                    end = cursor + (each.length * measures.row).rounded()
-                    if each.free > 0 {
-                        free = end...max(end, (nextY ?? cursor + rest) - 6)
-                        freeRoom = end...max(end, cursor + rest)
-                        freeLabel = each.freeLabel
-                    }
-                    break
-                }
-                cursor += rest
-            }
-            if free == nil, let nextY { end = max(end, nextY - 6) }
-            let color = head.isDone ? theme.faint : theme.accent
-            let x = node.point.x + origin.x
-            let top = node.point.y + (node.isTask ? size * 0.45 : 3.5) + 2 + origin.y
-            let bottom = end + origin.y
-            // The line: solid while the block lasts, dashed while free.
-            if bottom > top {
-                color.withAlphaComponent(head.level > 0 ? 0.45 : 0.6).setStroke()
-                let solid = EditorPath()
-                solid.move(to: CGPoint(x: x, y: top))
-                solid.addLine(to: CGPoint(x: x, y: bottom))
-                solid.lineWidth = 1.5
-                solid.stroke()
-            }
-            if let free, free.upperBound > free.lowerBound {
-                theme.faint.setStroke()
-                let dashed = EditorPath()
-                dashed.move(to: CGPoint(x: x, y: free.lowerBound + origin.y + 2))
-                dashed.addLine(to: CGPoint(x: x, y: free.upperBound + origin.y))
-                dashed.lineWidth = 1
-                dashed.setLineDash([2, 3], count: 2, phase: 0)
-                dashed.stroke()
-            }
-            let labelX = CGFloat(row.depth) * theme.step
-            if let freeLabel, let freeRoom {
-                let label = NSAttributedString(string: freeLabel, attributes: [.font: EditorFont.systemFont(ofSize: measures.labelSize), .foregroundColor: theme.faint])
-                let height = label.size().height
-                if freeRoom.upperBound - freeRoom.lowerBound >= height {
-                    label.draw(at: CGPoint(x: labelX + origin.x, y: (freeRoom.lowerBound + freeRoom.upperBound) / 2 - height / 2 + origin.y))
-                }
-            }
-            // The node: filled; hollow for a block nested in another's. A task's box is its node.
-            if !node.isTask {
-                let dot = CGRect(x: x - 3.5, y: node.point.y + origin.y - 3.5, width: 7, height: 7)
-                if head.level > 0 {
-                    let ring = Self.ovalPath(dot.insetBy(dx: 0.75, dy: 0.75))
-                    ring.lineWidth = 1.5
-                    color.setStroke()
-                    ring.stroke()
-                } else {
-                    color.setFill()
-                    Self.ovalPath(dot).fill()
-                }
-            }
-            // The time and length over the words — but for the row whose time is written out, where it would say it twice.
-            if !written.contains(Int(mark.row)) {
-                let font = EditorFont.monospacedDigitSystemFont(ofSize: measures.labelSize, weight: .regular)
-                let text = NSMutableAttributedString(string: head.label, attributes: [.font: font, .foregroundColor: theme.secondary])
-                if let overlap = head.overlap {
-                    // Named, when there is room for it.
-                    let room = (textContainers.first?.size.width ?? 320) - labelX - 4
-                    let full = NSAttributedString(string: head.label + " · " + overlap, attributes: [.font: font]).size().width
-                    text.append(NSAttributedString(string: " · " + (full <= room ? overlap : head.overlapShort ?? overlap), attributes: [.font: font, .foregroundColor: EditorColor.systemOrange]))
-                }
-                text.draw(at: CGPoint(x: labelX + origin.x, y: node.baseline - theme.body.ascender - measures.header + origin.y))
-            }
-            // The time now, on the line, where it falls.
-            if let now, Int(head.start) <= now, now < Int(head.end) {
-                let share = CGFloat(now - Int(head.start)) / CGFloat(max(1, Int(head.end) - Int(head.start)))
-                let y = top + (max(top, bottom) - top) * share
-                EditorColor.systemRed.setFill()
-                Self.ovalPath(CGRect(x: x - 3.5, y: y - 3.5, width: 7, height: 7)).fill()
-            }
         }
     }
 

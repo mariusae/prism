@@ -52,6 +52,7 @@ public final class PhoneSession {
             store = try GraphStore(root: folder, token: Account.shared.tokenProvider, relay: Setup.relayHost)
             failure = nil
             register()
+            store?.takeSharedPages()
         } catch {
             failure = "\(error)"
         }
@@ -76,6 +77,8 @@ public final class PhoneSession {
 
     /// The app came to the front: what other devices wrote meanwhile is fetched.
     public func activated() {
+        // Pages shared from other apps meanwhile: their link notes, made and shown.
+        store?.takeSharedPages()
         guard let store, Date().timeIntervalSince(lastActive) > 1.5 else { return }
         lastActive = Date()
         if store.relay != .listening { store.reconnectRelay() }

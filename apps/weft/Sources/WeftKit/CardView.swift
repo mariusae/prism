@@ -23,6 +23,15 @@ struct CardView: View {
     @State private var newTitle = ""
     @State private var backlinks: [Source] = []
     @State private var tags: [String] = []
+    /// The pointer over the strip of actions at an untitled note's corner.
+    @State private var overCorner = false
+    /// The pile of pages that link here, fanned out under the pointer.
+    // WEFT_FAN=1, to picture it: fanned from the first.
+    @State private var fanned = ProcessInfo.processInfo.environment["WEFT_FAN"]?.isEmpty == false
+    @State private var pileHovered = false
+    @State private var fanHovered = false
+    /// How long the line of pages that link here is.
+    @State private var mentionsWidth: CGFloat = 600
     @FocusState private var titleFocused: Bool
 
     init(store: GraphStore, river: River, card: Card) {
@@ -73,7 +82,8 @@ struct CardView: View {
                 if showsHeader { header }
                 if draft.isConflicted { conflict }
                 editor(draft.editor, isFocus: false)
-                if !tags.isEmpty || !backlinks.isEmpty { foot }
+                if !tags.isEmpty || !draft.related.isEmpty { foot }
+                if !backlinks.isEmpty { mentions }
             }
         }
         .padding(.trailing, Measures.cardTrailing)
@@ -83,9 +93,14 @@ struct CardView: View {
         // its ring or icon, if it has one, in its margin.
         .overlay(alignment: .topTrailing) {
             if !card.folded, !showsHeader {
-                actions
+                // Over the first line's end, which may have words under it: shown only under
+                // the pointer — and, while the note is written in, only over the strip itself.
+                let shown = overCorner || (isHovered && !isWriting)
+                strip(shown: shown)
                     .padding(2)
-                    .background(RoundedRectangle(cornerRadius: 8, style: .continuous).fill(Color.inkCard).opacity(showsActions ? 0.94 : 0))
+                    .background(RoundedRectangle(cornerRadius: 8, style: .continuous).fill(Color.inkCard).opacity(shown ? 0.94 : 0))
+                    .contentShape(Rectangle())
+                    .onHover { overCorner = $0 }
                     .padding(.top, 7)
                     .padding(.trailing, Measures.cardTrailing - 2)
             }
@@ -128,8 +143,9 @@ struct CardView: View {
         .task(id: store.indexRevision) { refresh() }
         .onChange(of: bodyHeight) { _, height in store.cardHeights[card.spot] = height }
         // The row it showed is in the note no more: it shows the note.
-        .task(id: "\(card.focus ?? "")|\(draft.revision)") {
-            if let focus = card.focus, draft.view(for: card.id, focus: focus) == nil {
+        .task(id: "\(card.viewKey ?? "")|\(draft.revision)") {
+            // The part it showed is in the note no more: it shows the note.
+            if card.viewKey != nil, draft.view(of: card) == nil {
                 river.setFocus(card.id, nil)
                 store.rememberRivers()
             }
@@ -215,12 +231,18 @@ struct CardView: View {
 
     /// Whether the card has no title to show: a note never given one.
     private var isUntitled: Bool { !isDay && draft.isUntitled }
-    private var showsHeader: Bool { card.focus != nil || !isUntitled || isRenaming }
+    private var showsHeader: Bool { card.viewKey != nil || !isUntitled || isRenaming }
 
     // MARK: A row, shown as a note of its own
 
     /// The note as this card writes in it, when it shows only one row of it.
-    private var focused: NoteEditor? { card.focus.flatMap { draft.view(for: card.id, focus: $0) } }
+    private var focused: NoteEditor? { draft.view(of: card) }
+
+    /// Where the words the card was opened by are, in what it shows: marked.
+    private func marks(in shown: NoteEditor, isFocus: Bool) -> [NSRange] {
+        guard isFocus, case .words(let words) = card.lens else { return [] }
+        return Marks.find(words, in: shown.text())
+    }
 
     /// The way to the row shown, from the note's top: the note, then
     /// each row it is under. Each, clicked, is shown in its place.
@@ -377,7 +399,9 @@ struct CardView: View {
     }
 
     /// The strip of what is done to a card most.
-    private var actions: some View {
+    private var actions: some View { strip(shown: showsActions) }
+
+    private func strip(shown showsActions: Bool) -> some View {
         HStack(spacing: 1) {
             // A note with no title has no title to click, to fold it.
             if !showsHeader, !card.folded { CardButton("chevron.up", help: "Fold") { fold() } }
@@ -386,7 +410,7 @@ struct CardView: View {
                 CardButton("chevron.right", help: "The Day After") { step(1) }
             }
             if !card.folded {
-                CardButton(draft.mode == .outline ? "text.alignleft" : "list.bullet.indent", help: draft.mode == .outline ? "Write as Text" : "Write as an Outline") {
+                CardButton(draft.mode == .outline ? "text.alignleft" : "list.bullet.indent", help: draft.mode == .outline ? "Write as Text (⌥⌘↩)" : "Write as an Outline (⌥⌘↩)") {
                     draft.setMode(draft.mode == .outline ? .text : .outline)
                 }
             }
@@ -419,6 +443,8 @@ struct CardView: View {
                         .font(.system(size: TextSettings.size, design: TextSettings.design))
                         .foregroundStyle(Color.inkFaint)
                         .padding(.top, 2)
+                        // Under a row, beside the bullet its empty row is shown with: where its words will be.
+                        .padding(.leading, isFocus ? Ink.editorTheme.step : 0)
                         .allowsHitTesting(false)
                 }
                 // The editor is the engine's note, shown: the same component
@@ -462,9 +488,9 @@ struct CardView: View {
                     },
                     onMoveRows: { markdown, moved in store.movingRows = GraphStore.MovingRows(markdown: markdown, from: card.path, moved: moved) },
                     savePictures: { pictures in pictures.compactMap { store.savePicture(data: $0.data, fileExtension: $0.fileExtension) } },
-                    isToday: card.path == "daily/\(Days.name(Date())).md",
                     onZoom: { name, apart in zoom(name, apart: apart) },
                     onZoomOut: isFocus ? { widen(shown) } : nil,
+                    marks: store.finding.marks(of: card.id) ?? marks(in: shown, isFocus: isFocus), markAt: store.finding.at(card.id),
                     onChange: { if isFocus { draft.changed(from: card.id) } else { draft.changed() } },
                     onFocus: { focused in
                         if focused {
@@ -500,34 +526,119 @@ struct CardView: View {
                             Button("Open Tag", systemImage: "number") { store.open(name: tag, after: card.id, in: river) }
                         }
                 }
+                // The pages it names as related — a day it was stamped with — beside its tags.
+                ForEach(store.related(draft.related)) { page in
+                    FootPill(title: page.title, emblem: page.emblem, tint: Color.inkAccent) { store.open(name: page.name, after: card.id, in: river) }
+                        .help("Related: \(page.title)")
+                        .contextMenu {
+                            Button("Open", systemImage: "arrow.up.right") { store.open(name: page.name, after: card.id, in: river) }
+                            Button("Remove", systemImage: "minus.circle") { withAnimation(.snappy(duration: 0.2)) { draft.unrelate(page.written) } }
+                        }
+                }
                 // Another tag: beside those there are, and where one is being added.
                 if draft.exists, !tags.isEmpty {
                     FootPill(title: "Tag", emblem: Emblem(symbol: "plus"), tint: Color.inkSecondary) { addsTag = true }
                         .help("Add a tag")
                 }
-                if !backlinks.isEmpty {
-                    Text(tags.isEmpty ? "Linked from" : "· linked from").font(.caption).foregroundStyle(Color.inkSecondary).padding(.vertical, 3)
-                    ForEach(backlinks.prefix(6), id: \.self) { source in
-                        FootPill(title: source.title, emblem: source.emblem, tint: Color.inkSecondary) {
-                            withAnimation(.snappy(duration: 0.28)) { store.show(path: source.path, title: source.name, after: card.id, in: river) }
-                        }
-                    }
-                    if backlinks.count > 6 {
-                        Menu("and \(backlinks.count - 6) more") {
-                            ForEach(backlinks.dropFirst(6), id: \.self) { source in
-                                Button(source.title) { store.show(path: source.path, title: source.name, after: card.id, in: river) }
-                            }
-                        }
-                        .menuStyle(.button)
-                        .buttonStyle(.plain)
-                        .font(.caption)
-                        .foregroundStyle(Color.inkSecondary)
-                        .fixedSize()
-                    }
-                }
             }
             .padding(.top, 4)
         }
+    }
+
+    /// The pages that link here, on one line: as many as it holds, and the
+    /// rest piled at its end — fanned out over the card under the pointer.
+    private var mentions: some View {
+        row {
+            let label = "Linked from"
+            let room = mentionsWidth - Self.width(of: label, size: 11) - 18
+            let widths = backlinks.map { Self.pillWidth($0.title, emblem: $0.emblem) }
+            let shown = Self.fitting(widths, in: room)
+            HStack(spacing: 6) {
+                // Clicked: a river of every page that speaks of this one, each showing where.
+                Button { withAnimation(.snappy(duration: 0.24)) { store.openMentions(of: card.path) } } label: {
+                    HStack(spacing: 3) {
+                        Text(label)
+                        Image(systemName: "arrow.up.right").font(.system(size: 8, weight: .bold))
+                    }
+                    .font(.caption)
+                    .foregroundStyle(Color.inkSecondary)
+                    .padding(.vertical, 3)
+                    .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .hint("Every Mention, as a River")
+                .fixedSize()
+                ForEach(backlinks.prefix(shown), id: \.self) { source in
+                    FootPill(title: source.title, emblem: source.emblem, tint: Color.inkSecondary) { openMention(source) }
+                        .fixedSize()
+                }
+                if shown < backlinks.count {
+                    let rest = Array(backlinks.dropFirst(shown))
+                    BacklinkPile(sources: rest.map { ($0.title, $0.emblem) })
+                        .onHover { inside in pileHovered = inside; settleFan() }
+                        // Fanned out of the pile, over everything — the cards around it too: each, to be clicked.
+                        .popover(isPresented: Binding(get: { fanned }, set: { if !$0 { fanned = false } }), arrowEdge: .top) {
+                            VStack(alignment: .leading, spacing: 4) {
+                                ForEach(rest, id: \.self) { source in
+                                    FootPill(title: source.title, emblem: source.emblem, tint: Color.inkSecondary) {
+                                        fanned = false
+                                        openMention(source)
+                                    }
+                                    .fixedSize()
+                                }
+                            }
+                            .padding(10)
+                            .onHover { inside in fanHovered = inside; settleFan() }
+                        }
+                        .zIndex(1)
+                }
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .onGeometryChange(for: CGFloat.self) { $0.size.width.rounded() } action: { mentionsWidth = $0 }
+            .padding(.top, tags.isEmpty && draft.related.isEmpty ? 4 : 0)
+        }
+        .zIndex(1)
+    }
+
+    /// Open while the pointer is on the pile or on what fanned out of it; shut
+    /// a moment after it leaves both, so that it can pass from one to the other.
+    private func settleFan() {
+        if pileHovered || fanHovered {
+            if !fanned { withAnimation(.snappy(duration: 0.22)) { fanned = true } }
+            return
+        }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.18) {
+            if !pileHovered, !fanHovered, fanned { withAnimation(.snappy(duration: 0.18)) { fanned = false } }
+        }
+    }
+
+    /// How wide words are, in the system's face at a size.
+    private static func width(of words: String, size: CGFloat) -> CGFloat {
+        ceil((words as NSString).size(withAttributes: [.font: NSFont.systemFont(ofSize: size)]).width)
+    }
+
+    /// How wide a pill at a card's foot is: its words, its icon, its padding.
+    private static func pillWidth(_ title: String, emblem: Emblem) -> CGFloat {
+        width(of: emblem.caption(title), size: 12) + (emblem.isShown ? 15 : 0) + 14
+    }
+
+    /// How many of pills so wide fit in a line so long — leaving room, if
+    /// any are left over, for the pile they are put in.
+    private static func fitting(_ widths: [CGFloat], in room: CGFloat) -> Int {
+        let pile: CGFloat = 92, gap: CGFloat = 6
+        var used: CGFloat = 0
+        for (index, width) in widths.enumerated() {
+            let next = used + width + gap
+            let left = index + 1 < widths.count
+            if next + (left ? pile : 0) > room { return index }
+            used = next
+        }
+        return widths.count
+    }
+
+    /// A page that links here, opened after this card — showing where it does.
+    private func openMention(_ source: Source) {
+        withAnimation(.snappy(duration: 0.28)) { store.openMention(in: source.path, title: source.name, of: card.path, after: card.id, in: river) }
     }
 
     private var conflict: some View {
@@ -595,6 +706,12 @@ struct CardView: View {
         if isUntitled, !draft.isBlank { Button("Make First Line the Title", systemImage: "arrow.up") { withAnimation(.snappy(duration: 0.22)) { _ = draft.titleByFirstLine() } } }
         if draft.exists { Button("Icon and Colour…", systemImage: "paintpalette") { choosesLook = true } }
         if draft.exists { Button("Add Tag…", systemImage: "number") { addsTag = true } }
+        if !isDay {
+            let today = Days.name(Date())
+            Button(draft.isStamped(today) ? "Stamped with Today" : "Stamp with Today", systemImage: "calendar.badge.plus") { draft.stamp(today) }
+                .keyboardShortcut("t", modifiers: [.command, .control])
+                .disabled(draft.isStamped(today))
+        }
         Picker("Write As", selection: Binding(get: { draft.mode }, set: { draft.setMode($0) })) {
             Label("Outline", systemImage: "list.bullet.indent").tag(EditorMode.outline)
             Label("Text", systemImage: "text.alignleft").tag(EditorMode.text)
@@ -786,7 +903,42 @@ struct CardButtonFace: View {
             .background(RoundedRectangle(cornerRadius: 6).fill(Color.inkText.opacity(isHovered ? 0.08 : 0)))
             .contentShape(Rectangle())
             .onHover { isHovered = $0 }
+            // An arrow over a button, though the note's text lies under it.
+            .onContinuousHover { phase in if case .active = phase { NSCursor.arrow.set() } }
             .animation(.easeOut(duration: 0.1), value: isHovered)
+    }
+}
+
+/// Many pages that link to a note, piled: a few pills, each a little
+/// behind and turned from the last, and how many there are.
+struct BacklinkPile: View {
+    let sources: [(title: String, emblem: Emblem)]
+
+    var body: some View {
+        HStack(spacing: 8) {
+            ZStack(alignment: .leading) {
+                ForEach(Array(sources.prefix(3).enumerated().reversed()), id: \.offset) { index, source in
+                    HStack(spacing: 3) {
+                        if source.emblem.isShown { EmblemView(source.emblem, size: 12, style: .plain, quiet: Color.inkSecondary) }
+                        Text(source.emblem.caption(source.title)).font(.system(size: 12)).lineLimit(1)
+                    }
+                    .frame(maxWidth: 140, alignment: .leading)
+                    .padding(.horizontal, 7)
+                    .padding(.vertical, 2.5)
+                    .foregroundStyle(Color.inkSecondary)
+                    .background(Capsule().fill(Color.inkCard))
+                    .background(Capsule().fill(Color.inkSecondary.opacity(0.10)))
+                    .overlay(Capsule().strokeBorder(Color.inkRule, lineWidth: 0.5))
+                    .rotationEffect(.degrees(Double(index) * -3), anchor: .bottomLeading)
+                    .offset(x: CGFloat(index) * 9, y: CGFloat(index) * -1.5)
+                    .opacity(1 - Double(index) * 0.18)
+                }
+            }
+            .padding(.trailing, 18)
+            Text("+\(sources.count)").font(.caption.monospacedDigit().weight(.semibold)).foregroundStyle(Color.inkSecondary)
+        }
+        .contentShape(Rectangle())
+        .help("\(sources.count) more pages link here")
     }
 }
 
@@ -795,6 +947,8 @@ struct FootPill: View {
     let title: String
     let emblem: Emblem
     let tint: Color
+    /// Drawn over something else — fanned out of a pile — and so not to be seen through.
+    var solid = false
     let action: () -> Void
     @State private var isHovered = false
 
@@ -808,6 +962,7 @@ struct FootPill: View {
             .padding(.vertical, 2.5)
             .foregroundStyle(tint)
             .background(Capsule().fill(tint.opacity(isHovered ? 0.18 : 0.10)))
+            .background(Capsule().fill(solid ? Color.inkCard : .clear))
             .contentShape(Capsule())
         }
         .buttonStyle(.plain)

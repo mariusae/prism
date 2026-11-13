@@ -154,6 +154,15 @@ struct QueryRiverEditor: View {
     @State private var choosesLook = false
     @State private var allTags: [TagCount] = []
     @State private var limitText = ""
+    /// The name last chosen from those offered: nothing more is offered for it.
+    @State private var pickedLink = ""
+
+    /// The notes whose names begin with what is typed as a note to link to.
+    private var linkOffers: [PageInfo] {
+        let typed = spec.linksTo.trimmingCharacters(in: .whitespaces)
+        guard !typed.isEmpty, typed != pickedLink else { return [] }
+        return ((try? store.engine.complete(typed: typed, limit: 6)) ?? []).filter { (Prism.linkName(path: $0.path) ?? $0.title) != typed }
+    }
 
     private var river: River? {
         if case .edit(let river) = ask { return river }
@@ -187,6 +196,30 @@ struct QueryRiverEditor: View {
                     tags("Tagged", $spec.tags)
                     tags("Excluding Tags", $spec.notTags)
                     TextField("Linking To", text: $spec.linksTo, prompt: Text("A note's name"))
+                    // Names of notes, as they are typed: one clicked is the one meant.
+                    let offered = linkOffers
+                    if !offered.isEmpty {
+                        ScrollView(.horizontal, showsIndicators: false) {
+                            HStack(spacing: 6) {
+                                ForEach(offered, id: \.path) { page in
+                                    Button {
+                                        spec.linksTo = Prism.linkName(path: page.path) ?? page.title
+                                        pickedLink = spec.linksTo
+                                    } label: {
+                                        HStack(spacing: 4) {
+                                            EmblemView(store.emblem(page), size: 12, style: .plain, quiet: Color.inkSecondary)
+                                            Text(page.label).lineLimit(1)
+                                        }
+                                        .font(.system(size: 12))
+                                        .padding(.horizontal, 8)
+                                        .padding(.vertical, 3)
+                                        .background(Capsule().fill(Color.inkAccent.opacity(0.12)))
+                                    }
+                                    .buttonStyle(.plain)
+                                }
+                            }
+                        }
+                    }
                     TextField("Saying", text: $spec.saying, prompt: Text("Words it has"))
                     TextField("At Most", text: $limitText, prompt: Text("\(GraphStore.foundLimit)"))
                 } header: {

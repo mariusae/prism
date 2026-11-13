@@ -3,8 +3,8 @@ import Prism
 import UIKit
 
 /// The tools over the keys: undo and redo, out and in, up and down over
-/// the main capsule — its tools (an outline's begin with Fold and end
-/// with New Time Block), or Aa's formatting, or the pages offered for a
+/// the main capsule — its tools (the microphone, then, in an outline,
+/// Fold), or Aa's formatting, or the pages offered for a
 /// link being typed — with Aa before it and Done after.
 ///
 /// Pieces of glass with nothing between them: a touch between two is the
@@ -18,8 +18,6 @@ final class EditorKeyboardBar: UIInputView {
         case link
         /// The rows under the caret's row put out of sight, or shown again.
         case fold
-        /// A time block from now, to name.
-        case timeBlock
         /// The first line, made the title.
         case title
         /// What is said, written at the caret — or, being written, no more.
@@ -52,7 +50,6 @@ final class EditorKeyboardBar: UIInputView {
     private weak var titleButton: UIButton?
     private weak var foldButton: UIButton?
     private weak var micButton: UIButton?
-    private weak var timeButton: UIButton?
     private let tick = UISelectionFeedbackGenerator()
     /// Whether Aa's tools are the capsule's, in place of its own.
     private var isFormatting = false
@@ -75,12 +72,11 @@ final class EditorKeyboardBar: UIInputView {
     }
 
     /// Whether the note is shown as an outline: only then are there rows
-    /// to fold, and time blocks among them to make.
+    /// to fold.
     var isOutline = true {
         didSet {
             guard isOutline != oldValue else { return }
             foldButton?.isHidden = !isOutline
-            timeButton?.isHidden = !isOutline
         }
     }
 
@@ -114,13 +110,11 @@ final class EditorKeyboardBar: UIInputView {
             ("checkmark.circle", .command(.toggleTask), "Task"),
             ("list.bullet", .command(.bullet), "Bullet"),
             ("link", .link, "Link"),
-            ("clock", .timeBlock, "New Time Block"),
             ("textformat.size.larger", .title, "Title"),
         ], size: 17)
         micButton = tools.arrangedSubviews.first as? UIButton
         foldButton = tools.arrangedSubviews.dropFirst().first as? UIButton
         foldButton?.isEnabled = false
-        timeButton = tools.arrangedSubviews.dropLast().last as? UIButton
         titleButton = tools.arrangedSubviews.last as? UIButton
         titleButton?.isHidden = true
         fill(formatting, [

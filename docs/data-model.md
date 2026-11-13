@@ -456,11 +456,6 @@ not the note's: nothing in the note says what is focused on, only what
 each row is called. A river's card remembers it ([§11](#11-saved-rivers)),
 so a page can stand in a river as several cards, each one of its rows.
 
-**A time block is a list item that starts with a time**: `9:00–10:30
-Deep work`, `11am Standup`. A list whose every item starts so — two or
-more, or one that says when it ends — is a timeline (`time::find`), and
-an outline draws it as one. Nothing but the words says so.
-
 **Losslessness** rests on two things: `Layout` records what the writer
 needs to give back the same bytes; and any top-level chunk that would
 still not write back as read is kept whole as a `Raw` block, checked at

@@ -31,9 +31,9 @@ use crate::block::{Block, BlockKind, Document, Item, Marker, Task};
 use crate::editor::{self, Command, Layout, Line, LineKind, RowKind};
 use crate::frontmatter::Frontmatter;
 use crate::inline;
+use crate::note::name_key;
 use crate::outline::{self, Path};
 use crate::river::FoldedRow;
-use crate::time::{self, TimeFoot, TimeHead, TimeMark};
 use std::ops::Range;
 
 /// How a session shows its body.
@@ -628,18 +628,13 @@ impl Session {
     }
 
     fn perform_rows(&mut self, selection: Range<usize>, rows: Option<&[usize]>, command: Command) -> Option<Change> {
-        let at_caret = matches!(command, Command::Newline | Command::DeleteBackward | Command::Toggle(_) | Command::NewTimeBlock { .. });
+        let at_caret = matches!(command, Command::Newline | Command::DeleteBackward | Command::Toggle(_));
         if at_caret && rows.is_some() {
             return None;
         }
         let before = self.text.clone();
         if self.rows.is_empty() {
-            // Nothing written yet: a time block makes the first row.
-            if !matches!(command, Command::NewTimeBlock { .. }) {
-                return None;
-            }
-            self.body.blocks.push(Block::bullet(""));
-            self.project();
+            return None;
         }
         if at_caret {
             return self.perform_at_caret(before, selection, command);
@@ -667,6 +662,18 @@ impl Session {
                 }
                 let block = self.body.get(&path)?;
                 if !block.splits() {
+                    // Return on a code block's closing fence, or on the empty line
+                    // just before it: out of the block, into a row after it.
+                    let offset = own_offset(&self.text[self.rows[first].range.clone()], start.1);
+                    if kind == BlockKind::Code {
+                        if let Some(text) = leaving_code(&block.text, offset) {
+                            self.body.get_mut(&path)?.text = text;
+                            let (&index, parent) = path.split_last()?;
+                            let next = [parent, &[index + 1]].concat();
+                            outline::insert(&mut self.body, &next, Block::new(BlockKind::Item(Item { marker: Marker::Bullet('-'), task: None }), ""))?;
+                            return Some(self.changed(before, (next, 0), None));
+                        }
+                    }
                     // In code, a line of the same block.
                     return Some(self.replace_rows(selection, &SOFT_BREAK.to_string()));
                 }
@@ -695,12 +702,6 @@ impl Session {
                     self.body.get_mut(&path)?.text = code;
                     return Some(self.changed(before, (path, caret), None));
                 }
-                if at_end {
-                    // At a time block's end: the next, starting as it ends.
-                    if let Some((next, caret)) = time::next_block(&mut self.body, &path) {
-                        return Some(self.changed(before, (next, caret), None));
-                    }
-                }
                 if offset == 0 && !at_end {
                     // At a row's start: an empty row above it, and the caret stays with the words.
                     let below = outline::open_above(&mut self.body, &path)?;
@@ -726,6 +727,20 @@ impl Session {
                     return Some(self.replace_rows(row.start + picture.start..row.start + picture.end, ""));
                 }
                 match kind {
+                    // A code block with nothing in it, back to the fence it was typed as.
+                    BlockKind::Code => {
+                        let block = self.body.get_mut(&path)?;
+                        let lines: Vec<&str> = block.text.lines().collect();
+                        let empty = lines.len() >= 2 && is_fence(lines[lines.len() - 1]) && lines[1..lines.len() - 1].iter().all(|line| line.trim().is_empty());
+                        if !empty || !is_fence(lines[0]) {
+                            return None;
+                        }
+                        let fence = lines[0].trim().to_string();
+                        let length = fence.len();
+                        block.text = fence;
+                        outline::set_kind(&mut self.body, &path, BlockKind::Item(Item { marker: Marker::Bullet('-'), task: None }));
+                        return Some(self.changed(before, (path, length), None));
+                    }
                     // First its checkbox, then what makes it more than a line…
                     BlockKind::Item(Item { task: Some(_), marker }) => {
                         outline::set_kind(&mut self.body, &path, BlockKind::Item(Item { marker, task: None }));
@@ -751,10 +766,6 @@ impl Session {
                 let (styled, range) = inline::toggle(&self.text[row.clone()], start.1..end.1, style);
                 self.body.get_mut(&path)?.text = styled.replace(SOFT_BREAK, "\n");
                 Some(self.changed(before, (path.clone(), range.end), Some((path, range.start))))
-            }
-            Command::NewTimeBlock { now } => {
-                let (made, caret) = time::new_block(&mut self.body, &path, now)?;
-                Some(self.changed(before, (made, caret), None))
             }
             _ => None,
         }
@@ -931,7 +942,7 @@ impl Session {
                     any |= self.body.get_mut(&at).is_some_and(|block| sink_done(&mut block.children));
                 }
             }
-            Command::Newline | Command::DeleteBackward | Command::Toggle(_) | Command::NewTimeBlock { .. } => {}
+            Command::Newline | Command::DeleteBackward | Command::Toggle(_) => {}
         }
         any.then_some(())
     }
@@ -1183,70 +1194,6 @@ impl Session {
         Document { blocks, final_newline: true, line_ending: self.body.line_ending, ..Document::default() }.to_markdown()
     }
 
-    /// What an outline draws of its timelines, row by row: see
-    /// [`crate::time`]. `twelve_hour` says how the labels tell the time:
-    /// `1:30 PM`, or `13:30`. Empty as text.
-    pub fn time_marks(&self, twelve_hour: bool) -> Vec<TimeMark> {
-        let timelines = if self.mode == Mode::Outline { time::find(&self.body) } else { Vec::new() };
-        let row = |path: &[usize]| self.rows.iter().position(|row| row.path == path);
-        let mut marks: std::collections::BTreeMap<usize, TimeMark> = std::collections::BTreeMap::new();
-        for (t, timeline) in timelines.iter().enumerate() {
-            let within = |row: &&RowSpan| timeline.parent.as_ref().is_none_or(|parent| row.path.starts_with(parent));
-            for (n, block) in timeline.blocks.iter().enumerate() {
-                // Folded away: none of the timeline is shown.
-                let (Some(head), Some(written)) = (row(&block.path), self.body.get(&block.path)) else { break };
-                let next = timeline.blocks.get(n + 1).and_then(|next| row(&next.path));
-                // Its last row: the one before the next block — an empty row after it is its own.
-                let last = next.map_or_else(|| head + self.rows[head + 1..].iter().take_while(within).count(), |next| next - 1);
-                // Starting before an earlier one ends: overlapping it.
-                let overlap = timeline.blocks[..n].iter().max_by_key(|earlier| earlier.end).filter(|earlier| earlier.end > block.start()).map(|earlier| {
-                    let minutes = time::length(earlier.end.min(block.end) - block.start());
-                    let words = self.body.get(&earlier.path).map_or("", |block| block.text.get(earlier.stamp.full_len..).unwrap_or(""));
-                    let name = words.lines().next().unwrap_or("").trim();
-                    let name = if name.chars().count() > 24 {
-                        format!("{}… ", name.chars().take(23).collect::<String>())
-                    } else if name.is_empty() {
-                        String::new()
-                    } else {
-                        format!("{name} ")
-                    };
-                    (format!("overlaps {name}{minutes}"), format!("{minutes} overlap"))
-                });
-                let start = self.rows[head].range.start;
-                marks.entry(head).or_insert_with(|| TimeMark { row: head, ..TimeMark::default() }).head = Some(TimeHead {
-                    timeline: t,
-                    index: n,
-                    level: timeline.level,
-                    start: block.start(),
-                    end: block.end,
-                    label: format!("{} · {}", time::span(block.start(), block.end, twelve_hour), time::length(block.duration())),
-                    overlap: overlap.as_ref().map(|(long, _)| long.clone()),
-                    overlap_short: overlap.map(|(_, short)| short),
-                    stamp: start..start + block.stamp.full_len.min(self.rows[head].range.len()),
-                    last_row: last,
-                    next_row: next,
-                    done: written.task_state().is_some_and(Task::is_done),
-                });
-                let free = block.free();
-                marks.entry(last).or_insert_with(|| TimeMark { row: last, ..TimeMark::default() }).feet.push(TimeFoot {
-                    timeline: t,
-                    index: n,
-                    level: timeline.level,
-                    length: time::length_room(block.duration()),
-                    free,
-                    free_length: time::free_room(free),
-                    free_label: (free > 0).then(|| format!("{} free", time::length(free))),
-                    is_last: n + 1 == timeline.blocks.len(),
-                });
-            }
-        }
-        let mut marks: Vec<TimeMark> = marks.into_values().collect();
-        for mark in &mut marks {
-            mark.feet.sort_by_key(|foot| std::cmp::Reverse(foot.level));
-        }
-        marks
-    }
-
     // --- Focus ---------------------------------------------------------------------
     //
     // A session can be **focused** on one row of the outline: it then
@@ -1307,19 +1254,73 @@ impl Session {
         self.undone.clear();
         self.redone.clear();
         self.typing = None;
-        let found = name.is_none_or(|name| {
-            let Some(root) = anchored(&self.body, name) else { return false };
-            let Some(block) = self.body.get_mut(&root) else { return false };
-            let mut under = std::mem::take(&mut block.children);
-            if under.is_empty() {
-                under.push(Block::bullet(""));
+        let found = name.is_none_or(|name| anchored(&self.body, name).is_some_and(|root| self.focus_at(root)));
+        self.project();
+        found
+    }
+
+    /// Focuses on the block at a path of the whole body — which is then
+    /// all the session shows of it. Says whether there is such a block.
+    fn focus_at(&mut self, root: Path) -> bool {
+        let Some(block) = self.body.get_mut(&root) else { return false };
+        let mut under = std::mem::take(&mut block.children);
+        if under.is_empty() {
+            under.push(Block::bullet(""));
+        }
+        let shown = Document { blocks: under, final_newline: true, line_ending: self.body.line_ending, ..Document::default() };
+        let whole = std::mem::replace(&mut self.body, shown);
+        self.outer = Some(Outer { whole, root });
+        self.mode = Mode::Outline;
+        true
+    }
+
+    /// Focuses where a mention is: on the first list item that links to a
+    /// page by any of `names` — its own words, not those under it — the
+    /// smallest block that holds the mention, with what is under it. For a
+    /// card showing where a page is spoken of. Nothing is named, and
+    /// nothing in the note changes. Says whether there was such a row; if
+    /// not, the whole note is shown.
+    pub fn focus_on_links(&mut self, names: &[String]) -> bool {
+        let keys: Vec<String> = names.iter().map(|name| name_key(name)).filter(|key| !key.is_empty()).collect();
+        self.focus_where(|session| {
+            let found = session.body.rows().into_iter().find(|row| row.block.can_have_children() && links_to(&row.block.text, &keys))?.path;
+            session.subtree_around(found)
+        })
+    }
+
+    /// The smallest subtree holding a row that has rows under it: the row
+    /// itself, if it has; else the row it is under, and so on up. None —
+    /// the whole note — when no row above it has any.
+    fn subtree_around(&self, mut path: Path) -> Option<Path> {
+        while !path.is_empty() && !self.body.get(&path).is_some_and(|block| block.can_have_children() && !block.children.is_empty()) {
+            path.pop();
+        }
+        (!path.is_empty()).then_some(path)
+    }
+
+    /// Focuses on the smallest list item that holds every place any of
+    /// `words` is said, case aside — as a find narrows a note to where what
+    /// was looked for is. Says whether there was one smaller than the note.
+    pub fn focus_on_words(&mut self, words: &[String]) -> bool {
+        let words: Vec<String> = words.iter().map(|word| word.to_lowercase()).filter(|word| !word.is_empty()).collect();
+        self.focus_where(|session| {
+            let found: Vec<Path> = session.body.rows().into_iter().filter(|row| says(&row.block.text, &words)).map(|row| row.path).collect();
+            let first = found.first()?;
+            // What all of them are under — or they themselves, one row.
+            let mut common = first.clone();
+            for path in &found[1..] {
+                let same = common.iter().zip(path).take_while(|(a, b)| a == b).count();
+                common.truncate(same);
             }
-            let shown = Document { blocks: under, final_newline: true, line_ending: self.body.line_ending, ..Document::default() };
-            let whole = std::mem::replace(&mut self.body, shown);
-            self.outer = Some(Outer { whole, root });
-            self.mode = Mode::Outline;
-            true
-        });
+            // Narrowed to a list item with rows under it, never past the note's top.
+            session.subtree_around(common)
+        })
+    }
+
+    fn focus_where(&mut self, find: impl FnOnce(&Session) -> Option<Path>) -> bool {
+        self.set_focus(None);
+        let Some(root) = find(self) else { return false };
+        let found = self.focus_at(root);
         self.project();
         found
     }
@@ -1580,6 +1581,27 @@ fn written_marks(document: &Document) -> std::borrow::Cow<'_, Document> {
     std::borrow::Cow::Owned(marked)
 }
 
+/// Whether a block's words link to a page by one of these name keys.
+fn links_to(text: &str, keys: &[String]) -> bool {
+    fn any(spans: &[inline::Span], keys: &[String]) -> bool {
+        spans.iter().any(|span| {
+            let target = match &span.kind {
+                inline::SpanKind::WikiLink { target, .. } => Some(target.as_str()),
+                inline::SpanKind::Tag(name) => Some(name.as_str()),
+                _ => None,
+            };
+            target.is_some_and(|target| keys.contains(&name_key(target))) || any(&span.children, keys)
+        })
+    }
+    !keys.is_empty() && any(&inline::parse(text), keys)
+}
+
+/// Whether a block's words say any of these, case aside.
+fn says(text: &str, words: &[String]) -> bool {
+    let text = inline::plain_text(text).to_lowercase();
+    words.iter().any(|word| text.contains(word.as_str()))
+}
+
 /// A name for a row: a few letters no row of the body has.
 fn new_anchor(document: &Document) -> String {
     use std::hash::{BuildHasher, Hasher};
@@ -1769,6 +1791,30 @@ fn clamp(text: &str, range: Range<usize>) -> Range<usize> {
     start..floor(range.end).max(start)
 }
 
+/// Whether a line is a code fence: three backticks or tildes, and perhaps a language.
+fn is_fence(line: &str) -> bool {
+    let line = line.trim();
+    let marks = line.len() - line.trim_start_matches(['`', '~']).len();
+    marks >= 3 && line.chars().skip(marks).all(|c| c.is_alphanumeric() || "+#.-_".contains(c))
+}
+
+/// A code block's text with Return given at a byte offset in it, when that
+/// leaves the block: on its closing fence as it is, or on the empty line
+/// just before the fence without that line.
+fn leaving_code(text: &str, offset: usize) -> Option<String> {
+    let mut lines: Vec<&str> = text.split('\n').collect();
+    if lines.len() < 2 || !is_fence(lines.last()?) {
+        return None;
+    }
+    let line = text[..offset.min(text.len())].matches('\n').count();
+    if line == lines.len() - 2 && line > 0 && lines[line].trim().is_empty() && lines.len() > 2 {
+        lines.remove(line);
+    } else if line != lines.len() - 1 {
+        return None;
+    }
+    Some(lines.join("\n"))
+}
+
 /// An offset in a row as shown, as an offset in the block's own text:
 /// a soft break is three bytes shown, one kept.
 fn own_offset(shown: &str, offset: usize) -> usize {
@@ -1838,6 +1884,32 @@ mod tests {
         // In code, they are only words.
         const CODE: &str = "```\nx <!-- folded -->\n```\n";
         assert_eq!(Session::new(CODE, Mode::Outline).markdown(), CODE);
+    }
+
+    #[test]
+    fn a_session_focuses_where_a_page_is_spoken_of_or_words_are_said() {
+        const NOTE: &str = "# Day\n\n- standup\n- met with [[Ada Lovelace|Ada]] about\n  - the engine\n  - and [[Babbage]]\n- later #ada\n";
+        let (mut session, view) = outline(NOTE);
+        assert!(session.focus_on_links(&["Ada Lovelace".into()]));
+        assert_eq!((session.focus_title().as_deref(), session.text()), (Some("met with [[Ada Lovelace|Ada]] about"), "the engine\nand [[Babbage]]"));
+        assert_eq!(session.focus(), None, "nothing is named for it");
+        assert_eq!(session.markdown(), NOTE, "and nothing in the note changes");
+        // A mention in a row with nothing under it: the row it is under — a
+        // subtree, never a row alone.
+        assert!(session.focus_on_links(&["babbage".into()]) && session.focus_title().as_deref() == Some("met with [[Ada Lovelace|Ada]] about"));
+        // A tag is a mention too — at the top, under nothing, it is the whole
+        // note; as is a page not spoken of.
+        assert!(!session.focus_on_links(&["Ada".into()]) && session.text() == view);
+        assert!(!session.focus_on_links(&["Nobody".into()]) && session.text() == view);
+        // Words: the smallest subtree holding every place they are said.
+        assert!(session.focus_on_words(&["ENGINE".into(), "babbage".into()]));
+        assert_eq!(session.focus_title().as_deref(), Some("met with [[Ada Lovelace|Ada]] about"));
+        assert!(session.focus_on_words(&["engine".into()]) && session.focus_title().as_deref() == Some("met with [[Ada Lovelace|Ada]] about"));
+        // A day linked in a row of its own at the top: the whole note.
+        let (mut session, view) = outline("# Cos\n\n- [[2026-11-12]]\n- What are you up to\n- Kitchen\n  - don't make your own\n");
+        assert!(!session.focus_on_links(&["2026-11-12".into()]) && session.text() == view);
+        // Said in two places with nothing over both: the whole note.
+        assert!(!session.focus_on_words(&["standup".into(), "later".into()]) && session.text() == view);
     }
 
     #[test]
@@ -2198,6 +2270,46 @@ mod tests {
         // A fence with words after it on its line is only words.
         let (mut session, view) = outline("- ``` and `more`\n");
         assert!(!session.perform(view.len()..view.len(), Command::Newline).is_some_and(|_| session.markdown().contains("```\n")));
+    }
+
+    #[test]
+    fn return_on_a_code_blocks_last_line_leaves_it() {
+        let (mut session, mut view) = outline("- one\n");
+        let end = view.len();
+        shown(&mut view, &session.replace(end..end, "\n```"));
+        let end = view.len();
+        let change = session.perform(end..end, Command::Newline).unwrap();
+        shown(&mut view, &change);
+        let caret = change.selection.start;
+        shown(&mut view, &session.replace(caret..caret, "foobar"));
+        // A line break in the code, then Return on that empty last line: out.
+        let at = caret + "foobar".len();
+        let change = session.perform(at..at, Command::Newline).unwrap();
+        shown(&mut view, &change);
+        let change = session.perform(change.selection.clone(), Command::Newline).unwrap();
+        shown(&mut view, &change);
+        shown(&mut view, &session.replace(change.selection.clone(), "after"));
+        assert_eq!(session.markdown(), "- one\n```\nfoobar\n```\n- after\n");
+        // On the closing fence, too.
+        let at = view.find("after").unwrap() - 1;
+        let change = session.perform(at..at, Command::Newline).unwrap();
+        shown(&mut view, &change);
+        assert_eq!(session.markdown(), "- one\n```\nfoobar\n```\n- \n- after\n");
+        assert_eq!(view, session.text());
+    }
+
+    #[test]
+    fn delete_at_an_empty_code_blocks_start_makes_it_its_fence_again() {
+        let (mut session, mut view) = outline("- one\n");
+        let end = view.len();
+        shown(&mut view, &session.replace(end..end, "\n```rust"));
+        let end = view.len();
+        shown(&mut view, &session.perform(end..end, Command::Newline).unwrap());
+        let start = view.find("```").unwrap();
+        let change = session.perform(start..start, Command::DeleteBackward).unwrap();
+        shown(&mut view, &change);
+        assert_eq!(session.markdown(), "- one\n- ```rust\n");
+        assert_eq!(change.selection, view.len()..view.len());
     }
 
     #[test]
@@ -2619,41 +2731,6 @@ mod tests {
         session.perform_on(&[1], 0..0, Command::Fold).unwrap();
         assert_eq!(session.markdown_of(&[1]), "- two\n  - under two\n    - deep\n  - also under\n");
         assert_eq!(session.markdown_of(&[]), "");
-    }
-
-    #[test]
-    fn time_blocks_are_made_and_marked() {
-        let (mut session, mut view) = outline("- Today\n  - 9:00 Standup\n  - 9:30–11:00 Deep work\n    - notes\n  - 13:00 Lunch\n");
-        let marks = session.time_marks(false);
-        let heads: Vec<_> =
-            marks.iter().filter_map(|mark| mark.head.as_ref().map(|head| (mark.row, head.label.as_str(), head.last_row, head.next_row))).collect();
-        assert_eq!(heads, [(1, "9:00 – 9:30 · 30m", 1, Some(2)), (2, "9:30 – 11:00 · 1h 30m", 3, Some(4)), (4, "13:00 – 13:30 · 30m", 4, None)]);
-        // Where a block's time is written, with the space after it; and the free time after the second.
-        let stamp = marks[1].head.as_ref().unwrap().stamp.clone();
-        assert_eq!(&view[stamp], "9:30–11:00 ");
-        let foot = &marks.iter().find(|mark| mark.row == 3).unwrap().feet[0];
-        assert_eq!((foot.free, foot.free_label.as_deref(), foot.is_last), (120, Some("2h free"), false));
-        assert_eq!(session.time_marks(true)[0].head.as_ref().unwrap().label, "9 – 9:30 AM · 30m");
-        // Return at a block's end makes the next, the caret after its time.
-        let at = at_end_of(&view, "9:00 Standup");
-        let change = session.perform(at..at, Command::Newline).unwrap();
-        shown(&mut view, &change);
-        assert_eq!(&view[..change.selection.start], "Today\n9:00 Standup\n9:30–10:00 ");
-        // It starts before the one after it ends: said of that one.
-        let overlapped = session.time_marks(false).into_iter().find_map(|mark| mark.head.filter(|head| head.overlap.is_some())).unwrap();
-        assert_eq!((overlapped.overlap.as_deref(), overlapped.overlap_short.as_deref()), (Some("overlaps 30m"), Some("30m overlap")));
-        shown(&mut view, &session.undo().unwrap());
-        // A new block at a row among them: where its time puts it.
-        let change = session.perform(at..at, Command::NewTimeBlock { now: 11 * 60 + 12 }).unwrap();
-        shown(&mut view, &change);
-        assert_eq!(session.markdown(), "- Today\n  - 9:00 Standup\n  - 9:30–11:00 Deep work\n    - notes\n  - 11:10–11:25 \n  - 13:00 Lunch\n");
-        assert!(view[..change.selection.start].ends_with("11:10–11:25 "));
-        // Folded away, a timeline has nothing to draw; in an empty note, a block is its first row.
-        session.perform_on(&[0], 0..0, Command::Fold).unwrap();
-        assert!(session.time_marks(false).is_empty());
-        let (mut empty, _) = outline("");
-        empty.perform(0..0, Command::NewTimeBlock { now: 600 }).unwrap();
-        assert_eq!(empty.markdown(), "- 10:00–10:15 \n");
     }
 
     #[test]

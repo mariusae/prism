@@ -82,6 +82,45 @@ final class PhoneFeaturesTests: XCTestCase {
 
     // MARK: Back places
 
+    func testOneCardOfANote() {
+        let river = River()
+        let whole = Card(path: "notes/cos.md", title: "Cos")
+        river.open(whole)
+        // Gone to again by where it speaks of a page: the card that is there, now showing where.
+        river.open(Card(path: "notes/cos.md", title: "Cos", lens: .mentions("notes/zach.md")))
+        XCTAssertEqual(river.cards.count, 1)
+        XCTAssertEqual(river.cards[0].lens, .mentions("notes/zach.md"))
+        // And by a plain link: whole again.
+        river.open(whole)
+        XCTAssertEqual(river.cards.count, 1)
+        XCTAssertNil(river.cards[0].lens)
+        // Opened first by where it speaks of a page, then again by another: one card, showing the latest.
+        let other = River()
+        let lensed = Card(path: "notes/cos.md", title: "Cos", lens: .mentions("notes/zach.md"))
+        other.open(lensed)
+        other.open(Card(path: "notes/cos.md", title: "Cos", lens: .mentions("notes/ada.md")))
+        XCTAssertEqual(other.cards.count, 1)
+        XCTAssertEqual(other.cards[0].lens, .mentions("notes/ada.md"))
+        // A row of it shown as a card of its own stays apart.
+        other.open(Card(path: "notes/cos.md", title: "Cos", focus: "x1"))
+        XCTAssertEqual(other.cards.count, 2)
+        // A lens that finds nothing gives way to the whole note — and, were the whole note there already, to it.
+        let third = River()
+        third.open(lensed)
+        third.cards.append(Card(path: "notes/cos.md", title: "Cos"))
+        third.setFocus(lensed.id, nil)
+        XCTAssertEqual(third.cards.count, 1)
+        // A query river's own card of it, gone to by a backlink: shows where — and still does when found again.
+        let query = River()
+        query.query = "tag: person"
+        query.take(found: [("notes/zach.md", "Zach")], total: 1)
+        query.open(Card(path: "notes/zach.md", title: "Zach", lens: .mentions("daily/2026-11-12.md")))
+        XCTAssertEqual(query.all.count, 1)
+        XCTAssertEqual(query.all[0].lens, .mentions("daily/2026-11-12.md"))
+        query.take(found: [("notes/zach.md", "Zach")], total: 1)
+        XCTAssertEqual(query.all[0].lens, .mentions("daily/2026-11-12.md"))
+    }
+
     func testBackPlaces() {
         let river = River()
         let a = Card(path: "notes/a.md", title: "A"), b = Card(path: "notes/b.md", title: "B"), c = Card(path: "notes/c.md", title: "C")

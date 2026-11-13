@@ -68,12 +68,18 @@ struct PhoneCard: View {
     private var isWriting: Bool { river.writing == card.id }
     private var isDay: Bool { card.path.hasPrefix("daily/") || card.path.hasPrefix("weekly/") }
     private var isUntitled: Bool { !isDay && draft.isUntitled }
-    private var showsHeader: Bool { card.focus != nil || !isUntitled || isRenaming }
+    private var showsHeader: Bool { card.viewKey != nil || !isUntitled || isRenaming }
 
     // MARK: A row, shown as a note of its own
 
     /// The note as this card writes in it, when it shows only one row of it.
-    private var focused: NoteEditor? { card.focus.flatMap { draft.view(for: card.id, focus: $0) } }
+    private var focused: NoteEditor? { draft.view(of: card) }
+
+    /// Where the words the card was opened by are, in what it shows: marked.
+    private func marks(in shown: NoteEditor, isFocus: Bool) -> [NSRange] {
+        guard isFocus, case .words(let words) = card.lens else { return [] }
+        return Marks.find(words, in: shown.text())
+    }
 
     /// The way to the row shown, from the note's top: the note, then
     /// each row it is under. Each, tapped, is shown in its place.
@@ -206,7 +212,7 @@ struct PhoneCard: View {
                     if showsHeader { header }
                     if draft.isConflicted { conflict }
                     editor(draft.editor, isFocus: false)
-                    if !tags.isEmpty || !backlinks.isEmpty { foot }
+                    if !tags.isEmpty || !backlinks.isEmpty || !draft.related.isEmpty { foot }
                 }
             }
             .padding(.horizontal, 16)
@@ -233,8 +239,9 @@ struct PhoneCard: View {
         .task(id: store.indexRevision) { refresh() }
         .onChange(of: bodyHeight) { _, height in store.cardHeights[card.spot] = height }
         // The row it showed is in the note no more: it shows the note.
-        .task(id: "\(card.focus ?? "")|\(draft.revision)") {
-            if let focus = card.focus, draft.view(for: card.id, focus: focus) == nil {
+        .task(id: "\(card.viewKey ?? "")|\(draft.revision)") {
+            // The part it showed is in the note no more: it shows the note.
+            if card.viewKey != nil, draft.view(of: card) == nil {
                 river.setFocus(card.id, nil)
                 store.rememberRivers()
             }
@@ -331,6 +338,8 @@ struct PhoneCard: View {
                     .font(.system(size: TextSettings.size, design: TextSettings.design))
                     .foregroundStyle(Color.inkFaint)
                     .padding(.top, 2)
+                    // Under a row, beside the bullet its empty row is shown with: where its words will be.
+                    .padding(.leading, isFocus ? Ink.editorTheme.step : 0)
                     .allowsHitTesting(false)
             }
             NoteEditorView(
@@ -362,9 +371,9 @@ struct PhoneCard: View {
                     },
                     onMoveRows: { markdown, moved in store.movingRows = GraphStore.MovingRows(markdown: markdown, from: card.path, moved: moved) },
                     savePictures: { pictures in pictures.compactMap { store.savePicture(data: $0.data, fileExtension: $0.fileExtension) } },
-                    isToday: card.path == "daily/\(Days.name(Date())).md",
                 onZoom: { name, apart in zoom(name, apart: apart) },
                 onZoomOut: isFocus ? { widen(shown) } : nil,
+                marks: marks(in: shown, isFocus: isFocus),
                 onChange: { if isFocus { draft.changed(from: card.id) } else { draft.changed() } },
                 onFocus: { focused in
                     if focused {
@@ -419,20 +428,32 @@ struct PhoneCard: View {
                         Button("Open Tag", systemImage: "number") { store.open(name: tag, after: card.id, in: river) }
                     }
             }
+            // The pages it names as related — a day it was stamped with — beside its tags.
+            ForEach(store.related(draft.related)) { page in
+                pill(page.title, page.emblem, Color.inkAccent) { store.open(name: page.name, after: card.id, in: river) }
+                    .contextMenu {
+                        Button("Open", systemImage: "arrow.up.right") { store.open(name: page.name, after: card.id, in: river) }
+                        Button("Remove", systemImage: "minus.circle", role: .destructive) { withAnimation(.snappy(duration: 0.2)) { draft.unrelate(page.written) } }
+                    }
+            }
             if draft.exists, !tags.isEmpty {
                 pill("Tag", Emblem(symbol: "plus"), Color.inkSecondary) { addsTag = true }
             }
             if !backlinks.isEmpty {
-                Text(tags.isEmpty ? "Linked from" : "· linked from").font(.caption).foregroundStyle(Color.inkSecondary).padding(.vertical, 4)
+                // Tapped: a river of every page that speaks of this one, each showing where.
+                Button { withAnimation(.snappy(duration: 0.24)) { store.openMentions(of: card.path) } } label: {
+                    Label(tags.isEmpty && draft.related.isEmpty ? "Linked from" : "linked from", systemImage: "arrow.up.right").labelStyle(TrailingIcon()).font(.caption).foregroundStyle(Color.inkSecondary).padding(.vertical, 4)
+                }
+                .buttonStyle(.plain)
                 ForEach(backlinks.prefix(6), id: \.self) { source in
                     pill(source.title, source.emblem, Color.inkSecondary) {
-                        withAnimation(.snappy(duration: 0.28)) { store.show(path: source.path, title: source.name, after: card.id, in: river) }
+                        withAnimation(.snappy(duration: 0.28)) { store.openMention(in: source.path, title: source.name, of: card.path, after: card.id, in: river) }
                     }
                 }
                 if backlinks.count > 6 {
                     Menu("and \(backlinks.count - 6) more") {
                         ForEach(backlinks.dropFirst(6), id: \.self) { source in
-                            Button(source.title) { store.show(path: source.path, title: source.name, after: card.id, in: river) }
+                            Button(source.title) { store.openMention(in: source.path, title: source.name, of: card.path, after: card.id, in: river) }
                         }
                     }
                     .font(.caption)
@@ -586,6 +607,12 @@ struct PhoneCard: View {
             if isUntitled, !draft.isBlank { Button("Make First Line the Title", systemImage: "arrow.up") { withAnimation(.snappy(duration: 0.22)) { _ = draft.titleByFirstLine() } } }
             if draft.exists { Button("Icon and Colour…", systemImage: "paintpalette") { choosesLook = true } }
             if draft.exists { Button("Add Tag…", systemImage: "number") { addsTag = true } }
+            // Linked to today in its frontmatter: today's page lists it.
+            if !isDay {
+                let today = Days.name(Date())
+                Button(draft.isStamped(today) ? "Stamped with Today" : "Stamp with Today", systemImage: "calendar.badge.plus") { draft.stamp(today) }
+                    .disabled(draft.isStamped(today))
+            }
         }
         if draft.exists, !isDay {
             Section {
@@ -1096,6 +1123,15 @@ struct BottomCard<Content: View>: View {
     private func leave() {
         withAnimation(.easeIn(duration: 0.12)) { dimmed = false }
         dismiss()
+    }
+}
+/// A label with its icon after its words, small.
+struct TrailingIcon: LabelStyle {
+    func makeBody(configuration: Configuration) -> some View {
+        HStack(spacing: 3) {
+            configuration.title
+            configuration.icon.font(.system(size: 8, weight: .bold))
+        }
     }
 }
 #endif

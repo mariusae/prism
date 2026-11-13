@@ -9,12 +9,15 @@ let package = Package(
     platforms: [.macOS("26.0"), .iOS("26.0")],
     products: [
         .library(name: "WeftKit", targets: ["WeftKit"]),
+        // What the share extension and the app pass between them; nothing more, so the extension stays small.
+        .library(name: "WeftShared", targets: ["WeftShared"]),
         .executable(name: "WeftMac", targets: ["WeftMac"]),
     ],
     dependencies: [.package(path: "../../apple")],
     targets: [
         // The views and what they hold, for the Mac, the iPad and the iPhone.
-        .target(name: "WeftKit", dependencies: [.product(name: "Prism", package: "apple"), .product(name: "PrismEditor", package: "apple"), .product(name: "PrismEmblem", package: "apple"), .product(name: "PrismDictation", package: "apple")]),
+        .target(name: "WeftShared"),
+        .target(name: "WeftKit", dependencies: ["WeftShared", .product(name: "Prism", package: "apple"), .product(name: "PrismEditor", package: "apple"), .product(name: "PrismEmblem", package: "apple"), .product(name: "PrismDictation", package: "apple")]),
         // The Mac app around them. Wrapped as Weft.app by scripts/build-app.sh.
         .executableTarget(name: "WeftMac", dependencies: ["WeftKit"]),
         // What can be checked without a screen: `swift test`.
