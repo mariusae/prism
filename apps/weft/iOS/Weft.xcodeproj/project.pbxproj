@@ -7,6 +7,7 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+		CF0000000000000000000010 /* WeftKit in Frameworks */ = {isa = PBXBuildFile; productRef = CF0000000000000000000020 /* WeftKit */; };
 		BF0000000000000000000010 /* WeftShared in Frameworks */ = {isa = PBXBuildFile; productRef = BF0000000000000000000020 /* WeftShared */; };
 		BF0000000000000000000011 /* WeftShare.appex in Embed Foundation Extensions */ = {isa = PBXBuildFile; fileRef = BF0000000000000000000005 /* WeftShare.appex */; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
 		AE0000000000000000000010 /* WeftKit in Frameworks */ = {isa = PBXBuildFile; productRef = AE0000000000000000000020 /* WeftKit */; };
@@ -37,6 +38,9 @@
 /* End PBXCopyFilesBuildPhase section */
 
 /* Begin PBXFileReference section */
+		CF0000000000000000000005 /* Weft Reader.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = "Weft Reader.app"; sourceTree = BUILT_PRODUCTS_DIR; };
+		CF000000000000000000001C /* WeftReader-Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = "WeftReader-Info.plist"; sourceTree = "<group>"; };
+		CF000000000000000000001D /* WeftReader.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = WeftReader.entitlements; sourceTree = "<group>"; };
 		BF0000000000000000000005 /* WeftShare.appex */ = {isa = PBXFileReference; explicitFileType = "wrapper.app-extension"; includeInIndex = 0; path = WeftShare.appex; sourceTree = BUILT_PRODUCTS_DIR; };
 		BF000000000000000000001C /* WeftShare-Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = "WeftShare-Info.plist"; sourceTree = "<group>"; };
 		BF000000000000000000001D /* WeftShare.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = WeftShare.entitlements; sourceTree = "<group>"; };
@@ -47,6 +51,11 @@
 /* End PBXFileReference section */
 
 /* Begin PBXFileSystemSynchronizedRootGroup section */
+		CF0000000000000000000003 /* WeftReader */ = {
+			isa = PBXFileSystemSynchronizedRootGroup;
+			path = WeftReader;
+			sourceTree = "<group>";
+		};
 		BF0000000000000000000003 /* WeftShare */ = {
 			isa = PBXFileSystemSynchronizedRootGroup;
 			path = WeftShare;
@@ -60,6 +69,14 @@
 /* End PBXFileSystemSynchronizedRootGroup section */
 
 /* Begin PBXFrameworksBuildPhase section */
+		CF0000000000000000000008 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				CF0000000000000000000010 /* WeftKit in Frameworks */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 		BF0000000000000000000008 /* Frameworks */ = {
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
@@ -89,6 +106,9 @@
 				BF0000000000000000000003 /* WeftShare */,
 				BF000000000000000000001C /* WeftShare-Info.plist */,
 				BF000000000000000000001D /* WeftShare.entitlements */,
+				CF0000000000000000000003 /* WeftReader */,
+				CF000000000000000000001C /* WeftReader-Info.plist */,
+				CF000000000000000000001D /* WeftReader.entitlements */,
 				AE0000000000000000000004 /* Products */,
 			);
 			sourceTree = "<group>";
@@ -98,6 +118,7 @@
 			children = (
 				AE0000000000000000000005 /* Weft.app */,
 				BF0000000000000000000005 /* WeftShare.appex */,
+				CF0000000000000000000005 /* Weft Reader.app */,
 			);
 			name = Products;
 			sourceTree = "<group>";
@@ -105,6 +126,29 @@
 /* End PBXGroup section */
 
 /* Begin PBXNativeTarget section */
+		CF0000000000000000000006 /* WeftReader */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = CF0000000000000000000030 /* Build configuration list for PBXNativeTarget "WeftReader" */;
+			buildPhases = (
+				CF0000000000000000000007 /* Sources */,
+				CF0000000000000000000008 /* Frameworks */,
+				CF0000000000000000000009 /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			fileSystemSynchronizedGroups = (
+				CF0000000000000000000003 /* WeftReader */,
+			);
+			name = WeftReader;
+			packageProductDependencies = (
+				CF0000000000000000000020 /* WeftKit */,
+			);
+			productName = WeftReader;
+			productReference = CF0000000000000000000005 /* Weft Reader.app */;
+			productType = "com.apple.product-type.application";
+		};
 		AE0000000000000000000006 /* Weft */ = {
 			isa = PBXNativeTarget;
 			buildConfigurationList = AE0000000000000000000030 /* Build configuration list for PBXNativeTarget "Weft" */;
@@ -169,6 +213,9 @@
 					BF0000000000000000000006 = {
 						CreatedOnToolsVersion = 27.0;
 					};
+					CF0000000000000000000006 = {
+						CreatedOnToolsVersion = 27.0;
+					};
 				};
 			};
 			buildConfigurationList = AE0000000000000000000031 /* Build configuration list for PBXProject "Weft" */;
@@ -190,11 +237,19 @@
 			targets = (
 				AE0000000000000000000006 /* Weft */,
 				BF0000000000000000000006 /* WeftShare */,
+				CF0000000000000000000006 /* WeftReader */,
 			);
 		};
 /* End PBXProject section */
 
 /* Begin PBXResourcesBuildPhase section */
+		CF0000000000000000000009 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 		BF0000000000000000000009 /* Resources */ = {
 			isa = PBXResourcesBuildPhase;
 			buildActionMask = 2147483647;
@@ -212,6 +267,13 @@
 /* End PBXResourcesBuildPhase section */
 
 /* Begin PBXSourcesBuildPhase section */
+		CF0000000000000000000007 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 		BF0000000000000000000007 /* Sources */ = {
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
@@ -237,6 +299,66 @@
 /* End PBXTargetDependency section */
 
 /* Begin XCBuildConfiguration section */
+		CF0000000000000000000042 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			baseConfigurationReference = AE000000000000000000001B /* GitHub.xcconfig */;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				CODE_SIGN_ENTITLEMENTS = WeftReader.entitlements;
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = G3V66M4637;
+				ENABLE_PREVIEWS = YES;
+				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_FILE = "WeftReader-Info.plist";
+				INFOPLIST_KEY_CFBundleDisplayName = "Weft Reader";
+				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
+				INFOPLIST_KEY_UILaunchScreen_Generation = YES;
+				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPad = "UIInterfaceOrientationPortrait UIInterfaceOrientationPortraitUpsideDown UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight";
+				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPhone = UIInterfaceOrientationPortrait;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+				);
+				MARKETING_VERSION = 0.1;
+				PRODUCT_BUNDLE_IDENTIFIER = org.mutable.weft.reader;
+				PRODUCT_NAME = "Weft Reader";
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+			};
+			name = Debug;
+		};
+		CF0000000000000000000043 /* Release */ = {
+			isa = XCBuildConfiguration;
+			baseConfigurationReference = AE000000000000000000001B /* GitHub.xcconfig */;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				CODE_SIGN_ENTITLEMENTS = WeftReader.entitlements;
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = G3V66M4637;
+				ENABLE_PREVIEWS = YES;
+				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_FILE = "WeftReader-Info.plist";
+				INFOPLIST_KEY_CFBundleDisplayName = "Weft Reader";
+				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
+				INFOPLIST_KEY_UILaunchScreen_Generation = YES;
+				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPad = "UIInterfaceOrientationPortrait UIInterfaceOrientationPortraitUpsideDown UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight";
+				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPhone = UIInterfaceOrientationPortrait;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+				);
+				MARKETING_VERSION = 0.1;
+				PRODUCT_BUNDLE_IDENTIFIER = org.mutable.weft.reader;
+				PRODUCT_NAME = "Weft Reader";
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+			};
+			name = Release;
+		};
 		BF0000000000000000000042 /* Debug */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
@@ -388,6 +510,15 @@
 /* End XCBuildConfiguration section */
 
 /* Begin XCConfigurationList section */
+		CF0000000000000000000030 /* Build configuration list for PBXNativeTarget "WeftReader" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				CF0000000000000000000042 /* Debug */,
+				CF0000000000000000000043 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
 		BF0000000000000000000030 /* Build configuration list for PBXNativeTarget "WeftShare" */ = {
 			isa = XCConfigurationList;
 			buildConfigurations = (
@@ -425,6 +556,10 @@
 /* End XCLocalSwiftPackageReference section */
 
 /* Begin XCSwiftPackageProductDependency section */
+		CF0000000000000000000020 /* WeftKit */ = {
+			isa = XCSwiftPackageProductDependency;
+			productName = WeftKit;
+		};
 		BF0000000000000000000020 /* WeftShared */ = {
 			isa = XCSwiftPackageProductDependency;
 			productName = WeftShared;

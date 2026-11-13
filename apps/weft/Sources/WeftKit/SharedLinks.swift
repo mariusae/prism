@@ -37,6 +37,10 @@ extension GraphStore {
             let related = editor.fields().first { $0.key == "related" }?.values ?? []
             if !related.contains(where: { nameKey(name: $0.trimmingCharacters(in: CharacterSet(charactersIn: "[] "))) == nameKey(name: day) }) {
                 editor.setListField(key: "related", values: related + [day])
+            }
+            // Shared again: to be read again, in the inbox.
+            if editor.field(key: "inbox") != "true" { editor.setField(key: "inbox", value: "true") }
+            if editor.markdown() != known {
                 guard (try? engine.write(path: first, content: editor.markdown())) != nil else { return nil }
             }
             return first
@@ -80,6 +84,8 @@ enum LinkNote {
         let source = "---\nid: \"\(id(for: page.url))\"\nicon: link\n---\n\n# \(title)\n\n" + rows.joined(separator: "\n") + "\n"
         let editor = NoteEditor.open(source: source, mode: .outline)
         editor.setListField(key: "related", values: [day])
+        // Saved to read: in the inbox, where Weft Reader reads from.
+        editor.setField(key: "inbox", value: "true")
         return editor.markdown()
     }
 }

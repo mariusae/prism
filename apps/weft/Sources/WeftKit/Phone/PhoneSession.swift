@@ -42,6 +42,12 @@ public final class PhoneSession {
         return hasClone ? cloneFolder : nil
     }
 
+    /// Where, in the app group, the repository the graph is kept in is noted.
+    static let graphRemoteKey = "GraphRemote"
+
+    /// The repository the other app's graph is kept in, if it has noted it.
+    static var notedRemote: String? { UserDefaults(suiteName: Setup.appGroup)?.string(forKey: graphRemoteKey) }
+
     /// Whether the graph is one named to try the app out with: no welcome is shown for it.
     public static var isTrial: Bool { ProcessInfo.processInfo.arguments.contains("-GraphPath") }
 
@@ -52,6 +58,8 @@ public final class PhoneSession {
             store = try GraphStore(root: folder, token: Account.shared.tokenProvider, relay: Setup.relayHost)
             failure = nil
             register()
+            // Which repository the graph is, for the other app — Weft Reader — to bring down the same.
+            if !Self.isTrial, let remote = store?.remote { UserDefaults(suiteName: Setup.appGroup)?.set(remote, forKey: Self.graphRemoteKey) }
             store?.takeSharedPages()
         } catch {
             failure = "\(error)"

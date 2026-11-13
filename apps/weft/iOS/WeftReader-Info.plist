@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>GitHubAppSlug</key>
+	<string>$(GITHUB_APP_SLUG)</string>
+	<key>GitHubClientID</key>
+	<string>$(GITHUB_CLIENT_ID)</string>
+	<key>GitHubClientSecret</key>
+	<string>$(GITHUB_CLIENT_SECRET)</string>
+	<key>SharesSignIn</key>
+	<true/>
+	<key>SyncRelayHost</key>
+	<string>$(SYNC_RELAY_HOST)</string>
+</dict>
+</plist>

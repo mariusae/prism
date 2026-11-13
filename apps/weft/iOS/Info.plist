@@ -19,6 +19,8 @@
 	<string>$(GITHUB_CLIENT_ID)</string>
 	<key>GitHubClientSecret</key>
 	<string>$(GITHUB_CLIENT_SECRET)</string>
+	<key>SharesSignIn</key>
+	<true/>
 	<key>NSMicrophoneUsageDescription</key>
 	<string>To hear what you say while dictating into a card.</string>
 	<key>NSSpeechRecognitionUsageDescription</key>

@@ -13,9 +13,14 @@ import WebKit
 /// the page is read. On the phone, over the river.
 struct ReaderPanel: View {
     let store: GraphStore
-    let river: River
+    /// The river it is read over, closed back into; none in Weft Reader,
+    /// where the reader is the whole app.
+    var river: River?
     /// The note whose pages these are.
     let place: River.Place
+    /// Done with, or put off, where there is no river to go on in: the
+    /// app's to go on to the next.
+    var onFinish: ((ReadingQueue.Snooze?) -> Void)?
     @State private var index = 0
     @State private var reading = true
     @State private var web = ReaderWeb()
@@ -53,8 +58,10 @@ struct ReaderPanel: View {
 
     private func bar(_ sources: [ReaderSource], _ source: ReaderSource?) -> some View {
         HStack(spacing: 14) {
-            Button { river.reading = nil } label: { Image(systemName: "xmark").frame(minWidth: 28, minHeight: 32).contentShape(Rectangle()) }
-                .accessibilityLabel("Close the Reader")
+            if let river {
+                Button { river.reading = nil } label: { Image(systemName: "xmark").frame(minWidth: 28, minHeight: 32).contentShape(Rectangle()) }
+                    .accessibilityLabel("Close the Reader")
+            }
             if sources.count > 1 {
                 Button { index = max(0, index - 1) } label: { Image(systemName: "chevron.left").frame(minWidth: 24, minHeight: 32).contentShape(Rectangle()) }
                     .disabled(index == 0)
@@ -123,6 +130,7 @@ struct ReaderPanel: View {
     }
 
     private func finish(_ snooze: ReadingQueue.Snooze?) {
+        guard let river else { return onFinish?(snooze) ?? () }
         store.finishReading(path: place.path, title: place.title, snooze: snooze)
         if let next = store.readingQueue().pages.first(where: { $0.path != place.path }) {
             store.show(path: next.path, title: next.title, in: river)

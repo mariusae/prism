@@ -23,6 +23,21 @@ public enum Setup {
 
     public static var hasGitHub: Bool { !clientID.isEmpty }
 
+    /// What the app is called, as the phone shows it: Weft, or Weft Reader.
+    public static var appName: String {
+        let shown = info("CFBundleDisplayName")
+        return shown.isEmpty ? "Weft" : shown
+    }
+
+    /// Whether the app keeps its sign-in in the keychain group Weft and
+    /// Weft Reader share (`SharesSignIn`), so that signing in to one signs
+    /// in both. The Mac's does not.
+    static var sharesSignIn: Bool { Bundle.main.object(forInfoDictionaryKey: "SharesSignIn") as? Bool == true }
+
+    /// The app group they share, as the share extension does: what is
+    /// passed between them is left there.
+    public static let appGroup = "group.org.mutable.weft"
+
     /// Where GitHub sends the browser back to: the GitHub App's callback URL.
     static let callbackScheme = "com.mariusae.reflect"
     static var redirectURI: String { "\(callbackScheme)://oauth/callback" }
@@ -31,10 +46,34 @@ public enum Setup {
 /// The keychain, as the engine's account keeps its tokens in it: one
 /// opaque string. On the phone it can be read once the phone has been
 /// unlocked, so that a sync in the background has its token.
+///
+/// With a keychain group (Weft and Weft Reader on the phone), the tokens
+/// are one item in it, which both apps read: signed in to one, signed in
+/// to both. Weft's own item, kept before there was a group, is found
+/// where it is and moved into the group.
 final class KeychainVault: TokenVault, @unchecked Sendable {
-    private let service = "\(Bundle.main.bundleIdentifier ?? "com.mariusae.weft").github"
+    private let group = Setup.sharesSignIn ? KeychainVault.defaultGroup : nil
+
+    /// The group an item goes into when it is given none: the first of the
+    /// app's `keychain-access-groups` — the shared one, `…org.mutable.weft.shared`
+    /// with the team's prefix, which only the keychain knows whole. Asked of
+    /// it once, by a moment's item.
+    private static let defaultGroup: String? = {
+        let probe: [String: Any] = [kSecClass as String: kSecClassGenericPassword, kSecAttrService as String: "org.mutable.weft.probe", kSecAttrAccount as String: "group"]
+        SecItemDelete(probe as CFDictionary)
+        var added = probe
+        added[kSecValueData as String] = Data()
+        added[kSecReturnAttributes as String] = true
+        var found: AnyObject?
+        guard SecItemAdd(added as CFDictionary, &found) == errSecSuccess else { return nil }
+        SecItemDelete(probe as CFDictionary)
+        return (found as? [String: Any])?[kSecAttrAccessGroup as String] as? String
+    }()
+    /// One name for both apps where they share — Weft's, as it always was.
+    private var service: String { group != nil ? "org.mutable.weft.github" : "\(Bundle.main.bundleIdentifier ?? "com.mariusae.weft").github" }
     private let account = "tokens"
 
+    /// The item, in whatever group it is in: the shared one, or the app's own.
     private var query: [String: Any] {
         [kSecClass as String: kSecClassGenericPassword, kSecAttrService as String: service, kSecAttrAccount as String: account]
     }
@@ -43,7 +82,26 @@ final class KeychainVault: TokenVault, @unchecked Sendable {
         var found: AnyObject?
         var query = query
         query[kSecReturnData as String] = true
-        if SecItemCopyMatching(query as CFDictionary, &found) == errSecSuccess, let data = found as? Data { return String(data: data, encoding: .utf8) }
+        query[kSecReturnAttributes as String] = true
+        if SecItemCopyMatching(query as CFDictionary, &found) == errSecSuccess, let item = found as? [String: Any], let data = item[kSecValueData as String] as? Data,
+           let tokens = String(data: data, encoding: .utf8) {
+            // Kept before the group was: moved into it, for the other app to read —
+            // put there first, and only then taken from where it was.
+            if let group, let was = item[kSecAttrAccessGroup as String] as? String, was != group {
+                var moved = self.query
+                moved[kSecValueData as String] = data
+                moved[kSecAttrAccessGroup as String] = group
+                #if os(iOS)
+                moved[kSecAttrAccessible as String] = kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly
+                #endif
+                if SecItemAdd(moved as CFDictionary, nil) == errSecSuccess {
+                    var old = self.query
+                    old[kSecAttrAccessGroup as String] = was
+                    SecItemDelete(old as CFDictionary)
+                }
+            }
+            return tokens
+        }
         #if os(iOS)
         // Nothing of this app's own: what the Weft it replaces kept, taken
         // over — so that an update over it is still signed in.
@@ -85,6 +143,7 @@ final class KeychainVault: TokenVault, @unchecked Sendable {
         guard let tokens else { return }
         var item = query
         item[kSecValueData as String] = Data(tokens.utf8)
+        if let group { item[kSecAttrAccessGroup as String] = group }
         #if os(iOS)
         item[kSecAttrAccessible as String] = kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly
         #endif

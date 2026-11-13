@@ -162,7 +162,7 @@ struct GitHubConnect: View {
                 VStack(spacing: 18) {
                     Image(systemName: "person.crop.circle.badge.checkmark").font(.system(size: 50, weight: .light)).foregroundStyle(Color.inkAccent)
                     Text("Sign In to GitHub").font(.title.weight(.semibold))
-                    Text("Weft signs in with a GitHub App, and only sees the repositories you give it.").foregroundStyle(Color.inkSecondary).multilineTextAlignment(.center).padding(.horizontal, 32)
+                    Text("\(Setup.appName) signs in with a GitHub App, and only sees the repositories you give it.").foregroundStyle(Color.inkSecondary).multilineTextAlignment(.center).padding(.horizontal, 32)
                     Button(account.isBusy ? "Signing In…" : "Sign In with GitHub") { account.signIn { load() } }
                         .buttonStyle(.borderedProminent)
                         .controlSize(.large)
@@ -178,10 +178,14 @@ struct GitHubConnect: View {
                     } else {
                         Section {
                             if let repositories {
-                                ForEach(repositories, id: \.fullName) { repository in
+                                // The one the other app's graph is kept in, first: the graph, most likely.
+                                let noted = PhoneSession.notedRemote?.lowercased() ?? ""
+                                let isNoted = { (repository: GitHubRepository) in !noted.isEmpty && noted.contains(repository.fullName.lowercased()) }
+                                ForEach(repositories.filter(isNoted) + repositories.filter { !isNoted($0) }, id: \.fullName) { repository in
                                     Button { bringDown(repository) } label: {
                                         HStack {
                                             Label(repository.fullName, systemImage: repository.isPrivate ? "lock" : "book.closed").foregroundStyle(Color.inkText)
+                                            if isNoted(repository) { Text(Setup.appName == "Weft" ? "Weft Reader's" : "Weft's").font(.footnote).foregroundStyle(Color.inkSecondary) }
                                             Spacer()
                                             Image(systemName: "chevron.right").font(.footnote).foregroundStyle(Color.inkFaint)
                                         }
@@ -191,7 +195,7 @@ struct GitHubConnect: View {
                                 ProgressView()
                             }
                         } header: { Text("Choose Your Graph") } footer: {
-                            Text(repositories?.isEmpty == true ? "Weft has not been given any repositories yet." : "The graph comes down to this device, into Weft's own folder, and is kept in step with GitHub.")
+                            Text(repositories?.isEmpty == true ? "\(Setup.appName) has not been given any repositories yet." : "The graph comes down to this device, into \(Setup.appName)'s own folder, and is kept in step with GitHub.")
                         }
                     }
                     Section {
