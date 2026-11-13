@@ -629,6 +629,7 @@ struct CardView: View {
         if isUntitled, !draft.isBlank { Button("Make First Line the Title", systemImage: "arrow.up") { withAnimation(.snappy(duration: 0.22)) { _ = draft.titleByFirstLine() } } }
         if draft.exists { Button("Icon and Colour…", systemImage: "paintpalette") { choosesLook = true } }
         if draft.exists { Button("Add Tag…", systemImage: "number") { addsTag = true } }
+        if river.query == nil || !river.isFound(card.id) { MoveToRiverMenu(store: store, river: river, ids: [card.id]) }
         if !isDay {
             let today = Days.name(Date())
             Button(draft.isStamped(today) ? "Stamped with Today" : "Stamp with Today", systemImage: "calendar.badge.plus") { draft.stamp(today) }

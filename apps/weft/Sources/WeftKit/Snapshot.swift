@@ -137,6 +137,12 @@ enum Snapshot {
         if let pair = environment["WEFT_MENTION"]?.split(separator: "|").map(String.init), pair.count == 2, let note = store.resolve(pair[0]), let page = store.resolve(pair[1]) {
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { store.openMention(in: note.path, title: pair[0], of: page.path, after: store.river.selected) }
         }
+        // WEFT_MOVE=1: the river picker, as ⇧⌘M brings it, for the card chosen.
+        if environment["WEFT_MOVE"] != nil {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
+                if let id = store.river.selected ?? store.river.cards.first?.id { store.movingCards = .init(ids: [id], river: store.river) }
+            }
+        }
         // WEFT_MENTIONS=Ada: a river of every page speaking of that one.
         if let page = environment["WEFT_MENTIONS"], let found = store.resolve(page), found.exists { DispatchQueue.main.async { store.openMentions(of: found.path) } }
         // WEFT_FIND="words": the find bar, looking for them; WEFT_FIND_STEPS=2, gone on so many times.

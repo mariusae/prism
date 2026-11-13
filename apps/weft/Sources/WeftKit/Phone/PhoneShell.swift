@@ -96,6 +96,17 @@ struct PhoneShell: View {
         // Pinched together, the river is seen whole.
         .simultaneousGesture(MagnifyGesture().onEnded { if $0.magnification < 0.75, !store.river.all.isEmpty { state.showsCards = true } })
         .sheet(isPresented: $state.showsSettings) { PhoneSettings(store: store) }
+        // A river to move a card to, found by name.
+        .sheet(item: Binding(get: { store.movingCards }, set: { store.movingCards = $0 })) { moving in
+            let title = moving.ids.count == 1 ? moving.river.card(moving.ids[0]).map { "“\(store.label(path: $0.path, title: $0.title))”" } ?? "this card" : "\(moving.ids.count) cards"
+            RiverPicker(store: store, river: moving.river, what: title) { target, copying in
+                store.movingCards = nil
+                store.move(moving.ids, from: moving.river, to: target, copying: copying)
+            } cancel: { store.movingCards = nil }
+            .padding(.top, 8)
+            .presentationDetents([.medium, .large])
+            .presentationBackground(Color.inkPaper)
+        }
         // A note's pages read, over the river.
         // Over it on a phone; beside it, where the window is wide (above).
         .sheet(isPresented: Binding(get: { store.river.reading != nil && !isWide }, set: { if !$0, !isWide { store.river.reading = nil } })) {

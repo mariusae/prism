@@ -605,21 +605,28 @@ struct PhoneCard: View {
 
     /// What a hold on the title gives.
     @ViewBuilder private var holdMenu: some View {
+        // What is done most, as a row of three at the top.
+        ControlGroup {
+            Button("Move", systemImage: "arrow.right.square") { store.movingCards = .init(ids: [card.id], river: river) }
+                .disabled(river.query != nil && river.isFound(card.id))
+            Button("Icon", systemImage: "paintpalette") { choosesLook = true }
+                .disabled(!draft.exists)
+            Button("Copy", systemImage: "doc.on.doc") { UIPasteboard.general.string = draft.markdown }
+        }
         if !isDay { Button(isUntitled ? "Add Title…" : "Rename…", systemImage: "character.cursor.ibeam") { startRenaming() } }
         if draft.exists, !isDay {
             Button(draft.isMarked("pinned") ? "Unpin" : "Pin", systemImage: draft.isMarked("pinned") ? "pin.slash" : "pin") { draft.toggleMark("pinned") }
             Button(draft.isMarked("inbox") ? "Done with It" : "Add to Inbox", systemImage: draft.isMarked("inbox") ? "tray.and.arrow.up" : "tray.and.arrow.down") { draft.toggleMark("inbox") }
         }
-        if draft.exists { Button("Choose Icon…", systemImage: draft.icon ?? "square.grid.3x3") { choosesLook = true } }
         if canRead { Button("Read", systemImage: "doc.richtext") { read() } }
         Button("Copy Link", systemImage: "link") { UIPasteboard.general.string = "[[\(store.linkName(path: card.path, title: draft.title))]]" }
-        Button("Copy Contents", systemImage: "doc.on.doc") { UIPasteboard.general.string = draft.markdown }
         ShareLink(item: draft.markdown) { Label("Share", systemImage: "square.and.arrow.up") }
         Menu("More", systemImage: "ellipsis.circle") { menuItems }
     }
 
     /// Everything that can be done with a card.
     @ViewBuilder private var menuItems: some View {
+        if river.query == nil || !river.isFound(card.id) { MoveToRiverMenu(store: store, river: river, ids: [card.id]) }
         Section {
             if !isDay { Button(isUntitled ? "Add Title…" : "Rename…", systemImage: "character.cursor.ibeam") { startRenaming() } }
             if isUntitled, !draft.isBlank { Button("Make First Line the Title", systemImage: "arrow.up") { withAnimation(.snappy(duration: 0.22)) { _ = draft.titleByFirstLine() } } }

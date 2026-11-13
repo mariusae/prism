@@ -281,6 +281,52 @@ final class PhoneFeaturesTests: XCTestCase {
 
     // MARK: Dictated notes
 
+    @MainActor
+    func testMoveToRiver() throws {
+        let store = try GraphStore(root: folder)
+        defer { store.close() }
+        try store.engine.write(path: "notes/a.md", content: "- a\n")
+        try store.engine.write(path: "notes/b.md", content: "- b\n")
+        let here = store.river
+        here.open(Card(path: "notes/a.md", title: "a"))
+        here.open(Card(path: "notes/b.md", title: "b"))
+        store.newRiver()
+        let there = store.river
+        store.currentRiver = 0
+        _ = try store.engine.saveRiver(name: "Kept", river: SavedRiver(cards: [], query: nil, placed: [], folded: [], opened: [], hidden: [], icon: nil, color: nil, place: nil))
+        store.engine.settle()
+        // Open rivers first, then saved ones that are not.
+        let targets = store.moveTargets(from: here)
+        XCTAssertEqual(targets.open.map(\.id), [there.id])
+        // To a river open: gone from here, at the head there; this river stays shown.
+        let a = try XCTUnwrap(here.cards.first { $0.path == "notes/a.md" })
+        store.move([a.id], from: here, to: .open(there.id))
+        XCTAssertEqual(here.cards.map(\.path), ["notes/b.md"])
+        XCTAssertEqual(there.cards.map(\.path), ["notes/a.md"])
+        XCTAssertTrue(store.river === here)
+        XCTAssertTrue(store.takeUndo())
+        XCTAssertEqual(Set(here.cards.map(\.path)), ["notes/a.md", "notes/b.md"])
+        XCTAssertTrue(there.cards.isEmpty)
+        // From a saved river: undone, its file has the card again too.
+        store.rename(here, to: "Here")
+        store.save(here)
+        let again = try XCTUnwrap(here.cards.first { $0.path == "notes/a.md" })
+        store.move([again.id], from: here, to: .open(there.id))
+        store.save(here)
+        XCTAssertEqual(try store.engine.river(name: "Here")?.cards.count, 1)
+        XCTAssertTrue(store.takeUndo())
+        store.save(here)
+        XCTAssertEqual(here.cards.count, 2)
+        XCTAssertEqual(try store.engine.river(name: "Here")?.cards.count, 2)
+        // To a saved river not open: written into its file; copied, it stays here too.
+        let b = try XCTUnwrap(here.cards.first { $0.path == "notes/b.md" })
+        store.move([b.id], from: here, to: .saved("Kept"), copying: true)
+        XCTAssertEqual(try store.engine.river(name: "Kept")?.cards.map(\.title), ["b"])
+        XCTAssertEqual(here.cards.count, 2)
+        XCTAssertTrue(store.takeUndo())
+        XCTAssertEqual(try store.engine.river(name: "Kept")?.cards.count, 0)
+    }
+
     func testDictatedNote() throws {
         let store = try GraphStore(root: folder)
         defer { store.close() }

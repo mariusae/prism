@@ -329,6 +329,13 @@ public final class GraphStore {
         }
     }
 
+    /// A saved river written to while not open: what the lists say of it, read again.
+    func noteSaved(_ name: String) {
+        guard let river = (try? engine.river(name: name)) ?? nil, let index = savedRivers.firstIndex(where: { $0.name == name }) else { return }
+        savedRivers[index].cards = river.cards.count
+        savedRivers[index].titles = Array(river.cards.prefix(6).map(\.title))
+    }
+
     private func refreshCounts() {
         readPictures()
         pageCount = (try? engine.allPages().count) ?? pageCount
@@ -1170,6 +1177,15 @@ public final class GraphStore {
 
     /// The rows being moved, while where they go is being chosen.
     public var movingRows: MovingRows?
+
+    /// The cards being moved to another river, while which is being chosen (⇧⌘M).
+    public var movingCards: MovingCards?
+
+    public struct MovingCards: Identifiable {
+        public let id = UUID()
+        public var ids: [Card.ID]
+        public var river: River
+    }
 
     /// Puts the rows being moved at the end of a note, and has them taken out of where they were.
     public func finishMove(to path: String) {

@@ -142,6 +142,11 @@ public struct WeftMacApp: App {
                 Button("Today") { today() }.keyboardShortcut("d")
                 // The note in hand, linked to today in its frontmatter: so today's page lists it.
                 Button("Stamp with Today") { if store?.stampToday() != true { NSSound.beep() } }.keyboardShortcut("t", modifiers: [.command, .control])
+                Button("Move to River…") {
+                    guard let store, let id = store.river.selected else { return NSSound.beep() }
+                    store.movingCards = .init(ids: [id], river: store.river)
+                }
+                .keyboardShortcut("m", modifiers: [.command, .shift])
                 Button("Go to Date…") { actions.calendar += 1 }.keyboardShortcut("d", modifiers: [.command, .shift])
                 Button("River Overview") { actions.overview += 1 }.keyboardShortcut("e")
                 // Said into the note being written in, where its caret is — or, hold ⌃⌥Space there for as long as you speak.

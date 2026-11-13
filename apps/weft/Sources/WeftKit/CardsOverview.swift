@@ -335,7 +335,7 @@ struct CardsOverview: View {
             Spacer()
             Button("Fold") { act(on: Array(chosen)) { river.card($0)?.folded == false ? river.toggleFold($0) : () } }
             Button("Unfold") { act(on: Array(chosen)) { river.card($0)?.folded == true ? river.toggleFold($0) : () } }
-            Menu("Send to") { rivers(for: Array(chosen)) }.fixedSize()
+            MoveToRiverMenu(store: store, river: river, ids: river.all.map(\.id).filter(chosen.contains)).labelStyle(.titleOnly).fixedSize()
             Button("Close") {
                 withAnimation(.snappy(duration: 0.24)) { for id in river.all.map(\.id) where chosen.contains(id) { store.close(id, in: river) } }
                 chosen = []
@@ -354,17 +354,6 @@ struct CardsOverview: View {
     }
 
     /// The other rivers open, to send cards to.
-    @ViewBuilder private func rivers(for ids: [Card.ID]) -> some View {
-        let others = store.rivers.filter { $0 !== river && $0.query == nil }
-        if others.isEmpty { Text("No other river is open") }
-        ForEach(others) { other in
-            Button(store.title(of: other)) {
-                withAnimation(.snappy(duration: 0.24)) { store.send(ids, from: river, to: other) }
-                chosen.subtract(ids)
-            }
-        }
-    }
-
     @ViewBuilder private func menu(for card: Card) -> some View {
         // Done to those chosen, if this is one of them; else to this one.
         let ids = chosen.contains(card.id) ? river.all.map(\.id).filter(chosen.contains) : [card.id]
@@ -372,7 +361,7 @@ struct CardsOverview: View {
         Button(card.folded ? "Unfold" : "Fold", systemImage: "chevron.up.chevron.down") { act(on: ids) { river.toggleFold($0) } }
         Button("Move to Top", systemImage: "arrow.up.to.line") { act(on: ids.reversed()) { river.move($0, toPlace: 0) } }
         Button("Move to Bottom", systemImage: "arrow.down.to.line") { act(on: ids) { river.move($0, toPlace: river.cards.count - 1) } }
-        Menu("Send to River") { rivers(for: ids) }
+        MoveToRiverMenu(store: store, river: river, ids: ids)
         Divider()
         Button(ids.count > 1 ? "Close \(ids.count) Cards" : "Close", systemImage: "xmark") {
             withAnimation(.snappy(duration: 0.24)) { for id in ids { store.close(id, in: river) } }
@@ -444,14 +433,7 @@ struct CardsOverview: View {
                                 Button(card.folded ? "Unfold" : "Fold", systemImage: "chevron.up.chevron.down") { act { river.toggleFold(card.id) } }
                                 Button("Move to Top", systemImage: "arrow.up.to.line") { act { river.move(card.id, toPlace: 0) } }
                                 Button("Move to Bottom", systemImage: "arrow.down.to.line") { act { river.move(card.id, toPlace: river.cards.count - 1) } }
-                                let others = store.rivers.filter { $0 !== river && $0.query == nil }
-                                if !others.isEmpty {
-                                    Menu("Send to River") {
-                                        ForEach(others) { other in
-                                            Button(store.title(of: other)) { withAnimation(.snappy(duration: 0.24)) { store.send([card.id], from: river, to: other) } }
-                                        }
-                                    }
-                                }
+                                MoveToRiverMenu(store: store, river: river, ids: [card.id])
                                 Button("Close", systemImage: "xmark", role: .destructive) { withAnimation(.snappy(duration: 0.24)) { store.close(card.id, in: river) } }
                             }
                     }

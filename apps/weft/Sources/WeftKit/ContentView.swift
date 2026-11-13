@@ -66,6 +66,12 @@ public struct ContentView: View {
         self.actions = actions
     }
 
+    /// What is being moved, as the picker's heading says it.
+    private func movingLabel(_ moving: GraphStore.MovingCards) -> String {
+        guard moving.ids.count == 1, let card = moving.river.card(moving.ids[0]) else { return "\(moving.ids.count) cards" }
+        return "“\(store.label(path: card.path, title: card.title))”"
+    }
+
     public var body: some View {
         NavigationSplitView(columnVisibility: $columns) {
             Sidebar(store: store, searchFocus: $searchFocus)
@@ -94,6 +100,25 @@ public struct ContentView: View {
                     }
                 }
                 .animation(.easeOut(duration: 0.12), value: showsQuickOpen)
+                // ⇧⌘M: a river to move the card chosen to, found by name.
+                .overlay(alignment: .top) {
+                    if let moving = store.movingCards {
+                        ZStack(alignment: .top) {
+                            Color.black.opacity(0.06).ignoresSafeArea().onTapGesture { store.movingCards = nil }
+                            RiverPicker(store: store, river: moving.river, what: movingLabel(moving)) { target, copying in
+                                store.movingCards = nil
+                                store.move(moving.ids, from: moving.river, to: target, copying: copying)
+                            } cancel: { store.movingCards = nil }
+                            .background(RoundedRectangle(cornerRadius: 16, style: .continuous).fill(Color.inkPaper))
+                            .overlay(RoundedRectangle(cornerRadius: 16, style: .continuous).strokeBorder(Color.inkRule))
+                            .shadow(color: .black.opacity(0.2), radius: 24, y: 10)
+                            .padding(.horizontal, 24)
+                            .padding(.top, 6)
+                        }
+                        .transition(.opacity.combined(with: .scale(scale: 0.98, anchor: .top)))
+                    }
+                }
+                .animation(.easeOut(duration: 0.12), value: store.movingCards?.id)
                 .overlay(alignment: .bottom) { UndoToast(store: store).padding(.bottom, 16) }
                 // Finding in the river: at its top right, as a document's find is.
                 .overlay(alignment: .topTrailing) {
