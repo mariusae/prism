@@ -762,8 +762,11 @@ struct PhoneCardMove: DropDelegate {
     let river: River
     let store: GraphStore
     @Binding var carried: Card.ID?
+    /// Whether a card is truly being dragged: over a card, not only held for its menu.
+    @Binding var dragging: Bool
 
     func dropEntered(info: DropInfo) {
+        if carried != nil, !dragging { dragging = true }
         guard let carried, carried != target, let place = river.all.firstIndex(where: { $0.id == target }) else { return }
         withAnimation(.snappy(duration: 0.28)) { river.move(carried, toPlace: place) }
         UISelectionFeedbackGenerator().selectionChanged()
@@ -773,6 +776,7 @@ struct PhoneCardMove: DropDelegate {
 
     func performDrop(info: DropInfo) -> Bool {
         carried = nil
+        dragging = false
         store.rememberRivers()
         return true
     }

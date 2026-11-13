@@ -163,6 +163,8 @@ struct RiverColumn: View {
     @State private var lastY: CGFloat = 0
     @State private var byHand = false
     @State private var carried: Card.ID?
+    /// Whether the card held is being dragged — and so drawn faint; held for its menu only, it is not.
+    @State private var dragging = false
 
     var body: some View {
         ScrollViewReader { proxy in
@@ -189,8 +191,8 @@ struct RiverColumn: View {
                         }
                         ForEach(river.all) { card in
                             PhoneCard(store: store, river: river, card: card)
-                                .opacity(carried == card.id ? 0.45 : 1)
-                                .onDrop(of: [PhoneCardMove.type], delegate: PhoneCardMove(target: card.id, river: river, store: store, carried: $carried))
+                                .opacity(dragging && carried == card.id ? 0.45 : 1)
+                                .onDrop(of: [PhoneCardMove.type], delegate: PhoneCardMove(target: card.id, river: river, store: store, carried: $carried, dragging: $dragging))
                                 .environment(\.carriedCard, $carried)
                                 .padding(.bottom, card.folded ? Measures.foldedGap : Measures.cardGap)
                                 .id(card.id)
@@ -231,9 +233,12 @@ struct RiverColumn: View {
             }
             .task(id: "\(store.indexRevision)|\(river.query ?? "")|\(river.hidden.count)|\(river.cards.count)") { store.find(for: river) }
             .task(id: carried) {
-                guard carried != nil else { return }
+                guard carried != nil else { return dragging = false }
                 try? await Task.sleep(for: .seconds(8))
-                if !Task.isCancelled { carried = nil }
+                if !Task.isCancelled {
+                    carried = nil
+                    dragging = false
+                }
             }
             .sensoryFeedback(.impact(weight: .light), trigger: river.all.filter(\.folded).count)
             .sensoryFeedback(.impact(weight: .light), trigger: river.all.count)
