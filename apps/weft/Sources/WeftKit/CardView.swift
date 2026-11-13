@@ -552,7 +552,8 @@ struct CardView: View {
             let label = "Linked from"
             let room = mentionsWidth - Self.width(of: label, size: 11) - 18
             let widths = backlinks.map { Self.pillWidth($0.title, emblem: $0.emblem) }
-            let shown = Self.fitting(widths, in: room)
+            let fit = Self.fitting(widths, in: room)
+            let shown = fit.whole + (fit.cut == nil ? 0 : 1)
             HStack(spacing: 6) {
                 // Clicked: a river of every page that speaks of this one, each showing where.
                 Button { withAnimation(.snappy(duration: 0.24)) { store.openMentions(of: card.path) } } label: {
@@ -568,9 +569,16 @@ struct CardView: View {
                 .buttonStyle(.plain)
                 .hint("Every Mention, as a River")
                 .fixedSize()
-                ForEach(backlinks.prefix(shown), id: \.self) { source in
+                ForEach(backlinks.prefix(fit.whole), id: \.self) { source in
                     FootPill(title: source.title, emblem: source.emblem, tint: Color.inkSecondary) { openMention(source) }
                         .fixedSize()
+                }
+                // The next, cut short to the room left: better read in part than not at all.
+                if let cut = fit.cut {
+                    let source = backlinks[fit.whole]
+                    FootPill(title: source.title, emblem: source.emblem, tint: Color.inkSecondary) { openMention(source) }
+                        .frame(maxWidth: cut, alignment: .leading)
+                        .help(source.title)
                 }
                 if shown < backlinks.count {
                     let rest = Array(backlinks.dropFirst(shown))
@@ -624,16 +632,20 @@ struct CardView: View {
 
     /// How many of pills so wide fit in a line so long — leaving room, if
     /// any are left over, for the pile they are put in.
-    private static func fitting(_ widths: [CGFloat], in room: CGFloat) -> Int {
+    private static func fitting(_ widths: [CGFloat], in room: CGFloat) -> (whole: Int, cut: CGFloat?) {
         let pile: CGFloat = 92, gap: CGFloat = 6
         var used: CGFloat = 0
         for (index, width) in widths.enumerated() {
             let next = used + width + gap
             let left = index + 1 < widths.count
-            if next + (left ? pile : 0) > room { return index }
+            if next + (left ? pile : 0) > room {
+                // What room is left, if a pill cut short is still worth reading there.
+                let leftover = room - used - gap - (left ? pile : 0)
+                return (index, leftover >= 80 ? leftover : nil)
+            }
             used = next
         }
-        return widths.count
+        return (widths.count, nil)
     }
 
     /// A page that links here, opened after this card — showing where it does.

@@ -34,6 +34,10 @@ struct PhoneCard: View {
     @State private var linkShown: PhoneLink?
     @State private var backlinks: [Source] = []
     @State private var tags: [String] = []
+    /// Whether the line of pages that link here is opened out into all of them.
+    @State private var mentionsOpen = false
+    /// How long that line is.
+    @State private var mentionsWidth: CGFloat = 320
     @FocusState private var titleFocused: Bool
     @Environment(\.carriedCard) private var carried
 
@@ -212,7 +216,8 @@ struct PhoneCard: View {
                     if showsHeader { header }
                     if draft.isConflicted { conflict }
                     editor(draft.editor, isFocus: false)
-                    if !tags.isEmpty || !backlinks.isEmpty || !draft.related.isEmpty { foot }
+                    if !tags.isEmpty || !draft.related.isEmpty { foot }
+                    if !backlinks.isEmpty { mentions }
                 }
             }
             .padding(.horizontal, 16)
@@ -439,29 +444,96 @@ struct PhoneCard: View {
             if draft.exists, !tags.isEmpty {
                 pill("Tag", Emblem(symbol: "plus"), Color.inkSecondary) { addsTag = true }
             }
-            if !backlinks.isEmpty {
-                // Tapped: a river of every page that speaks of this one, each showing where.
-                Button { withAnimation(.snappy(duration: 0.24)) { store.openMentions(of: card.path) } } label: {
-                    Label(tags.isEmpty && draft.related.isEmpty ? "Linked from" : "linked from", systemImage: "arrow.up.right").labelStyle(TrailingIcon()).font(.caption).foregroundStyle(Color.inkSecondary).padding(.vertical, 4)
-                }
-                .buttonStyle(.plain)
-                ForEach(backlinks.prefix(6), id: \.self) { source in
-                    pill(source.title, source.emblem, Color.inkSecondary) {
-                        withAnimation(.snappy(duration: 0.28)) { store.openMention(in: source.path, title: source.name, of: card.path, after: card.id, in: river) }
-                    }
-                }
-                if backlinks.count > 6 {
-                    Menu("and \(backlinks.count - 6) more") {
-                        ForEach(backlinks.dropFirst(6), id: \.self) { source in
-                            Button(source.title) { store.openMention(in: source.path, title: source.name, of: card.path, after: card.id, in: river) }
-                        }
-                    }
-                    .font(.caption)
-                    .foregroundStyle(Color.inkSecondary)
-                }
-            }
         }
         .padding(.top, 4)
+    }
+
+    /// The pages that link here, on one line: as many as it holds, and the
+    /// rest piled at its end. Tapped, the pile opens the line out into all
+    /// of them; tapped again at its end, it folds back.
+    @ViewBuilder private var mentions: some View {
+        let label = Label("Linked from", systemImage: "arrow.up.right").labelStyle(TrailingIcon()).font(.caption).foregroundStyle(Color.inkSecondary).padding(.vertical, 4)
+        // Tapped: a river of every page that speaks of this one, each showing where.
+        let heading = Button { withAnimation(.snappy(duration: 0.24)) { store.openMentions(of: card.path) } } label: { label }.buttonStyle(.plain).fixedSize()
+        if mentionsOpen {
+            FlowLayout(spacing: 6) {
+                heading
+                ForEach(backlinks, id: \.self) { source in mention(source) }
+                Button { withAnimation(.snappy(duration: 0.24)) { mentionsOpen = false } } label: {
+                    Image(systemName: "chevron.up").font(.system(size: 12, weight: .semibold)).foregroundStyle(Color.inkSecondary)
+                        .frame(width: 30, height: 26).background(Capsule().fill(Color.inkSecondary.opacity(0.10)))
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel("Fewer")
+            }
+            .padding(.top, 4)
+        } else {
+            let room = mentionsWidth - Self.width(of: "Linked from", size: 12) - 22
+            let fit = Self.fitting(backlinks.map { Self.pillWidth($0.title, emblem: $0.emblem) }, in: room)
+            let shown = fit.whole + (fit.cut == nil ? 0 : 1)
+            HStack(spacing: 6) {
+                heading
+                ForEach(backlinks.prefix(fit.whole), id: \.self) { source in mention(source).fixedSize() }
+                // The next, cut short to the room left: better read in part than not at all.
+                if let cut = fit.cut { mention(backlinks[fit.whole]).frame(maxWidth: cut, alignment: .leading) }
+                if shown < backlinks.count {
+                    let more = backlinks.count - shown
+                    Button { withAnimation(.snappy(duration: 0.24)) { mentionsOpen = true } } label: {
+                        // A pile: a pill or two showing behind the count of those not shown.
+                        ZStack(alignment: .leading) {
+                            ForEach(0..<min(more, 2), id: \.self) { index in
+                                Capsule().fill(Color.inkCard).overlay(Capsule().fill(Color.inkSecondary.opacity(0.10)))
+                                    .overlay(Capsule().strokeBorder(Color.inkRule, lineWidth: 0.5))
+                                    .frame(width: 44, height: 26)
+                                    .offset(x: CGFloat(min(more, 2) - index) * 4, y: CGFloat(min(more, 2) - index) * -2)
+                            }
+                            Text("+\(more)").font(.system(size: 13, weight: .semibold).monospacedDigit()).foregroundStyle(Color.inkSecondary)
+                                .frame(width: 44, height: 26)
+                                .background(Capsule().fill(Color.inkCard).overlay(Capsule().fill(Color.inkSecondary.opacity(0.10))))
+                        }
+                        .padding(.trailing, 8)
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityLabel("\(more) more pages link here")
+                }
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .onGeometryChange(for: CGFloat.self) { $0.size.width.rounded() } action: { mentionsWidth = $0 }
+            .padding(.top, tags.isEmpty && draft.related.isEmpty ? 4 : 0)
+        }
+    }
+
+    private func mention(_ source: Source) -> some View {
+        pill(source.title, source.emblem, Color.inkSecondary) {
+            withAnimation(.snappy(duration: 0.28)) { store.openMention(in: source.path, title: source.name, of: card.path, after: card.id, in: river) }
+        }
+    }
+
+    /// How wide words are, in the system's face at a size.
+    private static func width(of words: String, size: CGFloat) -> CGFloat {
+        ceil((words as NSString).size(withAttributes: [.font: UIFont.systemFont(ofSize: size)]).width)
+    }
+
+    /// How wide a pill at a card's foot is: its words, its icon, its padding.
+    private static func pillWidth(_ title: String, emblem: Emblem) -> CGFloat {
+        width(of: emblem.caption(title), size: 13) + (emblem.isShown ? 17 : 0) + 18
+    }
+
+    /// How many pills so wide fit a line so long — leaving room for the pile, if any are left.
+    private static func fitting(_ widths: [CGFloat], in room: CGFloat) -> (whole: Int, cut: CGFloat?) {
+        let pile: CGFloat = 60, gap: CGFloat = 6
+        var used: CGFloat = 0
+        for (index, width) in widths.enumerated() {
+            let next = used + width + gap
+            let left = index + 1 < widths.count
+            if next + (left ? pile : 0) > room {
+                // What room is left, if a pill cut short is still worth reading there.
+                let leftover = room - used - gap - (left ? pile : 0)
+                return (index, leftover >= 80 ? leftover : nil)
+            }
+            used = next
+        }
+        return (widths.count, nil)
     }
 
     private func pill(_ title: String, _ emblem: Emblem, _ tint: Color, action: @escaping () -> Void) -> some View {

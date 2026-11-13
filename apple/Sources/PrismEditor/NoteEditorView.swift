@@ -461,7 +461,7 @@ public final class NoteTextView: NSTextView {
             chip.imageHugsTitle = true
             chip.contentTintColor = .tertiaryLabelColor
             chip.attributedTitle = NSAttributedString(string: "Title", attributes: [.font: NSFont.systemFont(ofSize: NSFont.smallSystemFontSize, weight: .medium), .foregroundColor: NSColor.tertiaryLabelColor])
-            chip.toolTip = "Make this line the title (⌃⌘T)"
+            chip.toolTip = "Make this line the title (⌃⇧T)"
             chip.setAccessibilityLabel("Make this line the title")
             chip.refusesFirstResponder = true
             chip.sizeToFit()

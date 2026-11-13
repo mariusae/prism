@@ -158,7 +158,7 @@ public struct WeftMacApp: App {
                 Button("Previous Card") { store?.river.select(step: -1) }.keyboardShortcut(.upArrow, modifiers: [.command, .option])
                 Button("Next Card") { store?.river.select(step: 1) }.keyboardShortcut(.downArrow, modifiers: [.command, .option])
                 Button("Write in Selected Card") { write() }.keyboardShortcut(.return, modifiers: [.command, .option])
-                Button("Make First Line the Title") { titleByFirstLine() }.keyboardShortcut("t", modifiers: [.command, .control])
+                Button("Make First Line the Title") { titleByFirstLine() }.keyboardShortcut("t", modifiers: [.control, .shift])
                 Button("Delete Note") { deleteCard() }.keyboardShortcut(.delete, modifiers: .command)
             }
             CommandGroup(before: .windowList) {

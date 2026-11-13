@@ -232,6 +232,31 @@ struct QuickOpen: View {
         }
     }
 
+    /// The rivers called what was typed: those open first — gone to in
+    /// their tabs — then the saved ones that are not, opened in new tabs.
+    private func rivers(named name: String) -> [Row] {
+        var rows: [Row] = []
+        var shown = Set<String>()
+        for (index, river) in store.rivers.enumerated() where index != store.currentRiver {
+            let title = store.title(of: river)
+            guard Self.names(title, name) else { continue }
+            if let saved = river.name { shown.insert(saved) }
+            rows.append(Row(id: "river:\(river.id)", symbol: "square.stack", name: title, detail: "Open River",
+                            emblem: Emblem(title: title, icon: river.icon, color: river.color)) { store in
+                guard let index = store.rivers.firstIndex(where: { $0.id == river.id }) else { return }
+                store.currentRiver = index
+            })
+        }
+        if let current = store.river.name { shown.insert(current) }
+        for saved in store.savedRivers where !shown.contains(saved.name) && Self.names(saved.name, name) {
+            rows.append(Row(id: "saved:\(saved.name)", symbol: "square.stack", name: saved.name,
+                            detail: saved.isQuery ? "Query River" : "River · \(saved.cards) \(saved.cards == 1 ? "card" : "cards")", emblem: saved.emblem) { store in
+                store.openSaved(saved.name)
+            })
+        }
+        return Array(rows.prefix(4))
+    }
+
     /// Whether every word typed begins a word of a name.
     private static func names(_ label: String, _ typed: String) -> Bool {
         let words = label.lowercased().split { !$0.isLetter && !$0.isNumber }
@@ -314,6 +339,8 @@ struct QuickOpen: View {
             // The river's own notes come first: what is open is what is most often meant.
             let here = store.river.all.filter { Self.names(store.label(path: $0.path, title: $0.title), name) }.prefix(4)
             top += here.map { card($0) }
+            // Rivers called so: the tab that has one, or a saved one opened in a tab of its own.
+            top += rivers(named: name)
             let open = Set(here.map(\.path))
             let pages = ((try? store.engine.complete(typed: name, limit: 8)) ?? []).filter { !open.contains($0.path) }
             // Notes of one title are told apart by their files' names.
