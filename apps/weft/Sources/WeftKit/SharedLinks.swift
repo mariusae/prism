@@ -16,6 +16,8 @@ extension GraphStore {
     public func takeSharedPages() -> Int {
         var taken = 0
         for (page, file) in SharedPages.waiting() {
+            // Left with no more than its address: told what it is when the page has been read.
+            if WebPageInfo.isBare(title: page.title, url: page.url) { Task { await self.readBare(page) } }
             if page.destination == .today {
                 guard let day = addToDay(page) else { continue }
                 SharedPages.taken(file)
@@ -46,6 +48,36 @@ extension GraphStore {
         guard (try? engine.write(path: path, content: LinkNote.atTop(rows, of: text))) != nil else { return nil }
         openDraft(path: path)?.fileChanged()
         return path
+    }
+
+    /// A page left with no more than its address, read: its link note
+    /// given the page's own title, description and author.
+    func readBare(_ page: SharedPages.Page) async {
+        guard let info = await WebPageInfo.read(page.url) else { return }
+        let path = "notes/\(slug(title: LinkNote.title(page.title, url: page.url))).md"
+        fillLinkNote(path: path, from: info)
+    }
+
+    /// A link note that says nothing of its page — titled by its site, its
+    /// description empty — given what the page says of itself.
+    func fillLinkNote(path: String, from info: WebPageInfo) {
+        let draft = draft(path: path, title: path)
+        guard draft.exists, let text = (try? engine.read(path: path)) ?? nil, let address = ReaderSource.ownAddress(in: text) else { return }
+        var lines = text.components(separatedBy: "\n")
+        if !info.description.isEmpty, let at = lines.firstIndex(where: { $0.trimmingCharacters(in: .whitespaces) == "- Description:" }) {
+            lines[at] = "- Description: " + info.description.components(separatedBy: .newlines).joined(separator: " ")
+        }
+        if let author = info.author, !author.isEmpty, !lines.contains(where: { $0.hasPrefix("- Author:") }),
+           let at = lines.firstIndex(where: { $0.hasPrefix("- Description:") }) {
+            lines.insert("- Author: " + author, at: at + 1)
+        }
+        let filled = lines.joined(separator: "\n")
+        if filled != text {
+            draft.saveNow()
+            _ = try? engine.write(path: path, content: filled)
+            draft.fileChanged()
+        }
+        if WebPageInfo.isBare(title: draft.title, url: address) { draft.rename(to: LinkNote.title(info.title, url: address)) }
     }
 
     /// The link note for a page shared — made, or found and stamped. Its path.

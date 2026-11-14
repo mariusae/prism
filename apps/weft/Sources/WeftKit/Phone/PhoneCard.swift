@@ -3,6 +3,7 @@ import Prism
 import PrismEditor
 import PrismEmblem
 import SwiftUI
+import WeftShared
 import UIKit
 import UniformTypeIdentifiers
 
@@ -339,7 +340,14 @@ struct PhoneCard: View {
                 if draft.isMarked("pinned") { Image(systemName: "pin.fill").font(.caption).foregroundStyle(Color.inkAccent) }
             }
         }
-        .task(id: linkAddress) { if let linkAddress { WebCards.shared.look(linkAddress) } }
+        .task(id: linkAddress) {
+            guard let linkAddress else { return }
+            WebCards.shared.look(linkAddress)
+            // Called by no more than its site's name: given what the page says of itself.
+            if WebPageInfo.isBare(title: draft.title, url: linkAddress), let info = await WebPageInfo.read(linkAddress) {
+                store.fillLinkNote(path: card.path, from: info)
+            }
+        }
     }
 
     /// The page a link note keeps: its `URL:` row's address; nil for any other note.

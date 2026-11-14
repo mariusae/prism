@@ -137,6 +137,16 @@ final class ShareViewController: UIViewController {
                 found = post
             }
         }
+        // Shared with no more than its address — Substack's app shares only that: the page read for what it says.
+        if var page = found, !SocialPost.recognizes(page.url), WebPageInfo.isBare(title: page.title, url: page.url) || page.description.isEmpty {
+            status.text = "Reading the page…"
+            if let info = await WebPageInfo.read(page.url) {
+                if WebPageInfo.isBare(title: page.title, url: page.url) { page.title = info.title }
+                if page.description.isEmpty { page.description = info.description }
+                if page.author == nil { page.author = info.author }
+                found = page
+            }
+        }
         show(found)
     }
 
