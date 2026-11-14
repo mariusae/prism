@@ -282,23 +282,16 @@ struct CardsOverview: View {
             Rectangle().fill(Color.inkRule).frame(height: 1)
             ScrollViewReader { proxy in
                 ScrollView {
-                    LazyVGrid(columns: [GridItem(.adaptive(minimum: 188, maximum: 280), spacing: 14, alignment: .top)], alignment: .leading, spacing: 14) {
-                        ForEach(cards) { card in
-                            CardTile(store: store, river: river, card: card, isChosen: chosen.contains(card.id), isCursor: cursor == card.id)
-                                .opacity(carried == card.id ? 0.4 : 1)
-                                .onTapGesture { tapped(card, in: cards) }
-                                .contextMenu { menu(for: card) }
-                                .onDrag {
-                                    carried = card.id
-                                    let provider = NSItemProvider()
-                                    provider.registerDataRepresentation(forTypeIdentifier: CardMove.type.identifier, visibility: .ownProcess) { done in
-                                        done(Data(card.id.uuidString.utf8), nil)
-                                        return nil
-                                    }
-                                    return provider
+                    // Columns, each packed close: a card goes under the one before it in its
+                    // column, however tall — cards dealt across them in order, left to right.
+                    HStack(alignment: .top, spacing: 14) {
+                        ForEach(0..<columns, id: \.self) { column in
+                            LazyVStack(spacing: 14) {
+                                ForEach(Self.column(column, of: columns, in: cards)) { card in
+                                    tile(card)
                                 }
-                                .onDrop(of: [CardMove.type], delegate: CardMove(target: card.id, river: river, store: store, carried: $carried))
-                                .id(card.id)
+                            }
+                            .frame(maxWidth: .infinity, alignment: .top)
                         }
                     }
                     .padding(22)
@@ -326,6 +319,30 @@ struct CardsOverview: View {
                 store.rememberRivers()
             }
         }
+    }
+
+    /// One card of the overview: gone to, chosen, carried to another place.
+    private func tile(_ card: Card) -> some View {
+        CardTile(store: store, river: river, card: card, isChosen: chosen.contains(card.id), isCursor: cursor == card.id)
+            .opacity(carried == card.id ? 0.4 : 1)
+            .onTapGesture { tapped(card, in: cards) }
+            .contextMenu { menu(for: card) }
+            .onDrag {
+                carried = card.id
+                let provider = NSItemProvider()
+                provider.registerDataRepresentation(forTypeIdentifier: CardMove.type.identifier, visibility: .ownProcess) { done in
+                    done(Data(card.id.uuidString.utf8), nil)
+                    return nil
+                }
+                return provider
+            }
+            .onDrop(of: [CardMove.type], delegate: CardMove(target: card.id, river: river, store: store, carried: $carried))
+            .id(card.id)
+    }
+
+    /// The cards of one column of several: every so many, from its place.
+    private static func column(_ column: Int, of columns: Int, in cards: [Card]) -> [Card] {
+        stride(from: column, to: cards.count, by: columns).map { cards[$0] }
     }
 
     /// What is done to several chosen together.
