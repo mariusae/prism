@@ -40,6 +40,10 @@ struct PhoneShell: View {
     /// opened, an iPad. A note's pages are then read beside the river,
     /// not over it.
     @State private var isWide = false
+    /// Whether the page read beside the river fills the window for now.
+    @State private var readerFull = false
+    /// The page read beside the river, kept as it fills the window and goes back.
+    @State private var readerWeb = ReaderKeeper()
 
     /// How wide a window is, at least, to be read beside.
     static let twoPanes: CGFloat = 600
@@ -47,17 +51,22 @@ struct PhoneShell: View {
     var body: some View {
         Group {
             if isWide, let reading = store.river.reading {
+                let web = readerWeb.web(for: reading.path)
+                let panel = ReaderPanel(store: store, river: store.river, place: reading, shared: web, expanded: $readerFull).id(reading.path)
+                // Filling the window, it is laid over both: the river stays as it was, under it.
                 SidePanes {
                     shell
                 } secondary: {
-                    ReaderPanel(store: store, river: store.river, place: reading).id(reading.path)
+                    if readerFull { Color.inkCard } else { panel }
                 }
+                .overlay { if readerFull { panel.transition(.opacity) } }
             } else {
                 shell
             }
         }
         .onGeometryChange(for: Bool.self) { $0.size.width >= Self.twoPanes } action: { isWide = $0 }
         .animation(.snappy(duration: 0.3), value: store.river.reading?.path)
+        .onChange(of: store.river.reading == nil) { _, closed in if closed { readerFull = false } }
     }
 
     /// Whether the right edge's room is the status bar's — wider than the

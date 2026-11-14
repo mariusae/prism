@@ -69,6 +69,10 @@ struct ReaderQueue: View {
     /// Whether the window is wide enough for the page and its note side
     /// by side: an iPhone Duo opened, an iPad.
     @State private var isWide = false
+    /// Whether the page fills the window for now, its note put aside.
+    @State private var pageFull = false
+    /// The page read, kept as it fills the window and goes back.
+    @State private var pageWeb = ReaderKeeper()
 
     private var current: PageInfo? { pages.first { $0.path == begun } ?? pages.first }
 
@@ -79,11 +83,14 @@ struct ReaderQueue: View {
                 Group {
                     if isWide {
                         // The page, and beside it the note it is read for: its highlights, what is written of it.
+                        let panel = ReaderPanel(store: store, place: place, onFinish: { snooze in finish(page, snooze) }, shared: pageWeb.web(for: page.path), expanded: $pageFull)
+                        // Filling the window, it is laid over both: the note stays as it was, under it.
                         SidePanes {
-                            ReaderPanel(store: store, place: place) { snooze in finish(page, snooze) }
+                            if pageFull { Color.inkCard } else { panel }
                         } secondary: {
                             ReaderNote(store: store, place: place)
                         }
+                        .overlay { if pageFull { panel.transition(.opacity) } }
                     } else {
                         ReaderPanel(store: store, place: place) { snooze in finish(page, snooze) }
                     }

@@ -21,9 +21,20 @@ struct ReaderPanel: View {
     /// Done with, or put off, where there is no river to go on in: the
     /// app's to go on to the next.
     var onFinish: ((ReadingQueue.Snooze?) -> Void)?
-    @State private var index = 0
-    @State private var reading = true
-    @State private var web = ReaderWeb()
+    /// The page as it is read, kept by what shows the panel — so that the
+    /// panel, moved to fill the window and back, goes on where it was.
+    var shared: ReaderWeb?
+    /// Whether it fills the window, where it is read beside a river or a
+    /// note; nil, where it fills it anyway.
+    var expanded: Binding<Bool>?
+    @State private var own: ReaderWeb?
+
+    private var web: ReaderWeb { shared ?? own ?? ReaderWeb.placeholder }
+    private var index: Int {
+        get { web.index }
+        nonmutating set { web.index = newValue }
+    }
+    private var reading: Bool { web.reading ?? true }
 
     private var sources: [ReaderSource] {
         _ = store.indexRevision
@@ -41,8 +52,9 @@ struct ReaderPanel: View {
             Divider()
             if let source {
                 ReaderWebView(web: web)
+                    .id(ObjectIdentifier(web))
                     .ignoresSafeArea(edges: .bottom)
-                    .task(id: "\(source.url) \(reading) \(TextSettings.size) \(TextSettings.face.rawValue)") {
+                    .task(id: "\(ObjectIdentifier(web).hashValue) \(source.url) \(reading) \(TextSettings.size) \(TextSettings.face.rawValue)") {
                         web.show(source, reading: reading && !source.isPDF, marks: store.highlights(in: place.path, of: source.address), root: store.root)
                     }
                     .overlay(alignment: .bottom) { if inInbox { queueBar } }
@@ -65,7 +77,10 @@ struct ReaderPanel: View {
         }
         .background(Color.inkCard)
         .foregroundStyle(Color.inkText)
-        .onAppear { reading = sources.first.map { ReaderPlace.reads($0.url) } ?? true }
+        .onAppear {
+            if shared == nil, own == nil { own = ReaderWeb() }
+            if web.reading == nil { web.reading = sources.first.map { ReaderPlace.reads($0.url) } ?? true }
+        }
     }
 
     private func bar(_ sources: [ReaderSource], _ source: ReaderSource?) -> some View {
@@ -100,7 +115,7 @@ struct ReaderPanel: View {
                     .accessibilityLabel("Highlight the words chosen, into \u{201C}\(label)\u{201D}")
                 if !source.isPDF {
                     Button {
-                        reading.toggle()
+                        web.reading = !reading
                         ReaderPlace.setReads(reading, for: source.url)
                     } label: { Image(systemName: reading ? "doc.plaintext.fill" : "doc.plaintext").frame(minWidth: 28, minHeight: 32).contentShape(Rectangle()) }
                         .accessibilityLabel(reading ? "Show the Site" : "Show Its Words Alone")
@@ -109,6 +124,13 @@ struct ReaderPanel: View {
                     Link(destination: source.url) { Image(systemName: "safari").frame(minWidth: 28, minHeight: 32).contentShape(Rectangle()) }
                         .accessibilityLabel("Open in the Browser")
                 }
+            }
+            if let expanded {
+                Button { withAnimation(.snappy(duration: 0.3)) { expanded.wrappedValue.toggle() } } label: {
+                    Image(systemName: expanded.wrappedValue ? "arrow.down.right.and.arrow.up.left" : "arrow.up.left.and.arrow.down.right")
+                        .frame(minWidth: 28, minHeight: 32).contentShape(Rectangle())
+                }
+                .accessibilityLabel(expanded.wrappedValue ? "Read Beside" : "Fill the Window")
             }
         }
         .font(.system(size: 17))
@@ -508,6 +530,19 @@ private final class WeakMessages: NSObject, WKScriptMessageHandler {
     }
 }
 
+/// The reader of the page read, kept by what shows it — one, made anew
+/// when another page is read. Not observed: asked for while drawing.
+final class ReaderKeeper {
+    private var kept: (path: String, web: ReaderWeb)?
+
+    @MainActor func web(for path: String) -> ReaderWeb {
+        if let kept, kept.path == path { return kept.web }
+        let web = ReaderWeb()
+        kept = (path, web)
+        return web
+    }
+}
+
 /// The reader's web view and what it does: kept by the panel, shown by `ReaderWebView`.
 @MainActor
 @Observable
@@ -518,9 +553,16 @@ final class ReaderWeb: NSObject, WKNavigationDelegate, WKScriptMessageHandler {
     /// page not read before, can take a while: shown, so that it does not
     /// look like nothing.
     var isFetching = false
+    /// Which of the note's pages is read.
+    var index = 0
+    /// Whether its words are read alone, rather than the site; nil until it is first shown.
+    var reading: Bool?
     @ObservationIgnored let view: WKWebView
     @ObservationIgnored private var shown: (url: URL, reading: Bool, set: String)?
     @ObservationIgnored private var marks: [String] = []
+
+    /// Drawn for the moment before a panel's own is made.
+    static let placeholder = ReaderWeb()
 
     override init() {
         let configuration = WKWebViewConfiguration()
