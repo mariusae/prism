@@ -67,6 +67,8 @@ struct PhoneShell: View {
         .onGeometryChange(for: Bool.self) { $0.size.width >= Self.twoPanes } action: { isWide = $0 }
         .animation(.snappy(duration: 0.3), value: store.river.reading?.path)
         .onChange(of: store.river.reading == nil) { _, closed in if closed { readerFull = false } }
+        // The river shown: first among those offered when the app's icon is held.
+        .onChange(of: store.river.name, initial: true) { RiverShortcuts.looked(at: store.river, in: store) }
     }
 
     /// Whether the right edge's room is the status bar's — wider than the

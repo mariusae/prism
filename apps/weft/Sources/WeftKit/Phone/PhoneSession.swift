@@ -99,6 +99,7 @@ public final class PhoneSession {
         store.saveAll()
         store.rememberRivers()
         store.engine.push()
+        RiverShortcuts.offer(store)
     }
 
     // MARK: Pushes
@@ -186,9 +187,8 @@ public struct PhoneRoot: View {
         }
         .onOpenURL { url in
             // weft://river/<name>: that river, shown.
-            guard url.scheme == "weft", url.host == "river", let store = session.store else { return }
-            let name = url.pathComponents.dropFirst().joined(separator: "/").removingPercentEncoding ?? ""
-            if !name.isEmpty { store.openSaved(name) }
+            guard url.scheme == "weft", url.host == "river" else { return }
+            session.openRiver(named: url.pathComponents.dropFirst().joined(separator: "/").removingPercentEncoding ?? "")
         }
     }
 }
