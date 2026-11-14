@@ -400,6 +400,7 @@ struct PhoneCard: View {
                         withAnimation(.snappy(duration: 0.28)) { store.open(page: page, after: card.id) }
                     })
                 },
+                linkPreview: { link in LinkCard.shows(link, in: store) ? AnyView(LinkCard(store: store, link: link, draft: draft)) : nil },
                 lead: isFocus ? nil : editorLead, onLead: { leadTapped() },
                 offers: { found in store.linkOffers(found.typed, this: card.path) },
                 offersTitle: !isFocus && isUntitled, onTitle: { withAnimation(.snappy(duration: 0.22)) { _ = draft.titleByFirstLine() } },

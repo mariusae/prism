@@ -17,6 +17,9 @@ import UniformTypeIdentifiers
 /// for what each part is; the work both share is in
 /// NoteEditorCoordinator.swift.
 public struct NoteEditorView: UIViewRepresentable {
+    /// Posted by what a link's card offers, once it is done: the card goes.
+    public static let hoverCardDone = Notification.Name("prism.editor.hoverCardDone")
+
     let editor: NoteEditor
     let theme: EditorTheme
     let isWriting: Bool
@@ -726,6 +729,43 @@ public final class NoteTextView: UITextView {
         noteSettled()
     }
 
+    // MARK: A link's card
+
+    /// The card shown of a link held, as the Mac shows it of one the pointer rests on.
+    private weak var linkCard: UIViewController?
+
+    /// Shows a link's card, by it, if the app has one for it.
+    func showCard(of link: EditorLink, at point: CGPoint) {
+        guard let content = coordinator?.parent.linkPreview(link), let presenter = presenter() else { return }
+        let card = UIHostingController(rootView: content.background(Color(uiColor: .secondarySystemBackground)))
+        card.view.backgroundColor = .secondarySystemBackground
+        card.modalPresentationStyle = .popover
+        // Its size as it is drawn — and drawn again, as what is known of the page comes in.
+        card.sizingOptions = .preferredContentSize
+        if let popover = card.popoverPresentationController {
+            popover.sourceView = self
+            popover.sourceRect = CGRect(x: point.x - 1, y: point.y - 12, width: 2, height: 24)
+            popover.permittedArrowDirections = [.up, .down]
+            popover.delegate = PopoverStaysSmall.shared
+        }
+        UIImpactFeedbackGenerator(style: .medium).impactOccurred()
+        presenter.present(card, animated: true)
+        linkCard = card
+        NotificationCenter.default.addObserver(self, selector: #selector(cardDone(_:)), name: NoteEditorView.hoverCardDone, object: nil)
+    }
+
+    @objc private func cardDone(_ note: Notification) {
+        NotificationCenter.default.removeObserver(self, name: NoteEditorView.hoverCardDone, object: nil)
+        linkCard?.dismiss(animated: true)
+    }
+
+    /// What presents over the view: its window's topmost controller.
+    private func presenter() -> UIViewController? {
+        var top = window?.rootViewController
+        while let shown = top?.presentedViewController, !shown.isBeingDismissed { top = shown }
+        return top
+    }
+
     // MARK: Pictures, and an address, pasted
 
     /// Paste offered for pictures too: a text view takes only text.
@@ -830,6 +870,13 @@ public final class NoteTextView: UITextView {
     }
 }
 
+/// A popover kept a popover on a phone, not made a sheet.
+@MainActor
+private final class PopoverStaysSmall: NSObject, UIPopoverPresentationControllerDelegate {
+    static let shared = PopoverStaysSmall()
+    func adaptivePresentationStyle(for controller: UIPresentationController, traitCollection: UITraitCollection) -> UIModalPresentationStyle { .none }
+}
+
 /// The view's own touches: a tap on a link, a box, a bullet with rows
 /// under it or the lead, and a swipe along a row. Apart from the text
 /// view, which has touches of its own to answer for; a row held is
@@ -838,6 +885,8 @@ public final class NoteTextView: UITextView {
 private final class Touches: NSObject, UIGestureRecognizerDelegate {
     private weak var view: NoteTextView?
     private let tap = UITapGestureRecognizer()
+    /// A link held: its card shown.
+    private let hold = UILongPressGestureRecognizer()
     private let swipe = UIPanGestureRecognizer()
     private var swipeStart = CGPoint.zero
     private var swipeDone = false
@@ -848,6 +897,10 @@ private final class Touches: NSObject, UIGestureRecognizerDelegate {
         tap.addTarget(self, action: #selector(tapped(_:)))
         tap.delegate = self
         view.addGestureRecognizer(tap)
+        hold.minimumPressDuration = 0.4
+        hold.addTarget(self, action: #selector(held(_:)))
+        hold.delegate = self
+        view.addGestureRecognizer(hold)
         swipe.addTarget(self, action: #selector(swiped(_:)))
         swipe.maximumNumberOfTouches = 1
         swipe.delegate = self
@@ -857,6 +910,18 @@ private final class Touches: NSObject, UIGestureRecognizerDelegate {
     @objc private func tapped(_ gesture: UITapGestureRecognizer) {
         guard gesture.state == .ended, let view else { return }
         view.tapped(at: gesture.location(in: view))
+    }
+
+    @objc private func held(_ gesture: UILongPressGestureRecognizer) {
+        guard gesture.state == .began, let view else { return }
+        let point = gesture.location(in: view)
+        if case .link(let link) = view.target(at: point) { view.showCard(of: link, at: point) }
+    }
+
+    /// Whether a point is on a link, to be held.
+    private func isLink(at point: CGPoint) -> Bool {
+        guard let view, view.hands?.isChoosing != true, case .link = view.target(at: point) else { return false }
+        return true
     }
 
     @objc private func swiped(_ gesture: UIPanGestureRecognizer) {
@@ -882,6 +947,7 @@ private final class Touches: NSObject, UIGestureRecognizerDelegate {
         let point = touch.location(in: view)
         // A tap is this one's only on a link, a box or the lead: any other is the text view's, at once.
         if gesture === tap { return view.target(at: point) != nil }
+        if gesture === hold { return isLink(at: point) }
         // A row is swiped only while it is written in; elsewhere a swipe is the app's.
         return view.isFirstResponder && view.selectedRange.length == 0 && !view.isByCaret(point) && view.hands?.isCarrying != true
     }
@@ -889,6 +955,7 @@ private final class Touches: NSObject, UIGestureRecognizerDelegate {
     func gestureRecognizerShouldBegin(_ gesture: UIGestureRecognizer) -> Bool {
         guard let view else { return false }
         if gesture === tap { return view.target(at: gesture.location(in: view)) != nil }
+        if gesture === hold { return isLink(at: gesture.location(in: view)) }
         guard view.isFirstResponder, !view.isComposing else { return false }
         // Along the row, not up or down the page: that is the page's to scroll.
         let speed = swipe.velocity(in: view)
@@ -896,7 +963,9 @@ private final class Touches: NSObject, UIGestureRecognizerDelegate {
     }
 
     func gestureRecognizer(_ gesture: UIGestureRecognizer, shouldBeRequiredToFailBy other: UIGestureRecognizer) -> Bool {
-        guard let view, other !== tap, other !== swipe, let theirs = other.view else { return false }
+        guard let view, other !== tap, other !== swipe, other !== hold, let theirs = other.view else { return false }
+        // The text view's own presses — the loupe, choosing words — wait on a link's being held.
+        if gesture === hold { return theirs.isDescendant(of: view) && !(other is RowHold) }
         // The text view's own wait for the tap: a link followed does not also take the caret.
         // (Not a row's being held: that begins while a tap could still come, and ends it.)
         if gesture === tap { return theirs.isDescendant(of: view) && !(other is RowHold) }

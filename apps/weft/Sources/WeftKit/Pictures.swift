@@ -282,7 +282,10 @@ struct PictureView: View {
     }
 }
 
-/// The card shown of a link while the pointer rests on it.
+#endif
+
+/// The card shown of a link while the pointer rests on it — or, on a
+/// phone, while a finger holds it.
 struct LinkCard: View {
     let store: GraphStore
     let link: EditorLink
@@ -316,15 +319,15 @@ struct LinkCard: View {
 
     /// A page on the web: its picture, title and site. `written` is the link as the note has it —
     /// the address, or the name of the note kept of the page.
-    @ViewBuilder private func web(_ address: String, title: String?, cover: NSImage?, written: EditorLink? = nil) -> some View {
+    @ViewBuilder private func web(_ address: String, title: String?, cover: PlatformImage?, written: EditorLink? = nil) -> some View {
         let found = WebCards.shared.found[address]
         VStack(alignment: .leading, spacing: 0) {
             if let image = cover ?? found?.image, image.size.width >= 120 {
-                Image(nsImage: image).resizable().aspectRatio(contentMode: .fill).frame(width: 300, height: 150).clipped()
+                Image(platform: image).resizable().aspectRatio(contentMode: .fill).frame(width: 300, height: 150).clipped()
             }
             VStack(alignment: .leading, spacing: 3) {
                 HStack(spacing: 6) {
-                    if let image = found?.image, cover == nil, image.size.width < 120 { Image(nsImage: image).resizable().frame(width: 16, height: 16).clipShape(RoundedRectangle(cornerRadius: 3)) }
+                    if let image = found?.image, cover == nil, image.size.width < 120 { Image(platform: image).resizable().frame(width: 16, height: 16).clipShape(RoundedRectangle(cornerRadius: 3)) }
                     Text(title ?? found?.title ?? Self.host(address)).font(.system(size: 13, weight: .semibold)).lineLimit(2)
                 }
                 Text(Self.host(address)).font(.caption).foregroundStyle(Color.inkSecondary).lineLimit(1)
@@ -389,7 +392,6 @@ struct LinkCard: View {
         return String(source[range])
     }
 }
-#endif
 
 /// What is known of a page on the web: its title, its picture. Asked of
 /// the page once, and kept while the app runs.
