@@ -16,13 +16,12 @@ struct Sidebar: View {
     @FocusState private var searching: Bool
 
     enum Lens: String, CaseIterable {
-        case recent, inbox, tasks, wiki, tags, rivers
+        case recent, inbox, tasks, tags, rivers
         var symbol: String {
             switch self {
             case .recent: return "clock"
             case .inbox: return "tray"
             case .tasks: return "checklist"
-            case .wiki: return "book.closed"
             case .tags: return "tag"
             case .rivers: return "square.stack"
             }
@@ -32,7 +31,6 @@ struct Sidebar: View {
             case .recent: return "Recent"
             case .inbox: return "Inbox and Pinned"
             case .tasks: return "Tasks"
-            case .wiki: return "Wiki"
             case .tags: return "Tags"
             case .rivers: return "Saved Rivers"
             }
@@ -64,8 +62,7 @@ struct Sidebar: View {
     private func load() {
         switch chosen {
         case .recent: pages = query("sort: -modified\nlimit: 60")
-        case .inbox: pages = query("is: pinned\nsort: pinned") + query("is: inbox\nsort: -modified")
-        case .wiki: pages = query("is: wiki")
+        case .inbox: pages = query("in: Pinned") + query("in: Inbox")
         case .tasks: tasks = (try? store.engine.openTasks()) ?? []
         case .tags: tags = (try? store.engine.tags()) ?? []
         case .rivers: break
@@ -117,7 +114,7 @@ struct Sidebar: View {
 
     @ViewBuilder private var lensRows: some View {
         switch chosen {
-        case .recent, .inbox, .wiki:
+        case .recent, .inbox:
             ForEach(pages, id: \.path) { page in titleRow(page.label, store.emblem(page)) { open(path: page.path, title: page.title) } }
         case .rivers:
             ForEach(store.savedRivers) { saved in

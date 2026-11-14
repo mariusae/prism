@@ -137,6 +137,8 @@ enum Snapshot {
         if let pair = environment["WEFT_MENTION"]?.split(separator: "|").map(String.init), pair.count == 2, let note = store.resolve(pair[0]), let page = store.resolve(pair[1]) {
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { store.openMention(in: note.path, title: pair[0], of: page.path, after: store.river.selected) }
         }
+        // WEFT_CONVERT=1: notes marked pinned, inbox or wiki, made cards of Pinned and Inbox, and the marks taken out.
+        if environment["WEFT_CONVERT"] != nil { print("converted \(store.convertOldMarks()) notes") }
         // WEFT_MOVE=1: the river picker, as ⇧⌘M brings it, for the card chosen.
         if environment["WEFT_MOVE"] != nil {
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {

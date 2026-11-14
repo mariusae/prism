@@ -183,3 +183,22 @@ fn a_query_asks_what_it_always_did() {
     assert_eq!(titles(&index, "tag: Person\nsort: -pinned"), ["Grace Hopper", "Ada Lovelace", "Charles Babbage"]);
     assert_eq!(titles(&index, "sort: -pinned\nlimit: 4"), ["Grace Hopper", "Ada Lovelace", "Charles Babbage", "2026-10-31"]);
 }
+
+#[test]
+fn archived_pages_are_left_out_unless_asked_for_and_found_last() {
+    let (dir, mut index) = graph();
+    // Grace archived: out of every query that does not ask about archiving.
+    std::fs::write(dir.path().join("notes/grace.md"), "---\ntags: [Person]\narchived: true\n---\n# Grace Hopper\n\nInvented the compiler.\n").unwrap();
+    let repo = Repository::open(dir.path()).unwrap();
+    index.update(&repo, repo.snapshot(&SnapshotOptions::default()).unwrap().tree).unwrap();
+    assert_eq!(titles(&index, "tag: Person"), ["Ada Lovelace", "Charles Babbage"]);
+    assert_eq!(titles(&index, "tag: Person\ninclude: archived"), ["Grace Hopper", "Ada Lovelace", "Charles Babbage"]);
+    assert_eq!(titles(&index, "is: archived"), ["Grace Hopper"]);
+    // `in: Work` is the saved river's notes.
+    assert_eq!(titles(&index, "in: Work"), ["Charles Babbage", "Ada Lovelace"]);
+    // Found by name and by words, but after the rest.
+    let compiler = prism_index::Search::search(index.connection(), "compiler", 10).unwrap();
+    assert_eq!(compiler.last().map(|hit| hit.title.as_str()), Some("Grace Hopper"));
+    let named = Catalog::complete(index.connection(), "", 20).unwrap();
+    assert_eq!(named.last().map(|row| row.title.as_str()), Some("Grace Hopper"));
+}

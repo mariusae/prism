@@ -219,6 +219,8 @@ struct PhoneCard: View {
                     if !backlinks.isEmpty { mentions }
                 }
             }
+            // Archived: kept as it is, out of the way — dimmed.
+            .opacity(store.isArchived(card.path) ? 0.55 : 1)
             .padding(.horizontal, 16)
             .padding(.top, card.folded ? 12 : 16)
             .padding(.bottom, card.folded ? 12 : 16)
@@ -271,10 +273,14 @@ struct PhoneCard: View {
         backlinks = ((try? store.engine.backlinks(path: card.path)) ?? []).compactMap { link in
             guard link.source != card.path, seen.insert(link.source).inserted else { return nil }
             if let here = river.name, GraphStore.riverName(link.source) == here { return nil }
+            // Pinned and the Inbox are marks of a note's own, shown as such: not pages that speak of it.
+            if let held = GraphStore.riverName(link.source), held == GraphStore.pinnedRiver || held == GraphStore.inboxRiver { return nil }
             let page = (try? store.engine.page(path: link.source)) ?? nil
             let name = page?.title ?? String(link.source.split(separator: "/").last ?? "").replacingOccurrences(of: ".md", with: "")
             return Source(path: link.source, name: name, title: page?.label ?? name, emblem: store.emblem(path: link.source, title: name))
         }
+        // Those archived, after the rest.
+        backlinks = backlinks.filter { !store.isArchived($0.path) } + backlinks.filter { store.isArchived($0.path) }
         tags = (try? store.engine.tagsOf(path: card.path)) ?? []
         store.cardFeet[Self.footKey(card, in: river)] = Foot(backlinks: backlinks, tags: tags)
     }
@@ -337,7 +343,8 @@ struct PhoneCard: View {
                 .onTapGesture { fold() }
                 .contextMenu { holdMenu }
                 .onDrag { carry() } preview: { carriedLabel }
-                if draft.isMarked("pinned") { Image(systemName: "pin.fill").font(.caption).foregroundStyle(Color.inkAccent) }
+                if store.isPinned(card.path) { Image(systemName: "pin.fill").font(.caption).foregroundStyle(Color.inkAccent) }
+                if store.isArchived(card.path) { ArchivedLabel() }
             }
         }
         .task(id: linkAddress) {
@@ -376,6 +383,7 @@ struct PhoneCard: View {
                 editor: shown, theme: Ink.editorTheme, isWriting: isWriting, height: $bodyHeight,
                 refresh: store.indexRevision,
                 pageExists: { name in store.leadsSomewhere(name) },
+                    pageArchived: { name in store.resolve(name).map { store.isArchived($0.path) } ?? false },
                     linkLabel: { name in store.linkLabel(name) },
                     linkIcon: { name in store.linkIcon(name) },
                 blockView: { block in
@@ -589,23 +597,29 @@ struct PhoneCard: View {
 
     private var leadingActions: [SwipeAction] {
         guard draft.exists, !isDay else { return [] }
-        let inbox = draft.isMarked("inbox")
-            ? SwipeAction(name: "Out of Inbox", symbol: "tray.and.arrow.up", tint: .blue) { draft.toggleMark("inbox") }
-            : SwipeAction(name: "Inbox", symbol: "tray.and.arrow.down", tint: .blue) { draft.toggleMark("inbox") }
+        let inbox = store.isInInbox(card.path)
+            ? SwipeAction(name: "Out of Inbox", symbol: "tray.and.arrow.up", tint: .blue) { store.toggleInbox(path: card.path, title: draft.title) }
+            : SwipeAction(name: "Inbox", symbol: "tray.and.arrow.down", tint: .blue) { store.toggleInbox(path: card.path, title: draft.title) }
         switch draft.task {
         case .todo: return [SwipeAction(name: "Done", symbol: "checkmark.circle.fill", tint: .green) { draft.setTask(.done) }, inbox]
         case .done: return [SwipeAction(name: "To Do", symbol: "circle", tint: .orange) { draft.setTask(.todo) }, inbox]
         case .none:
             let todo = SwipeAction(name: "To Do", symbol: "circle", tint: .orange) { draft.setTask(.todo) }
-            return draft.isMarked("inbox") ? [inbox, todo] : [todo, inbox]
+            return store.isInInbox(card.path) ? [inbox, todo] : [todo, inbox]
         }
     }
 
     private var trailingActions: [SwipeAction] {
         var actions: [SwipeAction] = []
-        if draft.exists { actions.append(SwipeAction(name: "Delete", symbol: "trash", tint: .red) { withAnimation(.snappy(duration: 0.28)) { store.delete(card.id, in: river) } }) }
+        // Archived, or back: kept as it is, out of the way. (Deleting is in the card's menu.)
+        if draft.exists, !isDay {
+            let archived = store.isArchived(card.path)
+            actions.append(SwipeAction(name: archived ? "Unarchive" : "Archive", symbol: archived ? "archivebox.fill" : "archivebox", tint: .indigo) {
+                withAnimation(.snappy(duration: 0.2)) { store.toggleArchived(path: card.path, title: draft.title) }
+            })
+        }
         actions.append(SwipeAction(name: river.isFound(card.id) ? "Remove" : "Close", symbol: "xmark", tint: .gray) { withAnimation(.snappy(duration: 0.28)) { store.close(card.id, in: river) } })
-        // Outer first: a full swipe closes; deleting takes a tap.
+        // Outer first: a full swipe closes; archiving takes a tap.
         return actions.reversed()
     }
 
@@ -623,8 +637,9 @@ struct PhoneCard: View {
         }
         if !isDay { Button(isUntitled ? "Add Title…" : "Rename…", systemImage: "character.cursor.ibeam") { startRenaming() } }
         if draft.exists, !isDay {
-            Button(draft.isMarked("pinned") ? "Unpin" : "Pin", systemImage: draft.isMarked("pinned") ? "pin.slash" : "pin") { draft.toggleMark("pinned") }
-            Button(draft.isMarked("inbox") ? "Done with It" : "Add to Inbox", systemImage: draft.isMarked("inbox") ? "tray.and.arrow.up" : "tray.and.arrow.down") { draft.toggleMark("inbox") }
+            Button(store.isPinned(card.path) ? "Unpin" : "Pin", systemImage: store.isPinned(card.path) ? "pin.slash" : "pin") { store.togglePinned(path: card.path, title: draft.title) }
+            Button(store.isInInbox(card.path) ? "Out of the Inbox" : "Add to Inbox", systemImage: store.isInInbox(card.path) ? "tray.and.arrow.up" : "tray.and.arrow.down") { store.toggleInbox(path: card.path, title: draft.title) }
+            Button(store.isArchived(card.path) ? "Unarchive" : "Archive", systemImage: store.isArchived(card.path) ? "archivebox.fill" : "archivebox") { withAnimation(.snappy(duration: 0.2)) { store.toggleArchived(path: card.path, title: draft.title) } }
         }
         if canRead { Button("Read", systemImage: "doc.richtext") { read() } }
         Button("Copy Link", systemImage: "link") { UIPasteboard.general.string = "[[\(store.linkName(path: card.path, title: draft.title))]]" }
@@ -655,9 +670,9 @@ struct PhoneCard: View {
                 case .done: Button("Mark Not Done", systemImage: "circle") { draft.setTask(.todo) }
                 }
                 if draft.task != .none { Button("No Longer a To-Do", systemImage: "circle.slash") { draft.setTask(.none) } }
-                Button(draft.isMarked("pinned") ? "Unpin" : "Pin", systemImage: draft.isMarked("pinned") ? "pin.slash" : "pin") { draft.toggleMark("pinned") }
-                Button(draft.isMarked("inbox") ? "Done with It" : "Add to Inbox", systemImage: draft.isMarked("inbox") ? "tray.and.arrow.up" : "tray.and.arrow.down") { draft.toggleMark("inbox") }
-                Button(draft.isMarked("wiki") ? "Remove from Wiki" : "Add to Wiki", systemImage: "book.closed") { draft.toggleMark("wiki") }
+                Button(store.isPinned(card.path) ? "Unpin" : "Pin", systemImage: store.isPinned(card.path) ? "pin.slash" : "pin") { store.togglePinned(path: card.path, title: draft.title) }
+                Button(store.isInInbox(card.path) ? "Out of the Inbox" : "Add to Inbox", systemImage: store.isInInbox(card.path) ? "tray.and.arrow.up" : "tray.and.arrow.down") { store.toggleInbox(path: card.path, title: draft.title) }
+            Button(store.isArchived(card.path) ? "Unarchive" : "Archive", systemImage: store.isArchived(card.path) ? "archivebox.fill" : "archivebox") { withAnimation(.snappy(duration: 0.2)) { store.toggleArchived(path: card.path, title: draft.title) } }
             }
         }
         Section {

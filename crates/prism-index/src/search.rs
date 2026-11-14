@@ -60,7 +60,7 @@ impl Search {
         let Some(query) = fts_query(typed) else { return Ok(Vec::new()) };
         let mut statement = db.prepare(&format!(
             "SELECT path, title, snippet(search, 2, '[', ']', '…', 12) FROM search
-                 WHERE search MATCH ?1 AND {} ORDER BY bm25(search, 0.0, 8.0, 1.0) * {RECENCY}, path LIMIT ?2",
+                 WHERE search MATCH ?1 AND {} ORDER BY bm25(search, 0.0, 8.0, 1.0) * {RECENCY} * {LIVE}, path LIMIT ?2",
             crate::seen("search.path")
         ))?;
         let hits = statement
@@ -69,6 +69,12 @@ impl Search {
         Ok(hits)
     }
 }
+
+/// How much a find counts for its page not being archived: an archived
+/// page's a fifth as much — found, but after the rest. (BM25 is negative:
+/// the more it counts, the lower.)
+const LIVE: &str = "(CASE WHEN search.path IN (SELECT path FROM note_fields WHERE key = 'archived' AND position = 0
+     AND trim(value) != '' AND lower(trim(value)) NOT IN ('false', 'no', 'off', '0', 'n')) THEN 0.2 ELSE 1.0 END)";
 
 /// How much more a find counts for its page having been changed lately:
 /// 1.5 for one changed now, 1.25 a month ago, towards 1 with age. A page

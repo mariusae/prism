@@ -59,6 +59,10 @@ public final class GraphStore {
     public private(set) var colors: [String: String] = [:]
     /// The rivers saved in the graph, as the sidebar lists them.
     public private(set) var savedRivers: [SavedRiverInfo] = []
+    /// The notes archived, by path: read with the index.
+    var archived: Set<String> = []
+    /// Moved on when a note is pinned, put in the inbox, or archived.
+    public var collectionsRevision = 0
 
     /// How this app has the engine run.
     public static var options: EngineOptions { EngineOptions(device: Host.deviceName, authorName: nil, authorEmail: nil, exclude: [], idleSeconds: nil, indexPath: nil) }
@@ -135,7 +139,7 @@ public final class GraphStore {
 
     /// The names dictation should know: of the notes pinned, and those written in lately.
     func dictationTerms() -> [String] {
-        let pages = ((try? engine.runQuery(body: "is: pinned\nsort: pinned", this: nil).pages) ?? []) + ((try? engine.runQuery(body: "sort: -modified\nlimit: 80", this: nil).pages) ?? [])
+        let pages = ((try? engine.runQuery(body: "in: Pinned", this: nil).pages) ?? []) + ((try? engine.runQuery(body: "sort: -modified\nlimit: 80", this: nil).pages) ?? [])
         return Dictation.terms(from: pages.filter { !$0.path.hasPrefix("daily/") && !$0.path.hasPrefix("weekly/") && !$0.isUntitled }.map(\.label))
     }
 
@@ -342,6 +346,12 @@ public final class GraphStore {
         conflicted = (try? engine.conflictedPages()) ?? []
         icons = (try? engine.fieldValues(key: "icon")) ?? icons
         colors = (try? engine.fieldValues(key: "color")) ?? colors
+        archived = Set(((try? engine.fieldValues(key: "archived")) ?? [:]).filter { !["", "false", "no", "off", "0", "n"].contains($0.value.lowercased().trimmingCharacters(in: .whitespaces)) }.keys)
+        refreshSavedRivers()
+    }
+
+    /// The saved rivers as the lists show them, read again.
+    func refreshSavedRivers() {
         savedRivers = engine.riverNames().map { name in
             let river = (try? engine.river(name: name)) ?? nil
             var titles = (river?.cards.prefix(6).map(\.title)) ?? []
@@ -578,7 +588,7 @@ public final class GraphStore {
 
     /// The path a name in a river's file leads to — or, for a page not
     /// written yet, where it would be kept.
-    private func path(named name: String) -> String {
+    func path(named name: String) -> String {
         resolve(name)?.path ?? engine.pathForTitle(title: name)
     }
 

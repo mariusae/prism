@@ -24,7 +24,7 @@ struct StartPage: View {
     @FocusState private var typing: Bool
 
     enum Tab: String, CaseIterable {
-        case rivers, recent, inbox, reading, tasks, wiki
+        case rivers, recent, inbox, reading, tasks
         var symbol: String {
             switch self {
             case .rivers: return "square.stack.3d.up"
@@ -32,7 +32,6 @@ struct StartPage: View {
             case .inbox: return "tray"
             case .reading: return "eyeglasses"
             case .tasks: return "checklist"
-            case .wiki: return "book.closed"
             }
         }
         var name: String {
@@ -42,7 +41,6 @@ struct StartPage: View {
             case .inbox: return "Inbox and Pinned"
             case .reading: return "Reading"
             case .tasks: return "Tasks"
-            case .wiki: return "Wiki"
             }
         }
     }
@@ -124,7 +122,7 @@ struct StartPage: View {
     @ViewBuilder private var browsing: some View {
         switch chosen {
         case .rivers: rivers
-        case .recent, .inbox, .wiki:
+        case .recent, .inbox:
             ForEach(pages, id: \.path) { page in pageRow(page) }
             if pages.isEmpty { empty("Nothing here yet") }
         case .reading:
@@ -321,8 +319,7 @@ struct StartPage: View {
         switch chosen {
         case .rivers: break
         case .recent: pages = query("sort: -modified\nlimit: 40")
-        case .inbox: pages = query("is: pinned\nsort: pinned") + query("is: inbox\nsort: -modified")
-        case .wiki: pages = query("is: wiki")
+        case .inbox: pages = query("in: Pinned") + query("in: Inbox")
         case .reading: (pages, nextToRead) = store.readingQueue()
         case .tasks: tasks = (try? store.engine.openTasks()) ?? []
         }
@@ -460,6 +457,7 @@ struct RiverOverview: View {
 /// Settings: how notes are set, who is signed in, and what syncing has been doing.
 struct PhoneSettings: View {
     let store: GraphStore
+    @State private var converting = false
     private let account = Account.shared
     @Environment(\.dismiss) private var dismiss
 
@@ -484,6 +482,16 @@ struct PhoneSettings: View {
                         Text("A").font(.system(size: 22))
                     }
                     Text("Notes are set like this, at \(Int(TextSettings.size)) points.").font(.system(size: TextSettings.size, design: TextSettings.design))
+                }
+                Section {
+                    Button("Make Pinned and Inbox Rivers") { converting = true }
+                        .confirmationDialog("Make Pinned and Inbox rivers?", isPresented: $converting, titleVisibility: .visible) {
+                            Button("Make Rivers") { store.convertOldMarks() }
+                        } message: {
+                            Text("Notes marked pinned or inbox in their frontmatter become cards of the saved rivers Pinned and Inbox, and the pinned, inbox and wiki fields are taken out of those notes.")
+                        }
+                } footer: {
+                    Text("Once, for a graph whose notes were marked as Reflect marked them.")
                 }
                 Section("Account") {
                     if account.isSignedIn {

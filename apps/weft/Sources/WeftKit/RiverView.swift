@@ -248,7 +248,7 @@ struct StartPage: View {
         .frame(maxWidth: .infinity)
         .task(id: store.indexRevision) {
             recent = (try? store.engine.runQuery(body: "sort: -modified\nlimit: 10", this: nil).pages) ?? []
-            pinned = (try? store.engine.runQuery(body: "is: pinned\nsort: pinned\nlimit: 8", this: nil).pages) ?? []
+            pinned = (try? store.engine.runQuery(body: "in: Pinned\nlimit: 8", this: nil).pages) ?? []
         }
     }
 

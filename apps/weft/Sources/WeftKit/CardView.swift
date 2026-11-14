@@ -80,6 +80,8 @@ struct CardView: View {
                 if !backlinks.isEmpty { mentions }
             }
         }
+        // Archived: kept as it is, out of the way — dimmed.
+        .opacity(store.isArchived(card.path) ? 0.55 : 1)
         .padding(.trailing, Measures.cardTrailing)
         .padding(.top, card.folded ? 11 : (showsHeader ? 9 : 14))
         // A note with no title has no line for what is done to it: that
@@ -160,10 +162,14 @@ struct CardView: View {
             guard link.source != card.path, seen.insert(link.source).inserted else { return nil }
             // The river this card is in is no news: it is where one is.
             if let here = river.name, GraphStore.riverName(link.source) == here { return nil }
+            // Pinned and the Inbox are marks of a note's own, shown as such: not pages that speak of it.
+            if let held = GraphStore.riverName(link.source), held == GraphStore.pinnedRiver || held == GraphStore.inboxRiver { return nil }
             let page = (try? store.engine.page(path: link.source)) ?? nil
             let name = page?.title ?? String(link.source.split(separator: "/").last ?? "").replacingOccurrences(of: ".md", with: "")
             return Source(path: link.source, name: name, title: page?.label ?? name, emblem: store.emblem(path: link.source, title: name))
         }
+        // Those archived, after the rest.
+        backlinks = backlinks.filter { !store.isArchived($0.path) } + backlinks.filter { store.isArchived($0.path) }
         tags = (try? store.engine.tagsOf(path: card.path)) ?? []
         store.cardFeet[Self.footKey(card, in: river)] = Foot(backlinks: backlinks, tags: tags)
     }
@@ -388,9 +394,10 @@ struct CardView: View {
                             .onTapGesture { fold() }
                             .help("Click to fold, double-click to rename")
                     }
-                    if draft.isMarked("pinned") {
+                    if store.isPinned(card.path) {
                         Image(systemName: "pin.fill").font(.caption).foregroundStyle(Color.inkAccent)
                     }
+                if store.isArchived(card.path) { ArchivedLabel() }
                 }
                 Spacer(minLength: 8)
                 actions
@@ -461,6 +468,7 @@ struct CardView: View {
                     editor: shown, theme: Ink.editorTheme, isWriting: isWriting, height: $bodyHeight,
                     refresh: store.indexRevision,
                     pageExists: { name in store.leadsSomewhere(name) },
+                    pageArchived: { name in store.resolve(name).map { store.isArchived($0.path) } ?? false },
                     linkLabel: { name in store.linkLabel(name) },
                     linkIcon: { name in store.linkIcon(name) },
                     blockView: { block in
@@ -628,9 +636,9 @@ struct CardView: View {
             case .done: Button("Mark Not Done", systemImage: "circle") { draft.setTask(.todo) }
             }
             if draft.task != .none { Button("No Longer a To-Do", systemImage: "circle.slash") { draft.setTask(.none) } }
-            Button(draft.isMarked("pinned") ? "Unpin" : "Pin", systemImage: draft.isMarked("pinned") ? "pin.slash" : "pin") { draft.toggleMark("pinned") }
-            Button(draft.isMarked("inbox") ? "Done with It" : "Add to Inbox", systemImage: draft.isMarked("inbox") ? "tray.and.arrow.up" : "tray.and.arrow.down") { draft.toggleMark("inbox") }
-            Button(draft.isMarked("wiki") ? "Remove from Wiki" : "Add to Wiki", systemImage: "book.closed") { draft.toggleMark("wiki") }
+            Button(store.isPinned(card.path) ? "Unpin" : "Pin", systemImage: store.isPinned(card.path) ? "pin.slash" : "pin") { store.togglePinned(path: card.path, title: draft.title) }
+            Button(store.isInInbox(card.path) ? "Out of the Inbox" : "Add to Inbox", systemImage: store.isInInbox(card.path) ? "tray.and.arrow.up" : "tray.and.arrow.down") { store.toggleInbox(path: card.path, title: draft.title) }
+            Button(store.isArchived(card.path) ? "Unarchive" : "Archive", systemImage: store.isArchived(card.path) ? "archivebox.fill" : "archivebox") { withAnimation(.snappy(duration: 0.2)) { store.toggleArchived(path: card.path, title: draft.title) } }
         }
         Divider()
         if !isDay { Button("Rename…", systemImage: "character.cursor.ibeam") { startRenaming() } }

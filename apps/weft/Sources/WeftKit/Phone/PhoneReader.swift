@@ -31,7 +31,7 @@ struct ReaderPanel: View {
     }
 
     private var label: String { store.label(path: place.path, title: place.title) }
-    private var inInbox: Bool { store.draft(path: place.path, title: place.title).isMarked("inbox") }
+    private var inInbox: Bool { store.isInInbox(place.path) }
 
     var body: some View {
         let sources = sources

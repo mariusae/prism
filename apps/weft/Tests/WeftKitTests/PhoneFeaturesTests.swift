@@ -223,12 +223,14 @@ final class PhoneFeaturesTests: XCTestCase {
 
     func testReadingQueue() throws {
         try write("notes/a-page.md", Self.link)
-        try write("notes/older.md", "---\ninbox: true\n---\n\n# Older\n\n- [read me](https://example.com/older)\n")
-        try write("notes/put-off.md", "---\ninbox: true\nsnoozed_until: 2999-01-01T08:00\n---\n\n# Put Off\n\n- https://example.com/later\n")
-        try write("notes/came-back.md", "---\ninbox: true\nsnoozed_until: 2020-01-01T08:00\n---\n\n# Came Back\n\n- https://example.com/back\n")
-        try write("notes/no-link.md", "---\ninbox: true\n---\n\n# No Link\n\n- nothing to read\n")
+        try write("notes/older.md", "# Older\n\n- [read me](https://example.com/older)\n")
+        try write("notes/put-off.md", "---\nsnoozed_until: 2999-01-01T08:00\n---\n\n# Put Off\n\n- https://example.com/later\n")
+        try write("notes/came-back.md", "---\nsnoozed_until: 2020-01-01T08:00\n---\n\n# Came Back\n\n- https://example.com/back\n")
+        try write("notes/no-link.md", "# No Link\n\n- nothing to read\n")
         try write("notes/not-inbox.md", "# Not Inbox\n\n- https://example.com/elsewhere\n")
         try write("daily/2020-05-05.md", "- [[Links]]\n  - [[Older]]\n")
+        // The Inbox: a saved river of what is waiting to be read.
+        try write("rivers/Inbox.md", "- [[a-page]]\n- [[older]]\n- [[put-off]]\n- [[came-back]]\n- [[no-link]]\n")
         let store = try GraphStore(root: folder)
         defer { store.close() }
         var queue = store.readingQueue()
@@ -238,21 +240,21 @@ final class PhoneFeaturesTests: XCTestCase {
         XCTAssertEqual(queue.next.map(ReadingQueue.written), "2999-01-01T08:00")
         XCTAssertEqual(store.sources(path: "notes/a-page.md").map(\.address), ["https://example.com/a-page"])
 
-        // Done with: out of the inbox, and the file says so; undone, back.
+        // Done with: out of the Inbox river, the note as it was; undone, back.
         store.finishReading(path: "notes/a-page.md", title: "A Page")
         var file = try String(contentsOf: folder.appendingPathComponent("notes/a-page.md"), encoding: .utf8)
-        XCTAssertFalse(file.contains("inbox"), file)
         XCTAssertTrue(file.contains("icon: link") && file.contains("- URL: <https://example.com/a-page>"), file)
+        XCTAssertFalse(store.isInInbox("notes/a-page.md"))
+        XCTAssertFalse(try String(contentsOf: folder.appendingPathComponent("rivers/Inbox.md"), encoding: .utf8).contains("a-page"))
         XCTAssertFalse(store.readingQueue().pages.contains { $0.title == "A Page" })
         XCTAssertTrue(store.takeUndo())
-        file = try String(contentsOf: folder.appendingPathComponent("notes/a-page.md"), encoding: .utf8)
-        XCTAssertTrue(file.contains("inbox: true"), file)
+        XCTAssertTrue(store.isInInbox("notes/a-page.md"))
         XCTAssertTrue(store.readingQueue().pages.contains { $0.title == "A Page" })
 
         // Put off: still in the inbox, with when it comes back.
         store.finishReading(path: "notes/older.md", title: "Older", snooze: .tomorrow)
         file = try String(contentsOf: folder.appendingPathComponent("notes/older.md"), encoding: .utf8)
-        XCTAssertTrue(file.contains("inbox: true"), file)
+        XCTAssertTrue(store.isInInbox("notes/older.md"))
         XCTAssertNotNil(file.range(of: #"snoozed_until: "?\d{4}-\d\d-\d\dT08:00"#, options: .regularExpression), file)
         queue = store.readingQueue()
         XCTAssertFalse(queue.pages.contains { $0.title == "Older" })
@@ -325,6 +327,33 @@ final class PhoneFeaturesTests: XCTestCase {
         XCTAssertEqual(here.cards.count, 2)
         XCTAssertTrue(store.takeUndo())
         XCTAssertEqual(try store.engine.river(name: "Kept")?.cards.count, 0)
+    }
+
+    @MainActor
+    func testConvertingMarksAndArchiving() throws {
+        try write("notes/a.md", "---\npinned: 2\nwiki: true\n---\n# A\n\n- a\n")
+        try write("notes/b.md", "---\npinned: 1\ninbox: true\n---\n# B\n\n- b\n")
+        try write("rivers/Inbox.md", "---\nicon: tray\n---\n```query\nis: inbox\n```\n")
+        let store = try GraphStore(root: folder)
+        defer { store.close() }
+        store.engine.settle()
+        XCTAssertEqual(store.convertOldMarks(), 2)
+        // Pinned in the marks' order; the Inbox a river held by hand, its look kept.
+        XCTAssertEqual(try store.engine.river(name: "Pinned")?.cards.map(\.title), ["b", "a"])
+        let inbox = try XCTUnwrap(try store.engine.river(name: "Inbox"))
+        XCTAssertNil(inbox.query)
+        XCTAssertEqual(inbox.icon, "tray")
+        XCTAssertEqual(inbox.cards.map(\.title), ["b"])
+        XCTAssertEqual(try store.engine.read(path: "notes/a.md"), "# A\n\n- a\n")
+        XCTAssertTrue(store.isPinned("notes/a.md") && store.isInInbox("notes/b.md") && !store.isInInbox("notes/a.md"))
+        // Archived: in the note; out of what a query finds unless it asks; undone, back.
+        store.toggleArchived(path: "notes/a.md", title: "A")
+        XCTAssertTrue(try store.engine.read(path: "notes/a.md")?.contains("archived: true") == true)
+        store.engine.settle()
+        XCTAssertEqual(try store.engine.runQuery(body: "in: Pinned", this: nil).pages.map(\.title), ["B"])
+        XCTAssertTrue(store.isArchived("notes/a.md"))
+        XCTAssertTrue(store.takeUndo())
+        XCTAssertFalse(store.isArchived("notes/a.md"))
     }
 
     func testDictatedNote() throws {

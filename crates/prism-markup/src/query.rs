@@ -32,7 +32,10 @@ pub enum Clause {
     /// `linked from: X` — pages X links to.
     LinkedFrom(String),
     /// `listed in: X` — the titles in X's `list` field, in their order.
+    /// `in: Work` is `listed in: rivers/Work`: the notes a saved river holds.
     ListedIn(String),
+    /// `include: archived` — what a query leaves out unless asked, asked for.
+    Include(String),
     /// `has: field, …` — pages with each field.
     Has(Vec<String>),
     /// `is: day`, `week` or `note` — the page's kind — or `is: pinned`,
@@ -92,6 +95,8 @@ fn parse_clause(line: &str) -> Clause {
         "links to" => Clause::LinksTo(value.to_owned()),
         "linked from" => Clause::LinkedFrom(value.to_owned()),
         "listed in" => Clause::ListedIn(value.to_owned()),
+        "in" => Clause::ListedIn(crate::river::target(value)),
+        "include" => Clause::Include(value.to_ascii_lowercase()),
         "has" => Clause::Has(list()),
         "is" => Clause::Is(value.to_ascii_lowercase()),
         "is not" => Clause::IsNot(value.to_ascii_lowercase()),
@@ -115,7 +120,11 @@ impl fmt::Display for Clause {
             Clause::Text(v) => write!(f, "text: {v}"),
             Clause::LinksTo(v) => write!(f, "links to: {v}"),
             Clause::LinkedFrom(v) => write!(f, "linked from: {v}"),
-            Clause::ListedIn(v) => write!(f, "listed in: {v}"),
+            Clause::ListedIn(v) => match crate::river::name_of(v) {
+                Some(river) => write!(f, "in: {river}"),
+                None => write!(f, "listed in: {v}"),
+            },
+            Clause::Include(v) => write!(f, "include: {v}"),
             Clause::Has(v) => write!(f, "has: {}", v.join(", ")),
             Clause::Is(v) => write!(f, "is: {v}"),
             Clause::IsNot(v) => write!(f, "is not: {v}"),

@@ -110,7 +110,8 @@ extension NoteEditorView {
         /// Dresses the text again, as the editor reads it.
         func restyle() {
             guard let view, let storage = view.noteStorage, let manager = view.noteLayout as? BodyLayoutManager else { return }
-            let styler = BodyStyler(theme: parent.theme, pageExists: parent.pageExists, linkLabel: parent.linkLabel, linkIcon: parent.linkIcon)
+            var styler = BodyStyler(theme: parent.theme, pageExists: parent.pageExists, linkLabel: parent.linkLabel, linkIcon: parent.linkIcon)
+            styler.pageArchived = parent.pageArchived
             layout = editor.layout()
             let writing = view.isWriting
             revealed = writing ? BodyStyler.revealed(layout, selection: view.caret) : []

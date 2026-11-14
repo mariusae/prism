@@ -77,6 +77,8 @@ struct BodyStyler {
     var theme: EditorTheme
     /// Says whether a page of this name is there, for a link's look.
     var pageExists: (String) -> Bool = { _ in true }
+    /// Whether the page a link leads to is archived: its link is drawn faint.
+    var pageArchived: (String) -> Bool = { _ in false }
     /// What a page is shown as called — its title, or its first words —
     /// when that is not the name a link to it is written with: `nil`
     /// where the link already says it, or leads nowhere.
@@ -230,7 +232,7 @@ struct BodyStyler {
                 let missing = !isRiver && !pageExists(target)
                 // Its icon before it only where the page has one of its own — a day's is the calendar.
                 let symbol = isRiver ? "square.stack" : (linkIcon(target) ?? (isDate(target) ? "calendar" : nil))
-                link(storage, range, to: .page(target), symbol: symbol, missing: missing, line: line, shown: shown, markupEnd: markupEnd)
+                link(storage, range, to: .page(target), symbol: symbol, missing: missing, line: line, shown: shown, markupEnd: markupEnd, faint: !isRiver && !missing && pageArchived(target))
                 // A link written with its page's file's name shows the page's title — off the lines being written in.
                 if !shown, !isRiver, (storage.string as NSString).substring(with: range) == target, let label = linkLabel(target) {
                     relabel(storage, range, as: label)
@@ -309,8 +311,9 @@ struct BodyStyler {
         }
     }
 
-    private func link(_ storage: NSTextStorage, _ range: NSRange, to target: EditorLink, symbol: String?, missing: Bool, line: BodyLine, shown: Bool, markupEnd: [Int: Int], leaves: Bool = false) {
-        let tint = missing ? theme.secondary : theme.accent
+    private func link(_ storage: NSTextStorage, _ range: NSRange, to target: EditorLink, symbol: String?, missing: Bool, line: BodyLine, shown: Bool, markupEnd: [Int: Int], leaves: Bool = false, faint: Bool = false) {
+        // A link to a page not written yet, or to one archived: in the secondary ink.
+        let tint = missing || faint ? theme.secondary : theme.accent
         storage.addAttributes([.foregroundColor: tint, .prismLink: LinkBox(target)], range: range)
         if missing {
             restyle(storage, range) { theme.font($0.pointSize, weight: $0.isBold ? .semibold : .regular, italic: true) }

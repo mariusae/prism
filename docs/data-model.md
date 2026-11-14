@@ -30,8 +30,16 @@ A graph has very few kinds of thing.
   what a link shows is its page's title, computed.
 - **A field** is a frontmatter key with a text or list value. Fields
   carry no built-in meaning except `aliases`, `tags`, `private`, and the
-  two lists of names, `related` and `list`. Anything that *marks* a page —
-  pinned, inbox, wiki — is just a field, asked about with `is:`.
+  two lists of names, `related` and `list`, and `archived`. Anything else
+  that *marks* a page is just a field, asked about with `is:`.
+- **Notes are sorted out three ways.** A *tag* says what a note is, or is
+  about. A *river* is what is being done with notes — *Pinned* and
+  *Inbox* are saved rivers like any other, `rivers/Pinned.md` and
+  `rivers/Inbox.md`. A *state* is where a note is in its life:
+  `task:`, `snoozed_until:`, and `archived: true`.
+- **Archived** pages are kept as they are, out of the way: a query leaves
+  them out unless it asks (`is: archived`, `include: archived`), and
+  search and name completion find them after the rest.
 - **An order set by hand** is a list of links: a page's `list` field, or
   a river's cards. Any other order is `sort:` on a field.
 - **Time** is git's. No page says when it was made or changed.
@@ -271,10 +279,12 @@ And one on a tag's page:
 |---|---|---|
 | `fields` | list | the typed fields of pages with the tag ([§7](#7-typed-fields)) |
 
-Everything else people use — `pinned`, `inbox`, `topic`, `template`,
-`wiki`, `cover`, `snoozed_until`, `river` — is a plain field. The engine
-gives none of them special treatment; a query asks about any of them the
-same way (`is: pinned`, `has: cover`, `sort: pinned`).
+`archived` is the one field queries treat of themselves (above). Everything
+else people use — `topic`, `template`, `cover`, `snoozed_until`, `river` —
+is a plain field. The engine gives none of them special treatment; a query
+asks about any of them the same way (`is: topic`, `has: cover`, `sort: topic`).
+`pinned`, `inbox` and `wiki`, as Reflect marked notes, are read by the apps
+only to make the Pinned and Inbox rivers of them, once.
 
 A saved river's frontmatter has keys of its own
 ([§11](#11-saved-rivers)).
@@ -511,10 +521,12 @@ query is written in.
 | `links to: X` | that point at X by any of its names, by any kind of link |
 | `linked from: X` | that X links to |
 | `listed in: X` | in the hand-set order X names (below) |
+| `in: Work` | the saved river's notes: `listed in: rivers/Work` |
+| `include: archived` | archived pages too, which are otherwise left out |
 | `has: a, b` | whose frontmatter has every one of the keys |
 | `is: day` / `week` / `note` | of that kind |
 | `is: conflicted` / `blank` | left holding a conflict; with nothing written in them |
-| `is: <field>` | [marked](#4-frontmatter) by that field: `is: pinned`, `is: inbox` |
+| `is: <field>` | [marked](#4-frontmatter) by that field: `is: archived`, `is: topic` |
 | `is not: …` | that `is:` would leave out |
 
 | Clause | Sets |

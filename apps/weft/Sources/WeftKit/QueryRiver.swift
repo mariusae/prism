@@ -27,7 +27,7 @@ struct QuerySpec: Equatable {
 
     /// The kinds a note can be asked to be, or not to be: what `is:` takes.
     static let kinds: [(key: String, name: String)] = [
-        ("inbox", "In the Inbox"), ("pinned", "Pinned"), ("task", "To-Dos"), ("wiki", "Wiki"), ("note", "Notes"), ("day", "Days"), ("week", "Weeks"),
+        ("task", "To-Dos"), ("archived", "Archived"), ("note", "Notes"), ("day", "Days"), ("week", "Weeks"),
     ]
 
     var sort = Sort.newestChanged

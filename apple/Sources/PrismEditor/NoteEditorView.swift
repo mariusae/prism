@@ -20,6 +20,8 @@ public struct NoteEditorView: NSViewRepresentable {
     let isWriting: Bool
     @Binding var height: CGFloat
     var pageExists: (String) -> Bool
+    /// Whether the page a link leads to is archived.
+    var pageArchived: (String) -> Bool = { _ in false }
     /// What a link's page is shown as called, where the link does not say it.
     var linkLabel: (String) -> String?
     /// The icon a link's page was given.
@@ -99,6 +101,7 @@ public struct NoteEditorView: NSViewRepresentable {
     public init(
         editor: NoteEditor, theme: EditorTheme, isWriting: Bool, height: Binding<CGFloat>, refresh: Int = 0,
         pageExists: @escaping (String) -> Bool = { _ in true },
+        pageArchived: @escaping (String) -> Bool = { _ in false },
         linkLabel: @escaping (String) -> String? = { _ in nil },
         linkIcon: @escaping (String) -> String? = { _ in nil },
         blockView: @escaping (EditorBlock) -> AnyView? = { _ in nil },
@@ -120,6 +123,7 @@ public struct NoteEditorView: NSViewRepresentable {
         _height = height
         self.refresh = refresh
         self.pageExists = pageExists
+        self.pageArchived = pageArchived
         self.linkLabel = linkLabel
         self.linkIcon = linkIcon
         self.blockView = blockView

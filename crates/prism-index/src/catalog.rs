@@ -321,7 +321,9 @@ impl Catalog {
                  SELECT path, min(score) AS score FROM name_words WHERE suffix >= ?1 AND suffix < ?2 GROUP BY path
              ) AS found ON found.path = notes.path
              WHERE {SEEN}
-             ORDER BY found.score, coalesce((SELECT modified FROM prism_dates WHERE prism_dates.path = notes.path), 0) DESC, notes.label COLLATE NOCASE, notes.path
+             ORDER BY notes.path IN (SELECT path FROM note_fields WHERE key = 'archived' AND position = 0
+                   AND trim(value) != '' AND lower(trim(value)) NOT IN ('false', 'no', 'off', '0', 'n')),
+               found.score, coalesce((SELECT modified FROM prism_dates WHERE prism_dates.path = notes.path), 0) DESC, notes.label COLLATE NOCASE, notes.path
              LIMIT ?3"
         ))?;
         let rows = statement.query_map(params![key, format!("{key}{}", char::MAX), limit as i64], row)?.collect::<rusqlite::Result<_>>()?;

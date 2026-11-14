@@ -142,6 +142,13 @@ public struct WeftMacApp: App {
                 Button("Today") { today() }.keyboardShortcut("d")
                 // The note in hand, linked to today in its frontmatter: so today's page lists it.
                 Button("Stamp with Today") { if store?.stampToday() != true { NSSound.beep() } }.keyboardShortcut("t", modifiers: [.command, .control])
+                Button("Make Pinned and Inbox Rivers…") { convertMarks() }
+                Divider()
+                Button("Archive") {
+                    guard let store, let id = store.river.writing ?? store.river.selected, let card = store.river.card(id) else { return NSSound.beep() }
+                    withAnimation(.snappy(duration: 0.2)) { store.toggleArchived(path: card.path, title: card.title) }
+                }
+                .keyboardShortcut("a", modifiers: [.command, .control])
                 Button("Move to River…") {
                     guard let store, let id = store.river.selected else { return NSSound.beep() }
                     store.movingCards = .init(ids: [id], river: store.river)
@@ -258,6 +265,20 @@ public struct WeftMacApp: App {
         withAnimation(.snappy(duration: 0.28)) {
             if let card = store.newNote() { store.draft(path: card.path, title: card.title).setTask(.todo) }
         }
+    }
+
+    /// Asks first, then makes the notes marked `pinned:` and `inbox:` — as
+    /// Reflect marked them — cards of the Pinned and Inbox rivers, and takes
+    /// those marks, and `wiki:`, out of the notes.
+    private func convertMarks() {
+        guard let store else { return }
+        let alert = NSAlert()
+        alert.messageText = "Make Pinned and Inbox rivers?"
+        alert.informativeText = "Notes marked pinned or inbox in their frontmatter become cards of the saved rivers Pinned and Inbox, and the pinned, inbox and wiki fields are taken out of those notes."
+        alert.addButton(withTitle: "Make Rivers")
+        alert.addButton(withTitle: "Cancel")
+        guard alert.runModal() == .alertFirstButtonReturn else { return }
+        store.convertOldMarks()
     }
 
     private func today() {

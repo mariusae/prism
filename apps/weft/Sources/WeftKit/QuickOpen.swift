@@ -308,8 +308,8 @@ struct QuickOpen: View {
                 let todayRow = Row(id: "today", symbol: "calendar", name: "Today", detail: today) { $0.open(name: today, after: $0.river.selected) }
                 found.append(Section(id: "recent", title: nil, rows: [todayRow] + query("sort: -modified\nlimit: 30").map { page($0) }))
             case .pinned:
-                let pinned = query("is: pinned\nsort: pinned")
-                let inbox = query("is: inbox\nsort: -modified")
+                let pinned = query("in: Pinned")
+                let inbox = query("in: Inbox")
                 if !pinned.isEmpty { found.append(Section(id: "pinned", title: "Pinned", rows: pinned.map { page($0) })) }
                 if !inbox.isEmpty { found.append(Section(id: "inbox", title: "Inbox", rows: inbox.map { page($0, detail: "Inbox") })) }
             case .tasks:

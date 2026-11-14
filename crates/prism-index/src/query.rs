@@ -73,6 +73,10 @@ pub struct QueryResult {
 const MARKED: &str = "IN (SELECT path FROM note_fields WHERE key = ? AND position = 0
      AND trim(value) != '' AND lower(trim(value)) NOT IN ('false', 'no', 'off', '0', 'n'))";
 
+/// The field that marks a page archived: kept as it is, out of the way —
+/// left out of queries unless asked for, and found after the rest.
+pub const ARCHIVED: &str = "archived";
+
 /// A hand-set order: where a file links to pages, in the order it names
 /// them. Two arguments: the file, and the field (`''` for its body).
 fn listed() -> String {
@@ -143,6 +147,8 @@ pub fn run(db: &Connection, query: &Query, options: &QueryOptions<'_>) -> Result
     let mut listed_in: Option<(String, &'static str)> = None;
     let mut first_tag: Option<String> = None;
     let mut limit: Option<usize> = None;
+    // An archived page is left out unless the query asks about archiving.
+    let mut archived_asked = false;
 
     for clause in &query.clauses {
         match clause {
@@ -198,7 +204,9 @@ pub fn run(db: &Connection, query: &Query, options: &QueryOptions<'_>) -> Result
                     statement.condition("notes.path IN (SELECT path FROM note_fields WHERE key = ?)", [field.clone()]);
                 }
             }
+            Clause::Include(what) => archived_asked |= what == ARCHIVED,
             Clause::Is(what) | Clause::IsNot(what) => {
+                archived_asked |= what == ARCHIVED;
                 let not = if matches!(clause, Clause::Is(_)) { "" } else { "NOT " };
                 match what.as_str() {
                     "day" | "week" | "note" => statement.condition(format!("{not}notes.kind = ?"), [what.clone()]),
@@ -230,6 +238,10 @@ pub fn run(db: &Connection, query: &Query, options: &QueryOptions<'_>) -> Result
             Clause::Columns(columns) => result.columns = columns.clone(),
             Clause::Unknown(_) => {}
         }
+    }
+
+    if !archived_asked {
+        statement.condition(format!("notes.path NOT {MARKED}"), [ARCHIVED.to_owned()]);
     }
 
     // No `sort:` line: an order set by hand, if the query names one.

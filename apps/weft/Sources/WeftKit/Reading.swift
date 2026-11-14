@@ -314,14 +314,14 @@ extension GraphStore {
     /// A note's age is the day it was saved, the first day that links to
     /// it; else when it last changed.
     public func readingQueue(now: Date = Date()) -> (pages: [PageInfo], next: Date?) {
-        let inbox = (try? engine.runQuery(body: "is: inbox\nis not: day\nis not: week\nlimit: 1000", this: nil).pages) ?? []
+        let inbox = (try? engine.runQuery(body: "in: Inbox\nis not: day\nis not: week\nlimit: 1000", this: nil).pages) ?? []
         let snoozed = (try? engine.fieldValues(key: ReadingQueue.snoozeKey)) ?? [:]
         var items: [(page: PageInfo, saved: Date)] = []
         var next: Date?
         for page in inbox where GraphStore.riverName(page.path) == nil {
             let open = openDraft(path: page.path)
             // The note's own word, where it is open: one done with a moment ago is out.
-            if let open, !open.isMarked("inbox") { continue }
+            if !isInInbox(page.path) { continue }
             guard let text = text(of: page.path), ReaderSource.any(in: text, root: root) else { continue }
             let until = ReadingQueue.until(open.map { $0.editor.field(key: ReadingQueue.snoozeKey) } ?? snoozed[page.path])
             if let until, until > now {
@@ -346,14 +346,14 @@ extension GraphStore {
         if let snooze {
             draft.setField(ReadingQueue.snoozeKey, values: [ReadingQueue.written(snooze.until(from: Date()))])
         } else {
-            draft.setField("inbox", values: [])
+            setIn(Self.inboxRiver, path: path, title: title, false)
             draft.setField(ReadingQueue.snoozeKey, values: [])
         }
         draft.saveNow()
         undoable("\(snooze == nil ? "Done with" : "Put off") “\(draft.label)”") { [weak self] in
             guard let self else { return }
             let draft = self.draft(path: path, title: title)
-            if snooze == nil { draft.setField("inbox", values: ["true"]) }
+            if snooze == nil { self.setIn(Self.inboxRiver, path: path, title: title, true) }
             draft.setField(ReadingQueue.snoozeKey, values: was.map { [$0] } ?? [])
             draft.saveNow()
         }
