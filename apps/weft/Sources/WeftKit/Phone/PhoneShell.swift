@@ -60,6 +60,12 @@ struct PhoneShell: View {
         .animation(.snappy(duration: 0.3), value: store.river.reading?.path)
     }
 
+    /// Whether the right edge's room is the status bar's — wider than the
+    /// foot's, and wide enough to stand buttons in.
+    static func barOnSide(_ insets: EdgeInsets) -> Bool {
+        insets.trailing >= 44 && insets.trailing > insets.bottom
+    }
+
     private var shell: some View {
         GeometryReader { room in
             let width = room.size.width
@@ -86,6 +92,17 @@ struct PhoneShell: View {
             }
             .environment(\.riverWidth, width)
             .environment(\.riverHeight, room.size.height)
+            .environment(\.barOnSide, Self.barOnSide(room.safeAreaInsets))
+            // The status bar down the right edge: the bar stands under it, in that column.
+            .overlay(alignment: .bottomTrailing) {
+                if Self.barOnSide(room.safeAreaInsets) {
+                    PhoneBar(store: store, state: state, vertical: true)
+                        .frame(width: room.safeAreaInsets.trailing)
+                        .padding(.bottom, max(room.safeAreaInsets.bottom, 12))
+                        .ignoresSafeArea(edges: [.trailing, .bottom])
+                        .environment(\.riverHeight, room.size.height)
+                }
+            }
         }
         .foregroundStyle(Color.inkText)
         .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardWillShowNotification)) { _ in state.keyboardUp = true }
@@ -138,6 +155,7 @@ struct PhoneShell: View {
 
 private struct RiverWidthKey: EnvironmentKey { static let defaultValue: CGFloat = 390 }
 private struct RiverHeightKey: EnvironmentKey { static let defaultValue: CGFloat = 700 }
+private struct BarOnSideKey: EnvironmentKey { static let defaultValue = false }
 extension EnvironmentValues {
     var riverWidth: CGFloat {
         get { self[RiverWidthKey.self] }
@@ -151,6 +169,13 @@ extension EnvironmentValues {
         get { self[RiverHeightKey.self] }
         set { self[RiverHeightKey.self] = newValue }
     }
+
+    /// Whether the bar stands down the right edge, under the clock — an
+    /// iPhone Duo folded, whose status bar is there — rather than at the foot.
+    var barOnSide: Bool {
+        get { self[BarOnSideKey.self] }
+        set { self[BarOnSideKey.self] = newValue }
+    }
 }
 
 /// One river: its cards one after another, read down.
@@ -159,6 +184,7 @@ struct RiverColumn: View {
     let river: River
     let state: PhoneState
     let isCurrent: Bool
+    @Environment(\.barOnSide) private var barOnSide
     @State private var travelled: CGFloat = 0
     @State private var lastY: CGFloat = 0
     @State private var byHand = false
@@ -264,7 +290,7 @@ struct RiverColumn: View {
                     VStack(spacing: 8) {
                         SyncNotice(store: store)
                         PhoneUndo(store: store)
-                        if !state.keyboardUp, river.writing == nil { PhoneBar(store: store, state: state) }
+                        if !state.keyboardUp, river.writing == nil { PhoneBar(store: store, state: state, nameOnly: barOnSide) }
                     }
                     .padding(.bottom, 4)
                     .animation(.spring(duration: 0.38, bounce: 0.12), value: state.tucked)
@@ -376,6 +402,10 @@ struct PhoneUndo: View {
 struct PhoneBar: View {
     let store: GraphStore
     let state: PhoneState
+    /// Stood down the right edge, under the status bar: a column of buttons.
+    var vertical = false
+    /// At the foot while the column stands on the side: the river's name alone.
+    var nameOnly = false
     @Environment(\.riverWidth) private var width
     @Environment(\.riverHeight) private var height
     @Namespace private var glass
@@ -399,6 +429,67 @@ struct PhoneBar: View {
     private var river: River { store.river }
 
     var body: some View {
+        if vertical { column } else { bar }
+    }
+
+    /// Down the right edge, under the clock: every river, today, the
+    /// rest, and a new note. The river's name stays at the foot.
+    private var column: some View {
+        GlassEffectContainer(spacing: 8) {
+            VStack(spacing: 10) {
+                Button { state.showsOverview = true } label: {
+                    Image(systemName: "square.on.square").font(.system(size: 17, weight: .medium)).frame(width: 48, height: 48).contentShape(Circle())
+                }
+                .buttonStyle(.plain)
+                .glassEffect(.regular.interactive(), in: .circle)
+                .accessibilityLabel("All Rivers")
+                today
+                more.frame(width: 48, height: 48).glassEffect(.regular.interactive(), in: .circle)
+                new
+            }
+            .foregroundStyle(Color.inkAccent)
+        }
+        .overlay(alignment: .bottomTrailing) {
+            if let said = held.problem ?? (held.listening ? "Let go to keep it, or slide up to give it up." : nil) {
+                HeardBubble(text: said, quiet: held.problem == nil)
+                    .frame(width: 260)
+                    .padding(.trailing, 58)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .transition(.opacity)
+            }
+        }
+        .animation(.easeOut(duration: 0.2), value: held.problem != nil || held.listening)
+        .fullScreenCover(isPresented: $showsCalendar) {
+            BottomCard {
+                CalendarPopover(store: store) { title in
+                    showsCalendar = false
+                    withAnimation(.snappy(duration: 0.28)) { store.open(name: title, after: river.selected) }
+                }
+            }
+        }
+    }
+
+    /// Today: tapped, today's note; held, any date.
+    private var today: some View {
+        Image(systemName: "calendar").font(.system(size: 18, weight: .semibold)).frame(width: 48, height: 48)
+            .contentShape(Circle())
+            .onTapGesture {
+                withAnimation(.snappy(duration: 0.28)) { store.open(name: Days.name(Date()), after: river.selected) }
+                store.rememberRivers()
+            }
+            .onLongPressGesture(minimumDuration: 0.4) {
+                UIImpactFeedbackGenerator(style: .medium).impactOccurred()
+                showsCalendar = true
+            }
+            .accessibilityLabel("Today")
+            .accessibilityHint("Hold to go to another date")
+            .accessibilityAddTraits(.isButton)
+            .glassEffect(.regular.interactive(), in: .circle)
+    }
+
+    /// At the foot: today, the river's name — to find a note, or go
+    /// elsewhere — and a new note.
+    private var bar: some View {
         GlassEffectContainer(spacing: 8) {
             if state.tucked {
                 // Tucked: the river's name alone, small — tapped, the bar is back.
@@ -423,7 +514,7 @@ struct PhoneBar: View {
             } else {
                 HStack(spacing: 8) {
                     // Today: tapped, today's note; held, any date. (Finding is the river's name, beside it.)
-                    Image(systemName: "calendar").font(.system(size: 18, weight: .semibold)).frame(width: 48, height: 48)
+                    if !nameOnly { Image(systemName: "calendar").font(.system(size: 18, weight: .semibold)).frame(width: 48, height: 48)
                         .contentShape(Circle())
                         .onTapGesture {
                             withAnimation(.snappy(duration: 0.28)) { store.open(name: Days.name(Date()), after: river.selected) }
@@ -438,9 +529,9 @@ struct PhoneBar: View {
                         .accessibilityAddTraits(.isButton)
                         .glassEffect(.regular.interactive(), in: .circle)
                         .glassEffectID("find", in: glass)
-                    .highPriorityGesture(turning)
+                    .highPriorityGesture(turning) }
                     HStack(spacing: 0) {
-                        more
+                        if !nameOnly { more }
                         Button { if !wasJumping { state.start = .browse } } label: {
                             HStack(spacing: 6) {
                                 let emblem = Emblem(title: store.title(of: river), icon: river.icon, color: river.color, letter: false)
@@ -451,7 +542,7 @@ struct PhoneBar: View {
                             .contentShape(Rectangle())
                         }
                         .buttonStyle(.plain)
-                        Color.clear.frame(width: 46, height: 48)
+                        if !nameOnly { Color.clear.frame(width: 46, height: 48) }
                     }
                     .glassEffect(.regular.interactive(), in: .capsule)
                     .glassEffectID("name", in: glass)
@@ -468,7 +559,7 @@ struct PhoneBar: View {
                         case (nil, nil): break
                         }
                     }
-                    new.glassEffectID("new", in: glass)
+                    if !nameOnly { new.glassEffectID("new", in: glass) }
                 }
                 .frame(height: 48)
                 .padding(.horizontal, 14)
