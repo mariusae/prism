@@ -555,9 +555,6 @@ struct PhoneCard: View {
     private var drawer: some View {
         HStack(spacing: 0) {
             drawerButton("arrow.down.right.and.arrow.up.left.circle", "Fold") { fold() }
-            drawerButton(draft.mode == .outline ? "line.3.horizontal.circle" : "list.bullet.circle", draft.mode == .outline ? "Write as Text" : "Write as an Outline") {
-                draft.setMode(draft.mode == .outline ? .text : .outline)
-            }
             // Its pages to read: the reader, a tap away.
             if canRead { drawerButton("doc.richtext", "Read") { read() } }
             if isDay {
@@ -678,10 +675,6 @@ struct PhoneCard: View {
         }
         Section {
             Button(card.folded ? "Unfold" : "Fold", systemImage: card.folded ? "chevron.down" : "chevron.right") { fold() }
-            Picker("Write As", selection: Binding(get: { draft.mode }, set: { draft.setMode($0) })) {
-                Label("Outline", systemImage: "list.bullet.indent").tag(EditorMode.outline)
-                Label("Text", systemImage: "text.alignleft").tag(EditorMode.text)
-            }
             if canRead { Button("Read", systemImage: "doc.richtext") { read() } }
             Button("Move to Top", systemImage: "arrow.up.to.line") {
                 withAnimation(.snappy(duration: 0.28)) { river.move(card.id, toPlace: 0) }

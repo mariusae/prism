@@ -464,6 +464,16 @@ pub enum Command {
     IndentRowOnly,
     /// ⌃⌥←: the row a level out, the siblings after it coming under it.
     OutdentRowOnly,
+    /// ⌥⌘9: within each row's branch, the deepest level shown folded.
+    FoldByLevel,
+    /// ⌥⌘0: within each row's branch, the shallowest level folded shown.
+    UnfoldByLevel,
+    /// ⌃⌥⌘9 / ⌃⌥⌘0: the same, over the whole note.
+    FoldAllByLevel,
+    UnfoldAllByLevel,
+    /// ⌃⌥↑ ⌃⌥↓: the row alone a line up or down, keeping its level.
+    MoveUpRowOnly,
+    MoveDownRowOnly,
 }
 
 /// A kind a row can be turned into.
@@ -789,7 +799,13 @@ pub fn perform(body: &str, selection: Range<usize>, command: Command) -> Option<
         | Command::Group
         | Command::DeleteRowOnly
         | Command::IndentRowOnly
-        | Command::OutdentRowOnly => None,
+        | Command::OutdentRowOnly
+        | Command::FoldByLevel
+        | Command::UnfoldByLevel
+        | Command::FoldAllByLevel
+        | Command::UnfoldAllByLevel
+        | Command::MoveUpRowOnly
+        | Command::MoveDownRowOnly => None,
     }
 }
 

@@ -817,25 +817,117 @@ public final class NoteTextView: UITextView {
     public override var undoManager: UndoManager? { nil }
 
     public override func deleteBackward() {
-        if coordinator?.perform(.deleteBackward) != true { super.deleteBackward() }
+        if coordinator?.perform(.deleteBackward) == true { return }
+        if deleteOverMarkup() { return }
+        super.deleteBackward()
     }
 
+    // MARK: Markdown never seen
+    //
+    // As on the Mac: a row's Markdown is in the text but never seen; the
+    // caret never stops inside it, Delete steps over it, and what is typed
+    // takes the look of the words it joins.
+
+    private func isMarkup(_ at: Int) -> Bool {
+        guard at >= 0, at < textStorage.length else { return false }
+        return textStorage.attribute(.prismMarkup, at: at, effectiveRange: nil) != nil
+    }
+
+    private func markupRun(around at: Int) -> (start: Int, end: Int)? {
+        guard isMarkup(at - 1), isMarkup(at) else { return nil }
+        var (start, end) = (at - 1, at)
+        while isMarkup(start - 1) { start -= 1 }
+        while isMarkup(end) { end += 1 }
+        return (start, end)
+    }
+
+    public override var selectedTextRange: UITextRange? {
+        get { super.selectedTextRange }
+        set {
+            guard let newValue, let manager = layoutManager as? BodyLayoutManager, !manager.rows.isEmpty else {
+                super.selectedTextRange = newValue
+                return
+            }
+            let old = selectedRange
+            var range = NSRange(location: offset(from: beginningOfDocument, to: newValue.start), length: offset(from: newValue.start, to: newValue.end))
+            if range.length == 0 {
+                if let run = markupRun(around: range.location) { range.location = range.location > old.location ? run.end : run.start }
+            } else {
+                if let run = markupRun(around: range.location) { range = NSRange(location: run.start, length: NSMaxRange(range) - run.start) }
+                if let run = markupRun(around: NSMaxRange(range)) { range.length = run.end - range.location }
+            }
+            guard let start = position(from: beginningOfDocument, offset: range.location), let end = position(from: start, offset: range.length) else { return super.selectedTextRange = newValue }
+            super.selectedTextRange = textRange(from: start, to: end)
+            if range.length == 0, isMarkup(range.location - 1) {
+                var attributes = range.location < textStorage.length && !isMarkup(range.location) ? textStorage.attributes(at: range.location, effectiveRange: nil) : [:]
+                attributes[.prismMarkup] = nil
+                attributes[.prismLabel] = nil
+                if !attributes.isEmpty { typingAttributes = attributes }
+            }
+        }
+    }
+
+    /// Delete beside hidden Markdown: the character past it — a link shown by its title, whole.
+    private func deleteOverMarkup() -> Bool {
+        let selection = selectedRange
+        guard selection.length == 0 else { return false }
+        var at = selection.location
+        while isMarkup(at - 1) { at -= 1 }
+        guard at != selection.location else { return false }
+        let text = textStorage.string as NSString
+        let character = at - 1
+        guard character >= 0, text.character(at: character) != 10 else {
+            selectedRange = NSRange(location: at, length: 0)
+            if coordinator?.perform(.deleteBackward) != true { super.deleteBackward() }
+            return true
+        }
+        var target = text.rangeOfComposedCharacterSequence(at: character)
+        if textStorage.attribute(.prismLabel, at: character, effectiveRange: nil) != nil {
+            var whole = NSRange()
+            _ = textStorage.attribute(.prismLink, at: character, longestEffectiveRange: &whole, in: NSRange(location: 0, length: textStorage.length))
+            var (start, end) = (whole.location, NSMaxRange(whole))
+            while isMarkup(start - 1) { start -= 1 }
+            while isMarkup(end) { end += 1 }
+            target = NSRange(location: start, length: end - start)
+        }
+        guard let from = position(from: beginningOfDocument, offset: target.location), let to = position(from: from, offset: target.length), let range = textRange(from: from, to: to) else { return false }
+        replace(range, withText: "")
+        return true
+    }
+
+    /// Bike 2's keys, as on the Mac (`docs/bike-parity.md`), for a keyboard attached.
     private static let keys: [(input: String, flags: UIKeyModifierFlags, name: String)] = [
         ("\t", [], "tab"), ("\t", [.shift], "backtab"),
         ("z", [.command], "undo"), ("z", [.command, .shift], "redo"),
-        ("b", [.command], "bold"), ("i", [.command], "italic"),
-        ("h", [.command, .shift], "highlight"), ("k", [.command, .shift], "deleteRows"), ("d", [.command, .shift], "duplicateRows"),
-        ("8", [.command, .shift], "bullet"), ("9", [.command], "fold"), ("0", [.command], "unfold"),
-        ("\r", [.command], "cycleChecklist"), ("\r", [.command, .shift], "toggleTask"),
+        ("b", [.command], "bold"), ("i", [.command], "italic"), ("c", [.command, .shift], "code"),
+        ("h", [.command, .shift], "highlight"), ("-", [.command, .shift], "strikethrough"),
+        ("k", [.command, .shift], "deleteRows"), ("k", [.control, .alternate], "deleteRowOnly"), ("d", [.command], "duplicateRows"),
+        ("g", [.command, .alternate], "group"), ("\u{8}", [.command, .control], "joinRows"),
+        ("8", [.command, .shift], "bullet"),
+        ("9", [.command], "fold"), ("0", [.command], "unfold"),
+        ("9", [.command, .alternate], "foldByLevel"), ("0", [.command, .alternate], "unfoldByLevel"),
+        ("9", [.command, .control], "foldAll"), ("0", [.command, .control], "unfoldAll"),
+        ("9", [.command, .control, .alternate], "foldAllByLevel"), ("0", [.command, .control, .alternate], "unfoldAllByLevel"),
+        ("\r", [.command], "insertBelow"), ("\r", [.command, .shift], "insertAbove"), ("\r", [.command, .alternate], "insertChild"),
         (UIKeyCommand.inputUpArrow, [.command, .control], "moveUp"), (UIKeyCommand.inputDownArrow, [.command, .control], "moveDown"),
         (UIKeyCommand.inputRightArrow, [.command, .control], "indent"), (UIKeyCommand.inputLeftArrow, [.command, .control], "outdent"),
+        (UIKeyCommand.inputUpArrow, [.command, .control, .alternate], "moveUpKeepingLevel"), (UIKeyCommand.inputDownArrow, [.command, .control, .alternate], "moveDownKeepingLevel"),
+        (UIKeyCommand.inputUpArrow, [.control, .alternate], "moveUpRowOnly"), (UIKeyCommand.inputDownArrow, [.control, .alternate], "moveDownRowOnly"),
+        (UIKeyCommand.inputRightArrow, [.control, .alternate], "indentRowOnly"), (UIKeyCommand.inputLeftArrow, [.control, .alternate], "outdentRowOnly"),
+        (UIKeyCommand.inputLeftArrow, [.control, .alternate, .shift], "promoteChildren"), (UIKeyCommand.inputRightArrow, [.control, .alternate, .shift], "demoteSiblings"),
         (UIKeyCommand.inputEscape, [], "escape"),
     ]
 
     private static let commands: [String: EditCommand] = [
-        "bold": .bold, "italic": .italic, "highlight": .highlight, "deleteRows": .deleteRows, "duplicateRows": .duplicateRows,
-        "bullet": .bullet, "cycleChecklist": .cycleChecklist, "toggleTask": .toggleTask,
-        "moveUp": .moveUp, "moveDown": .moveDown, "indent": .indent, "outdent": .outdent, "fold": .fold, "unfold": .unfold,
+        "bold": .bold, "italic": .italic, "code": .code, "highlight": .highlight, "strikethrough": .strikethrough,
+        "deleteRows": .deleteRows, "deleteRowOnly": .deleteRowOnly, "duplicateRows": .duplicateRows, "group": .group, "joinRows": .joinRows,
+        "bullet": .bullet, "fold": .fold, "unfold": .unfold, "foldByLevel": .foldByLevel, "unfoldByLevel": .unfoldByLevel,
+        "foldAll": .foldAll, "unfoldAll": .unfoldAll, "foldAllByLevel": .foldAllByLevel, "unfoldAllByLevel": .unfoldAllByLevel,
+        "insertBelow": .insertBelow, "insertAbove": .insertAbove, "insertChild": .insertChild,
+        "moveUp": .moveUp, "moveDown": .moveDown, "indent": .indent, "outdent": .outdent,
+        "moveUpKeepingLevel": .moveUpKeepingLevel, "moveDownKeepingLevel": .moveDownKeepingLevel,
+        "moveUpRowOnly": .moveUpRowOnly, "moveDownRowOnly": .moveDownRowOnly, "indentRowOnly": .indentRowOnly, "outdentRowOnly": .outdentRowOnly,
+        "promoteChildren": .promoteChildren, "demoteSiblings": .demoteSiblings,
     ]
 
     private lazy var madeKeys: [UIKeyCommand] = Self.keys.map { key in
@@ -854,7 +946,8 @@ public final class NoteTextView: UITextView {
         switch name {
         case "tab":
             if coordinator.acceptOffer() { break }
-            if !coordinator.perform(.indent) { insertText("\t") }
+            // In an outline Tab only ever indents: a row that cannot go in stays, and no tab is typed.
+            if !coordinator.perform(.indent), (layoutManager as? BodyLayoutManager)?.rows.isEmpty != false { insertText("\t") }
         case "backtab":
             coordinator.perform(.outdent)
         case "undo":

@@ -732,7 +732,14 @@ public final class NoteTextView: NSTextView {
     public override func mouseUp(with event: NSEvent) {
         if let press = rowPress {
             rowPress = nil
-            if press.chosen { leaveRows() } else { coordinator?.perform(.toggleFold, onRows: [press.row]) }
+            if press.chosen {
+                leaveRows()
+            } else if event.modifierFlags.contains(.option), outlineLines.indices.contains(press.row) {
+                // ⌥-click: the row and everything under it, folded or shown — as Bike's handle.
+                _ = coordinator?.perform(outlineLines[press.row].isFolded ? .unfoldCompletely : .foldCompletely, onRows: [press.row])
+            } else {
+                coordinator?.perform(.toggleFold, onRows: [press.row])
+            }
             return
         }
         guard let pressed else { return super.mouseUp(with: event) }
@@ -847,11 +854,19 @@ public final class NoteTextView: NSTextView {
         let tall = (font.ascender - font.descender).rounded(.up) + 2
         if rect.height > tall { rect.size.height = tall }
         super.drawInsertionPoint(in: rect, color: color, turnedOn: flag)
+        // At an edge of formatting, a tail toward the words what is typed joins — Bike's typing affinity.
+        let at = selectedRange().location
+        if flag, selectedRange().length == 0, isMarkup(at - 1) != isMarkup(at) {
+            let joinsAfter = isMarkup(at - 1)
+            color.setFill()
+            let tail = NSRect(x: joinsAfter ? rect.maxX : rect.minX - 3, y: rect.maxY - 2, width: 3, height: 2)
+            NSBezierPath(rect: tail).fill()
+        }
     }
 
     public override func setNeedsDisplay(_ rect: NSRect, avoidAdditionalLayout flag: Bool) {
         // What a taller caret left behind is cleared with it.
-        super.setNeedsDisplay(rect.insetBy(dx: -1, dy: -4), avoidAdditionalLayout: flag)
+        super.setNeedsDisplay(rect.insetBy(dx: -4, dy: -4), avoidAdditionalLayout: flag)
     }
 
     // MARK: Rows carried by the pointer
@@ -1197,6 +1212,14 @@ public final class NoteTextView: NSTextView {
         super.moveRightAndModifySelection(sender)
     }
 
+    /// Whether a line is code, where what is typed is typed as it is.
+    static func isCode(_ line: BodyLine) -> Bool {
+        switch line.kind {
+        case .code, .fence: return true
+        default: return false
+        }
+    }
+
     /// The row the selection is in, in an outline — when it is all in one.
     private func selectionRow() -> (Int, BodyLine)? {
         let lines = outlineLines
@@ -1368,6 +1391,24 @@ public final class NoteTextView: NSTextView {
             chooseRows(anchor: chosen.anchor, head: chosen.head)
             return
         }
+        if let typed = (string as? String) ?? (string as? NSAttributedString)?.string, let (_, line) = selectionRow(), !Self.isCode(line) {
+            let selection = selectedRange()
+            // ' " [ { ( typed over words chosen in a row: the words wrapped, and still chosen — as Bike's.
+            let pairs: [String: String] = ["'": "'", "\"": "\"", "[": "]", "{": "}", "(": ")"]
+            if selection.length > 0, let close = pairs[typed], replacementRange.location == NSNotFound || replacementRange == selection {
+                let words = (self.string as NSString).substring(with: selection)
+                super.insertText(typed + words + close, replacementRange: selection)
+                setSelectedRange(NSRange(location: selection.location + (typed as NSString).length, length: selection.length))
+                return
+            }
+            // A quote typed, curled: opening after a space or a row's start, else closing.
+            if selection.length == 0, typed == "'" || typed == "\"" {
+                let before = selection.location > Int(line.content) ? (self.string as NSString).substring(with: NSRange(location: selection.location - 1, length: 1)) : ""
+                let opening = before.isEmpty || before.rangeOfCharacter(from: .whitespaces.union(CharacterSet(charactersIn: "([{“‘"))) != nil
+                let curled = typed == "'" ? (opening ? "‘" : "’") : (opening ? "“" : "”")
+                return super.insertText(curled, replacementRange: replacementRange)
+            }
+        }
         super.insertText(string, replacementRange: replacementRange)
     }
 
@@ -1437,7 +1478,98 @@ public final class NoteTextView: NSTextView {
             }
             return
         }
-        if coordinator?.perform(.deleteBackward) != true { super.deleteBackward(sender) }
+        if coordinator?.perform(.deleteBackward) == true { return }
+        if deleteOverMarkup(forward: false) { return }
+        super.deleteBackward(sender)
+    }
+
+    public override func deleteForward(_ sender: Any?) {
+        if isChoosingRows { return deleteBackward(sender) }
+        if deleteOverMarkup(forward: true) { return }
+        super.deleteForward(sender)
+    }
+
+    // MARK: Markdown never seen
+    //
+    // In an outline a row's Markdown — `**`, a link's brackets and address —
+    // is in the text but never seen, as Bike's rich text has none. The caret
+    // never stops inside it: each run of it is a boundary, crossed with one
+    // press, which is the caret's side — Bike's typing affinity: before it,
+    // what is typed joins the words before; after it, the words after.
+    // Delete steps over it; a link shown by its page's title goes whole.
+
+    private func isMarkup(_ at: Int) -> Bool {
+        guard let storage = textStorage, at >= 0, at < storage.length else { return false }
+        return storage.attribute(.prismMarkup, at: at, effectiveRange: nil) != nil
+    }
+
+    /// The run of hidden Markdown a place is strictly inside of.
+    private func markupRun(around at: Int) -> (start: Int, end: Int)? {
+        guard isMarkup(at - 1), isMarkup(at) else { return nil }
+        var (start, end) = (at - 1, at)
+        while isMarkup(start - 1) { start -= 1 }
+        while isMarkup(end) { end += 1 }
+        return (start, end)
+    }
+
+    public override func setSelectedRanges(_ ranges: [NSValue], affinity: NSSelectionAffinity, stillSelecting: Bool) {
+        guard !outlineLines.isEmpty, !isChoosingRows else { return super.setSelectedRanges(ranges, affinity: affinity, stillSelecting: stillSelecting) }
+        let old = selectedRange()
+        let snapped = ranges.map { value -> NSValue in
+            var range = value.rangeValue
+            if range.length == 0 {
+                // Out of hidden Markdown, the way the caret was going.
+                if let run = markupRun(around: range.location) { range.location = range.location > old.location ? run.end : run.start }
+            } else {
+                if let run = markupRun(around: range.location) { range = NSRange(location: run.start, length: NSMaxRange(range) - run.start) }
+                if let run = markupRun(around: NSMaxRange(range)) { range.length = run.end - range.location }
+            }
+            return NSValue(range: range)
+        }
+        super.setSelectedRanges(snapped, affinity: affinity, stillSelecting: stillSelecting)
+        // What is typed takes the look of the words it joins, never the hidden Markdown's.
+        let caret = selectedRange()
+        if caret.length == 0, isMarkup(caret.location - 1), let storage = textStorage {
+            let from = caret.location < storage.length && !isMarkup(caret.location) ? caret.location : nil
+            var attributes = from.map { storage.attributes(at: $0, effectiveRange: nil) } ?? [:]
+            attributes[.prismMarkup] = nil
+            attributes[.prismLabel] = nil
+            if from == nil, let style = coordinator.map({ BodyStyler(theme: $0.parent.theme).baseAttributes }) { attributes = style }
+            typingAttributes = attributes
+        }
+    }
+
+    /// Delete beside hidden Markdown: the character past it — or a link
+    /// shown by its title, whole — and not the Markdown. Says whether it
+    /// did anything.
+    private func deleteOverMarkup(forward: Bool) -> Bool {
+        let selection = selectedRange()
+        guard !outlineLines.isEmpty, selection.length == 0, let storage = textStorage else { return false }
+        var at = selection.location
+        if forward { while isMarkup(at) { at += 1 } } else { while isMarkup(at - 1) { at -= 1 } }
+        guard at != selection.location else { return false }
+        let text = storage.string as NSString
+        // At a row's start, past Markdown that begins it: what Delete does there.
+        if !forward, let index = row(at: at), Int(outlineLines[index].content) == at {
+            setSelectedRange(NSRange(location: at, length: 0))
+            if coordinator?.perform(.deleteBackward) != true { super.deleteBackward(nil) }
+            return true
+        }
+        let character = forward ? at : at - 1
+        guard character >= 0, character < text.length, text.character(at: character) != 10 else { return false }
+        var target = text.rangeOfComposedCharacterSequence(at: character)
+        if storage.attribute(.prismLabel, at: character, effectiveRange: nil) != nil || (storage.attribute(.prismLink, at: character, effectiveRange: nil) != nil && isMarkup(character + 1) && storage.attribute(.prismLabel, at: character, effectiveRange: nil) != nil) {
+            // A link shown by its title: the link, whole, with its brackets.
+            var whole = NSRange()
+            _ = storage.attribute(.prismLink, at: character, longestEffectiveRange: &whole, in: NSRange(location: 0, length: storage.length))
+            var (start, end) = (whole.location, NSMaxRange(whole))
+            while isMarkup(start - 1) { start -= 1 }
+            while isMarkup(end) { end += 1 }
+            target = NSRange(location: start, length: end - start)
+        }
+        guard shouldChangeText(in: target, replacementString: "") else { return true }
+        insertText("", replacementRange: target)
+        return true
     }
 
     public override func cancelOperation(_ sender: Any?) {
@@ -1521,7 +1653,7 @@ public final class NoteTextView: NSTextView {
     }
 
     /// The commands only an outline has, whose keys are let by when there is nothing for them to do.
-    private static let outlineOnly: Set<EditCommand> = [.fold, .unfold, .foldCompletely, .unfoldCompletely, .foldAll, .unfoldAll, .moveDoneToBottom]
+    private static let outlineOnly: Set<EditCommand> = [.fold, .unfold, .foldCompletely, .unfoldCompletely, .foldAll, .unfoldAll, .foldByLevel, .unfoldByLevel, .foldAllByLevel, .unfoldAllByLevel, .moveDoneToBottom]
 
     // MARK: Pictures, and an address, pasted and dropped
 
@@ -1720,8 +1852,10 @@ public final class NoteTextView: NSTextView {
         case ([.command, .shift], "8"), ([.command, .shift], "*"): return .bullet
         case ([.command], "9"): return .fold
         case ([.command], "0"): return .unfold
-        case ([.command, .option], "9"): return .foldCompletely
-        case ([.command, .option], "0"): return .unfoldCompletely
+        case ([.command, .option], "9"): return .foldByLevel
+        case ([.command, .option], "0"): return .unfoldByLevel
+        case ([.command, .control, .option], "9"): return .foldAllByLevel
+        case ([.command, .control, .option], "0"): return .unfoldAllByLevel
         case ([.command, .control], "9"): return .foldAll
         case ([.command, .control], "0"): return .unfoldAll
         case ([.command, .control, .shift], "d"): return .moveDoneToBottom
@@ -1738,7 +1872,7 @@ public final class NoteTextView: NSTextView {
         switch flags {
         case [.command, .control]: return [EditCommand.moveUp, .moveDown, .indent, .outdent][arrow]
         case [.command, .control, .option]: return [EditCommand.moveUpKeepingLevel, .moveDownKeepingLevel, nil, nil][arrow]
-        case [.control, .option]: return [nil, nil, EditCommand.indentRowOnly, .outdentRowOnly][arrow]
+        case [.control, .option]: return [EditCommand.moveUpRowOnly, .moveDownRowOnly, .indentRowOnly, .outdentRowOnly][arrow]
         case [.control, .option, .shift]: return [nil, nil, EditCommand.demoteSiblings, .promoteChildren][arrow]
         default: return nil
         }
@@ -1755,8 +1889,9 @@ extension NoteTextView {
             var kind = "body"
             switch line.kind {
             case .heading: kind = "heading"
-            case .item(let number, let done, _): kind = done != nil ? "task" : number != nil ? "ordered" : "body"
+            case .item(let number, let done, let bullet): kind = done != nil ? "task" : number != nil ? "ordered" : bullet == "-" ? "body" : "unordered"
             case .quote: kind = "quote"
+            case .code, .fence: kind = "code"
             default: break
             }
             return ["name": words, "depth": Int(line.depth), "folded": line.isFolded, "children": line.hasChildren, "type": kind, "done": { if case .item(_, let done, _) = line.kind { return done == true } else { return false } }(), "start": Int(line.start), "end": Int(line.end), "content": Int(line.content)]

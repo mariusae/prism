@@ -88,6 +88,10 @@ pub struct Session {
     /// For a session focused on one row: the rest of the body, kept
     /// aside while `body` is only what is under that row.
     outer: Option<Outer>,
+    /// A row just made a kind by what was typed at its start — `- `, `# `
+    /// — with what was typed and the kind it was: Delete straight after
+    /// gives the typed characters back, as Bike's does.
+    typed_kind: Option<(Path, String, BlockKind)>,
 }
 
 /// What a focused session is not showing: the whole body — but for the
@@ -115,6 +119,7 @@ impl Session {
             redone: Vec::new(),
             typing: None,
             outer: None,
+            typed_kind: None,
         };
         session.project();
         session
@@ -337,12 +342,13 @@ impl Session {
                             };
                             (LineKind::Item { ordered, task: item.task.map(Task::is_done), bullet }, row.path.len())
                         }
-                        BlockKind::Paragraph | BlockKind::Raw => (LineKind::Paragraph, row.path.len() - 1),
-                        BlockKind::Heading(level) => (LineKind::Heading(*level), row.path.len() - 1),
-                        BlockKind::Quote => (LineKind::Quote, row.path.len() - 1),
-                        BlockKind::Code => (LineKind::Code, row.path.len() - 1),
-                        BlockKind::Table => (LineKind::Table, row.path.len() - 1),
-                        BlockKind::Rule => (LineKind::Rule, row.path.len() - 1),
+                        // Every row a row, as Bike's: one under a row is a level deeper, whatever it is.
+                        BlockKind::Paragraph | BlockKind::Raw => (LineKind::Paragraph, row.path.len()),
+                        BlockKind::Heading(level) => (LineKind::Heading(*level), row.path.len()),
+                        BlockKind::Quote => (LineKind::Quote, row.path.len()),
+                        BlockKind::Code => (LineKind::Code, row.path.len()),
+                        BlockKind::Table => (LineKind::Table, row.path.len()),
+                        BlockKind::Rule => (LineKind::Rule, row.path.len()),
                     };
                     if block.has_inline_content() {
                         editor::read_inline(&self.text, row.range.clone(), &mut layout.runs);
@@ -371,6 +377,7 @@ impl Session {
         if !typing_on {
             self.remember(range.clone());
         }
+        self.typed_kind = None;
         let change = self.replace_now(range, replacement);
         self.typing = (replacement.chars().count() == 1 && !replacement.contains('\n') && !replacement.contains(' ')).then_some(change.selection.end);
         change
@@ -445,6 +452,10 @@ impl Session {
         self.remember(selection.clone());
         self.typing = None;
         let change = change(self, selection);
+        // Any command done is something other than Delete straight after a typed kind.
+        if change.is_some() {
+            self.typed_kind = None;
+        }
         if change.is_none() {
             self.undone.pop();
         }
@@ -585,13 +596,18 @@ impl Session {
         let last_piece = pieces.last().copied().unwrap_or("");
         let mut caret = (path.clone(), last_piece.len() - suffix.len().min(last_piece.len()));
 
-        // A marker typed at a row's start makes the row that kind.
+        // A marker typed at a row's start makes the row that kind. What was
+        // typed is a step of its own to undo, as is Delete straight after it.
         if replacement == " " && pieces.len() == 1 && first == last {
             if let Some(kind) = self.typed_marker(&path, &prefix) {
+                let literal = (self.body.clone(), self.rows[first].range.start + prefix.len() + 1..self.rows[first].range.start + prefix.len() + 1);
+                let was = self.body.get(&path).map(|block| block.kind.clone());
                 if let Some(block) = self.body.get_mut(&path) {
                     block.text = own(&suffix);
                 }
                 outline::set_kind(&mut self.body, &path, kind);
+                self.undone.push(literal);
+                self.typed_kind = was.map(|was| (path.clone(), format!("{prefix} "), was));
                 caret = (path, 0);
             }
         }
@@ -610,8 +626,10 @@ impl Session {
             BlockKind::Item(Item { marker: Marker::Bullet(bullet), .. }) => *bullet,
             _ => '-',
         };
+        // Bike's bulleted row is a `*` item; a `-` item is a body row, drawn with no bullet.
+        let body_row = plain_item && bullet == '-';
         match typed {
-            "-" | "*" if !plain_item => item(Marker::Bullet(typed.chars().next()?), None),
+            "-" | "*" if !plain_item || body_row => item(Marker::Bullet('*'), None),
             "+" => item(Marker::Bullet('+'), Some(Task::Open)),
             "[]" | "[ ]" | "-[]" => item(Marker::Bullet(bullet), Some(Task::Open)),
             "[x]" | "[X]" => item(Marker::Bullet(bullet), Some(Task::Done('x'))),
@@ -646,7 +664,15 @@ impl Session {
         let position = self.rows.iter().position(|row| Some(&row.path) == chosen.first())?;
         self.mark(&selection, &chosen);
         let done = self.rearrange(&command);
-        self.rearranged(before, done, position, matches!(command, Command::Fold | Command::ToggleFold | Command::FoldCompletely | Command::FoldAll))
+        self.rearranged(
+            before,
+            done,
+            position,
+            matches!(
+                command,
+                Command::Fold | Command::ToggleFold | Command::FoldCompletely | Command::FoldAll | Command::FoldByLevel | Command::FoldAllByLevel
+            ),
+        )
     }
 
     /// The commands that put a row beside the rows, join, or group them:
@@ -719,7 +745,7 @@ impl Session {
                 // quote, a heading — makes it a plain row, where it is. On a plain
                 // one it is a new row, as anywhere: never out a level.
                 let typed = match &kind {
-                    BlockKind::Item(Item { task, marker }) => task.is_some() || matches!(marker, Marker::Ordered { .. }),
+                    BlockKind::Item(Item { task, marker }) => task.is_some() || !matches!(marker, Marker::Bullet('-')),
                     BlockKind::Quote | BlockKind::Heading(_) => true,
                     _ => false,
                 };
@@ -771,7 +797,19 @@ impl Session {
                         inline::picture_before(&self.text[row.clone()], start.1).filter(|_| self.body.get(&path).is_some_and(Block::has_inline_content))?;
                     return Some(self.replace_rows(row.start + picture.start..row.start + picture.end, ""));
                 }
+                // Straight after a kind was made by typing: what was typed, back as words.
+                if let Some((typed_path, typed, was)) = self.typed_kind.take().filter(|(typed_path, _, _)| *typed_path == path) {
+                    outline::set_kind(&mut self.body, &typed_path, was);
+                    let block = self.body.get_mut(&typed_path)?;
+                    block.text.insert_str(0, &typed);
+                    return Some(self.changed(before, (typed_path, typed.len()), None));
+                }
                 match kind {
+                    // A bulleted row: a body row again.
+                    BlockKind::Item(Item { task: None, marker: Marker::Bullet(bullet) }) if bullet != '-' => {
+                        outline::set_kind(&mut self.body, &path, BlockKind::Item(Item { marker: Marker::Bullet('-'), task: None }));
+                        return Some(self.changed(before, (path, 0), None));
+                    }
                     // A code block with nothing in it, back to the fence it was typed as.
                     BlockKind::Code => {
                         let block = self.body.get_mut(&path)?;
@@ -786,16 +824,33 @@ impl Session {
                         outline::set_kind(&mut self.body, &path, BlockKind::Item(Item { marker: Marker::Bullet('-'), task: None }));
                         return Some(self.changed(before, (path, length), None));
                     }
-                    // First its checkbox, then what makes it more than a line…
+                    // First its checkbox — a body row then, as Bike's — then what makes it more than a line…
                     BlockKind::Item(Item { task: Some(_), marker }) => {
+                        let marker = if matches!(marker, Marker::Ordered { .. }) { marker } else { Marker::Bullet('-') };
                         outline::set_kind(&mut self.body, &path, BlockKind::Item(Item { marker, task: None }));
                     }
                     BlockKind::Heading(_) | BlockKind::Quote | BlockKind::Item(Item { marker: Marker::Ordered { .. }, .. }) => {
                         outline::set_kind(&mut self.body, &path, BlockKind::Paragraph);
                     }
-                    // …then it joins the row shown before it.
+                    // …then it joins the row shown before it. Onto a block of code, its
+                    // words go on the code's last line, inside the fence.
                     _ => {
                         let onto = self.rows.get(first.checked_sub(1)?)?.path.clone();
+                        if self.body.get(&onto).is_some_and(|block| block.kind == BlockKind::Code) {
+                            let row = self.body.get(&path)?;
+                            if !row.children.is_empty() {
+                                return None;
+                            }
+                            let words = row.text.clone();
+                            let code = &self.body.get(&onto)?.text;
+                            let fence = code.rfind('\n').filter(|at| is_fence(&code[at + 1..]))?;
+                            let mut joined = code.clone();
+                            joined.insert_str(fence, &words);
+                            outline::remove(&mut self.body, &path)?;
+                            self.body.get_mut(&onto)?.text = joined;
+                            let offset = shown_offset(&self.body.get(&onto)?.text, fence);
+                            return Some(self.changed(before, (onto, offset), None));
+                        }
                         let (onto, offset) = outline::join_onto(&mut self.body, &path, &onto)?;
                         let offset = shown_offset(&self.body.get(&onto)?.text, offset);
                         return Some(self.changed(before, (onto, offset), None));
@@ -900,10 +955,12 @@ impl Session {
             | Command::IndentRowOnly
             | Command::OutdentRowOnly
             | Command::PromoteChildren
-            | Command::DemoteSiblings => {
+            | Command::DemoteSiblings
+            | Command::MoveUpRowOnly
+            | Command::MoveDownRowOnly => {
                 // Moved down, the last goes first, so each has room.
                 // Outdented, too: each goes just after the parent, so the last goes first to keep their order.
-                let down = matches!(command, Command::MoveDown | Command::MoveDownKeepingLevel | Command::Outdent);
+                let down = matches!(command, Command::MoveDown | Command::MoveDownKeepingLevel | Command::MoveDownRowOnly | Command::Outdent);
                 while let Some(at) = self.next_chosen(down) {
                     let moved = match command {
                         Command::Indent => {
@@ -944,7 +1001,13 @@ impl Session {
                             outline::move_down_shown(&mut self.body, &at, &shown)
                         }
                         Command::MoveUpKeepingLevel => outline::move_up(&mut self.body, &at),
+                        Command::MoveDownKeepingLevel => {
+                            let shown = visible(&self.body);
+                            outline::move_down_keeping_level(&mut self.body, &at, &shown)
+                        }
                         Command::PromoteChildren => outline::promote_children(&mut self.body, &at),
+                        Command::MoveUpRowOnly => outline::move_row_alone(&mut self.body, &at, true),
+                        Command::MoveDownRowOnly => outline::move_row_alone(&mut self.body, &at, false),
                         Command::DemoteSiblings => outline::demote_siblings(&mut self.body, &at),
                         _ => outline::move_down(&mut self.body, &at),
                     };
@@ -1032,6 +1095,15 @@ impl Session {
                     }
                 }
             }
+            Command::FoldByLevel | Command::UnfoldByLevel => {
+                while let Some(at) = self.next_chosen(false) {
+                    let Some(block) = self.body.get_mut(&at) else { continue };
+                    let blocks = std::slice::from_mut(block);
+                    any |= if *command == Command::FoldByLevel { fold_by_level(blocks) } else { unfold_by_level(blocks) };
+                }
+            }
+            Command::FoldAllByLevel => any = fold_by_level(&mut self.body.blocks),
+            Command::UnfoldAllByLevel => any = unfold_by_level(&mut self.body.blocks),
             Command::FoldAll => any = fold_all(&mut self.body.blocks, true),
             Command::UnfoldAll => any = fold_all(&mut self.body.blocks, false),
             Command::MoveDoneToBottom => {
@@ -1770,6 +1842,48 @@ fn fold_all(blocks: &mut [Block], folded: bool) -> bool {
     any
 }
 
+/// The deepest level, among blocks and those under them, of rows whose
+/// children are shown — counting the blocks given as level 0.
+fn deepest_shown(blocks: &[Block], depth: usize) -> Option<usize> {
+    blocks.iter().filter(|block| !block.children.is_empty() && !block.folded).map(|block| deepest_shown(&block.children, depth + 1).unwrap_or(depth)).max()
+}
+
+/// The shallowest level of folded rows that can be seen: under nothing folded.
+fn shallowest_folded(blocks: &[Block], depth: usize) -> Option<usize> {
+    blocks
+        .iter()
+        .filter_map(|block| match (block.children.is_empty(), block.folded) {
+            (true, _) => None,
+            (false, true) => Some(depth),
+            (false, false) => shallowest_folded(&block.children, depth + 1),
+        })
+        .min()
+}
+
+fn fold_at(blocks: &mut [Block], depth: usize, level: usize, folded: bool) -> bool {
+    let mut any = false;
+    for block in blocks {
+        if depth == level {
+            any |= set_fold(block, folded);
+        } else if !block.folded {
+            any |= fold_at(&mut block.children, depth + 1, level, folded);
+        }
+    }
+    any
+}
+
+/// Collapse by level, as Bike's: the deepest level of rows whose children
+/// are shown is folded — level by level, outward, each time it is asked.
+fn fold_by_level(blocks: &mut [Block]) -> bool {
+    deepest_shown(blocks, 0).is_some_and(|level| fold_at(blocks, 0, level, true))
+}
+
+/// Expand by level: the shallowest level folded is shown — inward, a
+/// level each time.
+fn unfold_by_level(blocks: &mut [Block]) -> bool {
+    shallowest_folded(blocks, 0).is_some_and(|level| fold_at(blocks, 0, level, false))
+}
+
 /// Puts the checked items of a list after the rest, each kind in the
 /// order it was in; the blank lines stay where they were on the page.
 /// Says whether any moved.
@@ -2196,7 +2310,7 @@ mod tests {
         assert!(!layout.markers_in_text);
         let lines: Vec<_> = layout.lines.iter().map(|line| (&session.text()[line.range.clone()], line.kind.clone(), line.depth)).collect();
         use LineKind::*;
-        assert_eq!(lines[1], ("Next", Heading(2), 0));
+        assert_eq!(lines[1], ("Next", Heading(2), 1));
         assert_eq!(lines[2], ("Book a room", Item { ordered: None, task: None, bullet: '*' }, 1));
         assert_eq!(lines[3], ("ask [[Grace]]", Item { ordered: None, task: None, bullet: '*' }, 2));
         assert_eq!(lines[4], ("Send invites", Item { ordered: None, task: Some(false), bullet: '+' }, 1));
@@ -2287,7 +2401,7 @@ mod tests {
         // First its checkbox…
         let change = session.perform(at..at, Command::DeleteBackward).unwrap();
         shown(&mut view, &change);
-        assert_eq!(session.markdown(), "- one\n+ two\n  - under two\n");
+        assert_eq!(session.markdown(), "- one\n- two\n  - under two\n");
         // …then it joins the row before, its own rows kept under that one.
         let change = session.perform(at..at, Command::DeleteBackward).unwrap();
         shown(&mut view, &change);
@@ -2332,6 +2446,32 @@ mod tests {
     }
 
     #[test]
+    fn delete_or_undo_straight_after_a_typed_kind_gives_the_typing_back() {
+        let typed = |session: &mut Session| {
+            session.replace(0..0, "#");
+            session.replace(1..1, " ")
+        };
+        let (mut session, _) = outline("- words\n");
+        typed(&mut session);
+        assert_eq!(session.markdown(), "# words\n");
+        let change = session.perform(0..0, Command::DeleteBackward).unwrap();
+        assert_eq!((session.text(), change.selection), ("# words", 2..2));
+        assert_eq!(session.markdown(), "- # words\n");
+        let (mut session, _) = outline("- words\n");
+        typed(&mut session);
+        let change = session.undo().unwrap();
+        assert_eq!((session.text(), change.selection), ("# words", 2..2));
+        // Once typing goes on, Delete at the start is Delete again: the kind goes, not the words.
+        let (mut session, _) = outline("- words\n");
+        typed(&mut session);
+        session.replace(0..0, "x");
+        session.replace(0..1, "");
+        session.perform(0..0, Command::DeleteBackward).unwrap();
+        assert_eq!(session.text(), "words");
+        assert_eq!(session.layout().lines[0].kind, LineKind::Paragraph);
+    }
+
+    #[test]
     fn a_marker_typed_at_a_rows_start_makes_the_row_that_kind() {
         let typed = |source: &str, marker: &str| {
             let (mut session, mut view) = outline(source);
@@ -2344,7 +2484,10 @@ mod tests {
             assert_eq!(view, session.text());
             session.markdown()
         };
-        assert_eq!(typed("plain\n", "-"), "- plain\n");
+        // `- ` and `* `: a bulleted row — Bike's unordered — written `*`; a `-` row is a body row.
+        assert_eq!(typed("plain\n", "-"), "* plain\n");
+        assert_eq!(typed("- item\n", "-"), "* item\n");
+        assert_eq!(typed("- item\n", "*"), "* item\n");
         assert_eq!(typed("plain\n", "##"), "## plain\n");
         assert_eq!(typed("plain\n", ">"), "> plain\n");
         assert_eq!(typed("plain\n", "1."), "1. plain\n");
@@ -2782,6 +2925,27 @@ mod tests {
         let (mut session, _) = outline("- a\n  - b\n  - c\n  - d\n");
         session.perform(4..4, Command::Outdent).unwrap();
         assert_eq!(session.markdown(), "- a\n  - b\n  - d\n- c\n");
+    }
+
+    #[test]
+    fn folding_by_level_goes_a_level_at_a_time() {
+        let (mut session, _) = outline("- a1\n  - b1\n    - c1\n  - b2\n- a2\n  - b3\n");
+        // Row by level: within a1, b1 first; then a1 itself.
+        session.perform(0..0, Command::FoldByLevel).unwrap();
+        assert_eq!(session.text(), "a1\nb1\nb2\na2\nb3");
+        session.perform(0..0, Command::FoldByLevel).unwrap();
+        assert_eq!(session.text(), "a1\na2\nb3");
+        // And back, a level at a time.
+        session.perform(0..0, Command::UnfoldByLevel).unwrap();
+        assert_eq!(session.text(), "a1\nb1\nb2\na2\nb3");
+        // All by level: the deepest shown — b1 and a2 — then the rest.
+        let (mut all, _) = outline("- a1\n  - b1\n    - c1\n- a2\n  - b3\n");
+        all.perform(0..0, Command::FoldAllByLevel).unwrap();
+        assert_eq!(all.text(), "a1\nb1\na2\nb3");
+        all.perform(0..0, Command::FoldAllByLevel).unwrap();
+        assert_eq!(all.text(), "a1\na2");
+        all.perform(0..0, Command::UnfoldAllByLevel).unwrap();
+        assert_eq!(all.text(), "a1\nb1\na2\nb3");
     }
 
     #[test]

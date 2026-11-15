@@ -299,6 +299,14 @@ pub enum EditCommand {
     DeleteRowOnly,
     IndentRowOnly,
     OutdentRowOnly,
+    /// ⌥⌘9 ⌥⌘0 ⌃⌥⌘9 ⌃⌥⌘0: folded or shown a level at a time — the row's, or the note's.
+    FoldByLevel,
+    UnfoldByLevel,
+    FoldAllByLevel,
+    UnfoldAllByLevel,
+    /// ⌃⌥↑ ⌃⌥↓: the row alone, a line up or down.
+    MoveUpRowOnly,
+    MoveDownRowOnly,
 }
 
 /// What a command comes to: text to replace, and where the selection
@@ -370,6 +378,12 @@ fn command(command: EditCommand) -> Command {
         EditCommand::DeleteRowOnly => Command::DeleteRowOnly,
         EditCommand::IndentRowOnly => Command::IndentRowOnly,
         EditCommand::OutdentRowOnly => Command::OutdentRowOnly,
+        EditCommand::FoldByLevel => Command::FoldByLevel,
+        EditCommand::UnfoldByLevel => Command::UnfoldByLevel,
+        EditCommand::FoldAllByLevel => Command::FoldAllByLevel,
+        EditCommand::UnfoldAllByLevel => Command::UnfoldAllByLevel,
+        EditCommand::MoveUpRowOnly => Command::MoveUpRowOnly,
+        EditCommand::MoveDownRowOnly => Command::MoveDownRowOnly,
     }
 }
 

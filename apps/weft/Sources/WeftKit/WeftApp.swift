@@ -113,8 +113,6 @@ public struct WeftMacApp: App {
                     Button("Checkbox") { _ = NoteTextView.writing?.run(.cycleChecklist) }
                     Button("To-Do") { _ = NoteTextView.writing?.run(.toggleTask) }
                 }
-                Divider()
-                Button("Switch Outline and Text") { toggleMode() }
             }
             CommandMenu("Outline") {
                 Group {
@@ -125,11 +123,15 @@ public struct WeftMacApp: App {
                 Divider()
                 Group {
                     format("Expand All", .unfoldAll, "0", [.command, .control])
+                    format("Expand All by Level", .unfoldAllByLevel, "0", [.command, .control, .option])
                     format("Collapse All", .foldAll, "9", [.command, .control])
+                    format("Collapse All by Level", .foldAllByLevel, "9", [.command, .control, .option])
                     format("Expand Row", .unfold, "0")
+                    format("Expand Row by Level", .unfoldByLevel, "0", [.command, .option])
                     format("Collapse Row", .fold, "9")
-                    format("Expand Row Completely", .unfoldCompletely, "0", [.command, .option])
-                    format("Collapse Row Completely", .foldCompletely, "9", [.command, .option])
+                    format("Collapse Row by Level", .foldByLevel, "9", [.command, .option])
+                    Button("Expand Row Completely") { _ = NoteTextView.writing?.run(.unfoldCompletely) }
+                    Button("Collapse Row Completely") { _ = NoteTextView.writing?.run(.foldCompletely) }
                 }
                 Divider()
                 Group {
@@ -149,8 +151,10 @@ public struct WeftMacApp: App {
                 }
                 Group {
                     format("Move Up", .moveUp, .upArrow, [.command, .control])
+                    format("Move Up (Rows Only)", .moveUpRowOnly, .upArrow, [.control, .option])
                     format("Move Up (Maintain Level)", .moveUpKeepingLevel, .upArrow, [.command, .control, .option])
                     format("Move Down", .moveDown, .downArrow, [.command, .control])
+                    format("Move Down (Rows Only)", .moveDownRowOnly, .downArrow, [.control, .option])
                     format("Move Down (Maintain Level)", .moveDownKeepingLevel, .downArrow, [.command, .control, .option])
                     format("Move Done to Bottom", .moveDoneToBottom, "d", [.command, .control, .shift])
                 }
@@ -240,14 +244,6 @@ public struct WeftMacApp: App {
     }
 
     /// The note being written in — else the one chosen — shown the other way: as text, or as an outline.
-    private func toggleMode() {
-        guard let store else { return }
-        let river = store.river
-        guard let id = river.writing ?? river.selected, let card = river.card(id) else { return NSSound.beep() }
-        let draft = store.draft(path: card.path, title: card.title)
-        draft.setMode(draft.mode == .outline ? .text : .outline)
-    }
-
     /// A Format menu item: a command done to the note being written in, with the keys that do it.
     private func format(_ title: String, _ command: EditCommand, _ key: KeyEquivalent, _ modifiers: EventModifiers = .command) -> some View {
         Button(title) { _ = NoteTextView.writing?.run(command) }.keyboardShortcut(key, modifiers: modifiers)

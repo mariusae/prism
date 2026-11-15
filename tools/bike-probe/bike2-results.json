@@ -2431,5 +2431,257 @@
   "outline": "  one\n  ∅\n* ∅\n  four",
   "mode": "caret",
   "detail": "|"
+ },
+ "t return end of quote": {
+  "given": "one\n\tsay it {quote}\n\tlet x {code}\n\taside {note}\n\tfirst {ordered}\n\tdot {unordered}\n\tdo it {task}\nfour",
+  "caret": [
+   "say it",
+   "end"
+  ],
+  "keys": [
+   "return"
+  ],
+  "outline": "  one\n      say it [quote]\n*     ∅ [quote]\n      let x [code]\n      aside [note]\n      first [ordered]\n      dot [unordered]\n      do it [task]\n  four",
+  "mode": "caret",
+  "detail": "|"
+ },
+ "t return mid quote": {
+  "given": "one\n\tsay it {quote}\n\tlet x {code}\n\taside {note}\n\tfirst {ordered}\n\tdot {unordered}\n\tdo it {task}\nfour",
+  "caret": [
+   "say it",
+   3
+  ],
+  "keys": [
+   "return"
+  ],
+  "outline": "  one\n      say [quote]\n*      it [quote]\n      let x [code]\n      aside [note]\n      first [ordered]\n      dot [unordered]\n      do it [task]\n  four",
+  "mode": "caret",
+  "detail": "| it"
+ },
+ "t return twice end of quote": {
+  "given": "one\n\tsay it {quote}\n\tlet x {code}\n\taside {note}\n\tfirst {ordered}\n\tdot {unordered}\n\tdo it {task}\nfour",
+  "caret": [
+   "say it",
+   "end"
+  ],
+  "keys": [
+   "return",
+   "return"
+  ],
+  "outline": "  one\n      say it [quote]\n*     ∅\n      let x [code]\n      aside [note]\n      first [ordered]\n      dot [unordered]\n      do it [task]\n  four",
+  "mode": "caret",
+  "detail": "|"
+ },
+ "t return end of code": {
+  "given": "one\n\tsay it {quote}\n\tlet x {code}\n\taside {note}\n\tfirst {ordered}\n\tdot {unordered}\n\tdo it {task}\nfour",
+  "caret": [
+   "let x",
+   "end"
+  ],
+  "keys": [
+   "return"
+  ],
+  "outline": "  ￼one\n      say it [quote]\n      let x [code]\n*     ∅ [code]\n      aside [note]\n      first [ordered]\n      dot [unordered]\n      do it [task]\n  four",
+  "mode": "caret",
+  "detail": "|"
+ },
+ "t return twice end of code": {
+  "given": "one\n\tsay it {quote}\n\tlet x {code}\n\taside {note}\n\tfirst {ordered}\n\tdot {unordered}\n\tdo it {task}\nfour",
+  "caret": [
+   "let x",
+   "end"
+  ],
+  "keys": [
+   "return",
+   "return"
+  ],
+  "outline": "  one\n      say it [quote]\n      let x [code]\n*     ∅\n      aside [note]\n      first [ordered]\n      dot [unordered]\n      do it [task]\n  four",
+  "mode": "caret",
+  "detail": "|"
+ },
+ "t return end of note": {
+  "given": "one\n\tsay it {quote}\n\tlet x {code}\n\taside {note}\n\tfirst {ordered}\n\tdot {unordered}\n\tdo it {task}\nfour",
+  "caret": [
+   "aside",
+   "end"
+  ],
+  "keys": [
+   "return"
+  ],
+  "outline": "  one\n      say it [quote]\n      let x [code]\n      Aside [note]\n*     ∅ [note]\n      first [ordered]\n      dot [unordered]\n      do it [task]\n  four",
+  "mode": "caret",
+  "detail": "|"
+ },
+ "t return end of ordered": {
+  "given": "one\n\tsay it {quote}\n\tlet x {code}\n\taside {note}\n\tfirst {ordered}\n\tdot {unordered}\n\tdo it {task}\nfour",
+  "caret": [
+   "first",
+   "end"
+  ],
+  "keys": [
+   "return"
+  ],
+  "outline": "  one\n      say it [quote]\n      let x [code]\n      aside [note]\n      First [ordered]\n*     ∅ [ordered]\n      dot [unordered]\n      do it [task]\n  four",
+  "mode": "caret",
+  "detail": "|"
+ },
+ "t return twice end of ordered": {
+  "given": "one\n\tsay it {quote}\n\tlet x {code}\n\taside {note}\n\tfirst {ordered}\n\tdot {unordered}\n\tdo it {task}\nfour",
+  "caret": [
+   "first",
+   "end"
+  ],
+  "keys": [
+   "return",
+   "return"
+  ],
+  "outline": "  one\n      say it [quote]\n      let x [code]\n      aside [note]\n      First [ordered]\n*     ∅\n      dot [unordered]\n      do it [task]\n  four",
+  "mode": "caret",
+  "detail": "|"
+ },
+ "t return end of unordered": {
+  "given": "one\n\tsay it {quote}\n\tlet x {code}\n\taside {note}\n\tfirst {ordered}\n\tdot {unordered}\n\tdo it {task}\nfour",
+  "caret": [
+   "dot",
+   "end"
+  ],
+  "keys": [
+   "return"
+  ],
+  "outline": "  one\n      say it [quote]\n      let x [code]\n      aside [note]\n      first [ordered]\n      Dot [unordered]\n*     ∅ [unordered]\n      do it [task]\n  four",
+  "mode": "caret",
+  "detail": "|"
+ },
+ "t return twice end of unordered": {
+  "given": "one\n\tsay it {quote}\n\tlet x {code}\n\taside {note}\n\tfirst {ordered}\n\tdot {unordered}\n\tdo it {task}\nfour",
+  "caret": [
+   "dot",
+   "end"
+  ],
+  "keys": [
+   "return",
+   "return"
+  ],
+  "outline": "  one\n      say it [quote]\n      let x [code]\n      aside [note]\n      first [ordered]\n      Dot [unordered]\n*     ∅\n      do it [task]\n  four",
+  "mode": "caret",
+  "detail": "|"
+ },
+ "t delete start of quote": {
+  "given": "one\n\tsay it {quote}\n\tlet x {code}\n\taside {note}\n\tfirst {ordered}\n\tdot {unordered}\n\tdo it {task}\nfour",
+  "caret": [
+   "say it",
+   0
+  ],
+  "keys": [
+   "delete"
+  ],
+  "outline": "  one\n*     say it\n      let x [code]\n      aside [note]\n      first [ordered]\n      dot [unordered]\n      do it [task]\n  four",
+  "mode": "caret",
+  "detail": "|say it"
+ },
+ "t delete start of code": {
+  "given": "one\n\tsay it {quote}\n\tlet x {code}\n\taside {note}\n\tfirst {ordered}\n\tdot {unordered}\n\tdo it {task}\nfour",
+  "caret": [
+   "let x",
+   0
+  ],
+  "keys": [
+   "delete"
+  ],
+  "outline": "  one\n      say it [quote]\n*     let x\n      aside [note]\n      first [ordered]\n      dot [unordered]\n      do it [task]\n  four",
+  "mode": "caret",
+  "detail": "|let x"
+ },
+ "t delete start of note": {
+  "given": "one\n\tsay it {quote}\n\tlet x {code}\n\taside {note}\n\tfirst {ordered}\n\tdot {unordered}\n\tdo it {task}\nfour",
+  "caret": [
+   "aside",
+   0
+  ],
+  "keys": [
+   "delete"
+  ],
+  "outline": "  one\n      say it [quote]\n      let x [code]\n*     aside\n      first [ordered]\n      dot [unordered]\n      do it [task]\n  four",
+  "mode": "caret",
+  "detail": "|aside"
+ },
+ "t delete start of ordered": {
+  "given": "one\n\tsay it {quote}\n\tlet x {code}\n\taside {note}\n\tfirst {ordered}\n\tdot {unordered}\n\tdo it {task}\nfour",
+  "caret": [
+   "first",
+   0
+  ],
+  "keys": [
+   "delete"
+  ],
+  "outline": "  one\n      say it [quote]\n      let x [code]\n      aside [note]\n*     first\n      dot [unordered]\n      do it [task]\n  four",
+  "mode": "caret",
+  "detail": "|first"
+ },
+ "t delete start of unordered": {
+  "given": "one\n\tsay it {quote}\n\tlet x {code}\n\taside {note}\n\tfirst {ordered}\n\tdot {unordered}\n\tdo it {task}\nfour",
+  "caret": [
+   "dot",
+   0
+  ],
+  "keys": [
+   "delete"
+  ],
+  "outline": "  one\n      say it [quote]\n      let x [code]\n      aside [note]\n      first [ordered]\n*     dot\n      do it [task]\n  four",
+  "mode": "caret",
+  "detail": "|dot"
+ },
+ "t tab on task": {
+  "given": "one\n\tsay it {quote}\n\tlet x {code}\n\taside {note}\n\tfirst {ordered}\n\tdot {unordered}\n\tdo it {task}\nfour",
+  "caret": [
+   "do it",
+   1
+  ],
+  "keys": [
+   "tab"
+  ],
+  "outline": "  one\n      say it [quote]\n      let x [code]\n      aside [note]\n      first [ordered]\n      dot [unordered]\n*         do it [task]\n  four",
+  "mode": "caret",
+  "detail": "d|o it"
+ },
+ "t join task into quote": {
+  "given": "one\n\tsay it {quote}\n\tlet x {code}\n\taside {note}\n\tfirst {ordered}\n\tdot {unordered}\n\tdo it {task}\nfour",
+  "caret": [
+   "let x",
+   0
+  ],
+  "keys": [
+   "delete",
+   "delete"
+  ],
+  "outline": "  one\n*     say itlet x [quote]\n      aside [note]\n      first [ordered]\n      dot [unordered]\n      do it [task]\n  four",
+  "mode": "caret",
+  "detail": "say it|let x"
+ },
+ "t shift-return in code": {
+  "given": "one\n\tsay it {quote}\n\tlet x {code}\n\taside {note}\n\tfirst {ordered}\n\tdot {unordered}\n\tdo it {task}\nfour",
+  "caret": [
+   "let x",
+   "end"
+  ],
+  "keys": [
+   "shift+return"
+  ],
+  "outline": "  one\n      say it [quote]\n      let x [code]\n*     ∅ [code]\n      aside [note]\n      first [ordered]\n      dot [unordered]\n      do it [task]\n  four",
+  "mode": "caret",
+  "detail": "|"
+ },
+ "t opt-return in code": {
+  "given": "one\n\tsay it {quote}\n\tlet x {code}\n\taside {note}\n\tfirst {ordered}\n\tdot {unordered}\n\tdo it {task}\nfour",
+  "caret": [
+   "let x",
+   "end"
+  ],
+  "keys": [
+   "opt+return"
+  ],
+  "outline": "  one\n      say it [quote]\n      let x [code]\n*     ∅\n      aside [note]\n      first [ordered]\n      dot [unordered]\n      do it [task]\n  four",
+  "mode": "caret",
+  "detail": "|"
  }
 }

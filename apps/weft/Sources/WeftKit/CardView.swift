@@ -652,10 +652,6 @@ struct CardView: View {
                 .keyboardShortcut("t", modifiers: [.command, .control])
                 .disabled(draft.isStamped(today))
         }
-        Picker("Write As", selection: Binding(get: { draft.mode }, set: { draft.setMode($0) })) {
-            Label("Outline", systemImage: "list.bullet.indent").tag(EditorMode.outline)
-            Label("Text", systemImage: "text.alignleft").tag(EditorMode.text)
-        }
         Button("Copy Link", systemImage: "link") { copy("[[\(store.linkName(path: card.path, title: draft.title))]]") }
         Button("Copy Contents", systemImage: "doc.on.doc") { copy(draft.markdown) }
         #if os(macOS)

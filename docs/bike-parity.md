@@ -25,7 +25,7 @@ Bike 1.22 was probed too, and differs in ~40 cases. Bike 2's default key
 bindings and its whole row style come from its built-in extension
 (`bike.bkext`: `app/main.ts`, `style/*.ts`) and its menus.
 
-171 probes (`tools/bike-probe`). Before this work 67 matched; now 137 do.
+190 probes (`tools/bike-probe`). Before this work 67 of 165 matched; now 162 of 190 do — the rest are chosen deviations (fenced code, no note type), the harness's limits, and navigation.
 
 ## The model
 
@@ -214,12 +214,42 @@ block mode's arrows, ⌘↑ ⌘↓, Space, Return, typing, and Esc back to the
 caret where it was. Bike 2's keys are the editor's, and Weft's Format menu
 is Bike's Format and Outline menus.
 
-Still to do, by area:
+Also done: every note opens as rows (the Outline / Text choice is gone);
+Markdown is never shown — a row's marks stay hidden while it is written
+in, the caret steps over them (one press at a formatting's edge is the
+caret's side, Bike's typing affinity, shown by a tail on the caret),
+Delete steps over them and takes a link shown by its title whole; Bike
+2's look — a handle on every row (dark when folded), guide lines, typed
+rows' marks in a step of their own, row selection as bands from the
+words, quotes boxed, done rows struck thick, code in words without a
+background, no pill on folded rows; the iPhone has the same rules, look,
+hidden Markdown and Bike's keys on a keyboard.
 
-1. **Moving**: "maintain level" past a parent's end (Bike keeps the level
-   by going under the next row); the "rows only" moves.
-5. **Folding**: by level (⌥⌘9 ⌥⌘0, now fold / unfold completely), all by
-   level.
+Left, by area:
+
+- **Links**: a link shown by its page's title is one unit; Bike edits a
+  link's words as words. Needs a way to edit them (as Bike's link editor).
+- **Badges**: a heading's tasks done (½), a done row's "Done".
+- **Words chosen**: Bike's ¶ sliver for a chosen line break, dots for
+  chosen spaces.
+- **iPhone**: Bike's round handles at a selection's corners; the caret's
+  tail.
+- **Navigation**: ⌘[ ⌘] back / forward, ⌥⌘→ ⌥⌘← focus in / out, ⌘P go to,
+  and ⌘→ at a row's end for its attributes — Weft has its own ways.
+- **Note** rows: Weft has no such type.
+
+The earlier list, kept for the record:
+
+Done since: folding by level and all by level (⌥⌘9 ⌥⌘0 ⌃⌥⌘9 ⌃⌥⌘0),
+⌥-click to fold completely; maintain-level and rows-only moves; typed
+row types with Delete and Undo giving the typing back; `- ` and `* `
+making a bulleted row (written `*`; a `-` row is a body row); empty
+typed rows turning plain; rows of any kind nested a level deeper;
+joining a row into a code block inside its fence; wrapping chosen words
+in ' " [ { (; curled quotes.
+
+Note: 389 rows across 126 notes of the graph are written `*`; they will
+draw as bulleted rows.
 6. **Typing**: typed row types; wrapping; smart quotes.
 7. **Rich text everywhere**: no Markdown in the view — not inline marks,
    not row markers — and every note as rows.

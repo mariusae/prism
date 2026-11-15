@@ -59,6 +59,8 @@ extension NSAttributedString.Key {
     static let prismQuote = NSAttributedString.Key("prism.quote")
     /// A code block's fence: its backticks drawn set down into their line.
     static let prismFence = NSAttributedString.Key("prism.fence")
+    /// Markdown that is never seen: the caret steps over it, Delete leaves it be.
+    static let prismMarkup = NSAttributedString.Key("prism.markup")
 }
 
 /// Dresses what a note's editor shows as what it means.
@@ -149,15 +151,22 @@ struct BodyStyler {
                 let scale = Self.headingScales[min(max(Int(level), 1), 6) - 1]
                 storage.addAttribute(.font, value: theme.font(size * scale, weight: .semibold), range: range)
                 paragraph.paragraphSpacingBefore += index == 0 ? 0 : (size * 0.5).rounded()
-            case .item(_, let done, _):
+            case .item(let number, let done, let bullet):
+                // A typed row — a task, a number, a bulleted row — has its mark in a step of
+                // room before its words, after its handle, as Bike's list marks are.
+                if outline, done != nil || number != nil || bullet != "-" {
+                    paragraph.firstLineHeadIndent += theme.step
+                    paragraph.headIndent += theme.step
+                }
                 if !outline {
                     let marker = done != nil && !shown ? taskRoom : width(of: storage, from: Int(line.start + line.indent), to: Int(line.content))
                     paragraph.firstLineHeadIndent = depthIndent
                     paragraph.headIndent = depthIndent + marker
                 }
                 if done == true {
+                    // Done, as Bike's: struck through, thick.
                     let words = NSRange(location: Int(line.content), length: max(Int(line.end) - Int(line.content), 0))
-                    storage.addAttributes([.foregroundColor: theme.secondary, .strikethroughStyle: NSUnderlineStyle.single.rawValue, .strikethroughColor: theme.secondary], range: words)
+                    storage.addAttributes([.foregroundColor: theme.secondary, .strikethroughStyle: NSUnderlineStyle.thick.rawValue, .strikethroughColor: theme.secondary], range: words)
                 }
             case .paragraph where line.depth > 0 && !outline:
                 // A paragraph continuing an item stands under its words.
@@ -166,8 +175,9 @@ struct BodyStyler {
                 paragraph.headIndent = under
             case .quote:
                 if outline {
-                    paragraph.firstLineHeadIndent += 14
-                    paragraph.headIndent += 14
+                    // As Bike's: its words a step in, the bar in that step.
+                    paragraph.firstLineHeadIndent += theme.step
+                    paragraph.headIndent += theme.step
                     storage.addAttribute(.prismQuote, value: true, range: range)
                 } else if !shown {
                     paragraph.firstLineHeadIndent = 14
@@ -212,7 +222,8 @@ struct BodyStyler {
             while lineIndex + 1 < layout.lines.count, Int(layout.lines[lineIndex + 1].start) <= range.location { lineIndex += 1 }
             while lineIndex > 0, Int(layout.lines[lineIndex].start) > range.location { lineIndex -= 1 }
             let line = layout.lines[lineIndex]
-            let shown = revealed.contains(lineIndex)
+            // In an outline the Markdown is never seen, written in or not — as Bike's rich text.
+            let shown = !outline && revealed.contains(lineIndex)
             if cardLines.contains(lineIndex) { continue }
             switch run.kind {
             case .markup:
@@ -226,7 +237,8 @@ struct BodyStyler {
             case .highlight:
                 storage.addAttribute(.backgroundColor, value: theme.highlight, range: range)
             case .code:
-                storage.addAttributes([.font: theme.mono(size * 0.92), .backgroundColor: theme.codeBackground], range: range)
+                // Monospaced, and nothing behind it — as Bike's code in words.
+                storage.addAttributes([.font: theme.mono(size * 0.92)], range: range)
             case .pageLink(let target, _):
                 let isRiver = riverName(linkTarget: target) != nil
                 let missing = !isRiver && !pageExists(target)
@@ -307,7 +319,7 @@ struct BodyStyler {
         if shown {
             storage.addAttribute(.foregroundColor, value: theme.faint, range: range)
         } else {
-            storage.addAttributes([.font: Self.hiddenFont, .foregroundColor: EditorColor.clear], range: range)
+            storage.addAttributes([.font: Self.hiddenFont, .foregroundColor: EditorColor.clear, .prismMarkup: true], range: range)
         }
     }
 
@@ -364,7 +376,7 @@ struct BodyStyler {
         let own = width(of: storage, from: first.location, to: first.location + 1)
         storage.addAttributes([.foregroundColor: EditorColor.clear, .kern: max(text.size().width.rounded(.up) - own, 0), .prismLabel: LinkLabel(text)], range: first)
         if range.length > 1 {
-            storage.addAttributes([.font: Self.hiddenFont, .foregroundColor: EditorColor.clear], range: NSRange(location: range.location + 1, length: range.length - 1))
+            storage.addAttributes([.font: Self.hiddenFont, .foregroundColor: EditorColor.clear, .prismMarkup: true], range: NSRange(location: range.location + 1, length: range.length - 1))
         }
     }
 
@@ -372,7 +384,7 @@ struct BodyStyler {
     /// `www.`, and everything from its query on. Off the lines being
     /// written in only; the address itself is not touched.
     private func shorten(_ storage: NSTextStorage, _ range: NSRange, address: NSString, lead: Bool) {
-        let hidden: [NSAttributedString.Key: Any] = [.font: Self.hiddenFont, .foregroundColor: EditorColor.clear]
+        let hidden: [NSAttributedString.Key: Any] = [.font: Self.hiddenFont, .foregroundColor: EditorColor.clear, .prismMarkup: true]
         var start = 0
         let scheme = address.range(of: "://")
         if scheme.location != NSNotFound, scheme.location < 8 { start = NSMaxRange(scheme) }
@@ -458,8 +470,9 @@ final class BodyLayoutManager: NSLayoutManager {
     /// The row whose mark — a bullet, a number, a ring — is at a point:
     /// its place among the lines. Not a task's box, which is ticked.
     func mark(at point: CGPoint) -> Int? {
+        // Every row's handle, as Bike's — a task's too; its box is in the step after.
         for (index, row) in lines.enumerated() {
-            guard case .item(_, let done, _) = row.kind, done == nil, let line = firstLine(of: row) else { continue }
+            guard let line = firstLine(of: row) else { continue }
             if markBox(of: row, on: line).contains(point) { return index }
         }
         return nil
@@ -584,18 +597,16 @@ final class BodyLayoutManager: NSLayoutManager {
 
         if let chosen {
             // Each row chosen, a band the width of the note — its mark's room with it.
-            var band = CGRect.null
+            // As Bike's: each row's band from where its words begin to the note's edge, meeting the next.
+            theme.accent.withAlphaComponent(0.18).setFill()
             for row in lines where Int(row.start) <= chosen.upperBound && Int(row.end) >= chosen.lowerBound && Int(row.start) >= chosen.lowerBound {
                 let glyphs = glyphRange(forCharacterRange: NSRange(location: Int(row.start), length: max(Int(row.end) - Int(row.start), 0)), actualCharacterRange: nil)
                 var rect = glyphs.length > 0 ? boundingRect(forGlyphRange: glyphs, in: container) : (firstLine(of: row)?.rect ?? .null)
                 guard !rect.isNull else { continue }
-                rect.origin.x = 0
-                rect.size.width = container.size.width
-                band = band.union(rect)
-            }
-            if !band.isNull {
-                theme.accent.withAlphaComponent(0.16).setFill()
-                Self.roundedPath(band.insetBy(dx: -4, dy: -1).offsetBy(dx: origin.x, dy: origin.y), radius: 6).fill()
+                let left = CGFloat(row.depth) * theme.step - 3
+                rect.origin.x = left
+                rect.size.width = container.size.width - left
+                Self.roundedPath(rect.offsetBy(dx: origin.x, dy: origin.y), radius: 3).fill()
             }
         }
         // What a find found: a highlighter's yellow behind each, the one gone to brighter.
@@ -617,34 +628,51 @@ final class BodyLayoutManager: NSLayoutManager {
             if let pill = foldPill(ofRow: index) { drawFoldPill(in: pill.offsetBy(dx: origin.x, dy: origin.y)) }
         }
 
-        // An outline's marks, beside the rows being drawn.
+        // An outline's marks, beside the rows being drawn — as Bike 2's: every row
+        // its handle, a triangle in the step before it (turned down when its rows are
+        // shown; dark when they are folded away); a typed row its own mark too, in the
+        // step after the handle — the box, the number, the dot.
         for row in rows where Int(row.start) <= NSMaxRange(characters) && Int(row.end) >= characters.location {
-            guard case .item(let number, let done, let bullet) = row.kind, let line = firstLine(of: row) else { continue }
-            // A plain row with nothing in it is where words will go while the note is
-            // written in; read, it is nothing — no bullet left standing on its own.
-            if row.end <= row.start, done == nil, number == nil, !row.hasChildren, !isWriting, !(lead != nil && leadStart == Int(row.start)) { continue }
+            guard let line = firstLine(of: row) else { continue }
             let box = markBox(of: row, on: line).offsetBy(dx: origin.x, dy: origin.y)
             let baseline = line.baseline + origin.y
+            var number: UInt32?, done: Bool?, bullet = "-"
+            if case .item(let n, let d, let b) = row.kind { (number, done, bullet) = (n, d, b) }
             if let lead, leadStart == Int(row.start), done == nil, number == nil {
                 drawLead(lead, midX: box.midX, baseline: baseline, origin: origin)
-            } else if let done {
+                continue
+            }
+            // A plain row with nothing in it and nothing under it has no handle, as Bike's.
+            let bare = row.end <= row.start && !row.hasChildren && done == nil && number == nil && bullet == "-"
+            if !bare { drawHandle(midX: box.midX, midY: baseline - font.xHeight / 2, expanded: row.hasChildren && !row.isFolded, dark: row.hasChildren && row.isFolded) }
+            let mark = box.offsetBy(dx: theme.step, dy: 0)
+            if let done {
                 let side = (size * 0.95).rounded()
                 let name = bullet == "+" ? (done ? "checkmark.circle.fill" : "circle") : (done ? "checkmark.square.fill" : "square")
-                Self.draw(symbol: name, in: CGRect(x: box.midX - side / 2, y: baseline - font.capHeight / 2 - side / 2, width: side, height: side), pointSize: side, weight: .regular, colors: done ? [.white, theme.accent] : [theme.secondary])
+                Self.draw(symbol: name, in: CGRect(x: mark.midX - side / 2, y: baseline - font.capHeight / 2 - side / 2, width: side, height: side), pointSize: side, weight: .regular, colors: done ? [.white, theme.accent] : [theme.secondary])
             } else if let number {
                 let label = "\(number)\(bullet)" as NSString
-                let attributes: [NSAttributedString.Key: Any] = [.font: EditorFont.monospacedDigitSystemFont(ofSize: size * 0.85, weight: .regular), .foregroundColor: theme.secondary]
+                let attributes: [NSAttributedString.Key: Any] = [.font: EditorFont.monospacedDigitSystemFont(ofSize: size * 0.9, weight: .regular), .foregroundColor: theme.text]
                 let width = label.size(withAttributes: attributes).width
-                label.draw(at: CGPoint(x: box.maxX - 6 - width, y: baseline - font.ascender * 0.85 - 1), withAttributes: attributes)
-            } else if let progress = progress(under: row) {
-                // A row over a checklist: how far along that is, where its bullet would be.
-                let side = (size * 0.74).rounded()
-                drawRing(in: CGRect(x: box.midX - side / 2, y: baseline - font.xHeight / 2 - side / 2, width: side, height: side), fraction: progress, tint: theme.secondary)
-            } else {
+                label.draw(at: CGPoint(x: mark.maxX - 6 - width, y: baseline - font.ascender * 0.9 - 1), withAttributes: attributes)
+            } else if bullet != "-", case .item = row.kind {
                 let diameter = max(4.5, (size * 0.3).rounded())
-                theme.secondary.setFill()
-                Self.ovalPath(CGRect(x: box.midX - diameter / 2, y: baseline - font.xHeight / 2 - diameter / 2, width: diameter, height: diameter)).fill()
+                theme.text.setFill()
+                Self.ovalPath(CGRect(x: mark.midX - diameter / 2, y: baseline - font.xHeight / 2 - diameter / 2, width: diameter, height: diameter)).fill()
             }
+        }
+        // Guide lines, as Bike's: down from an expanded row's handle, the height of what it shows.
+        for (index, row) in rows.enumerated() where row.hasChildren && !row.isFolded {
+            guard let first = firstLine(of: row) else { continue }
+            var last = index
+            while last + 1 < rows.count, rows[last + 1].depth > row.depth { last += 1 }
+            guard last > index, let end = lastLine(of: rows[last]) else { continue }
+            let x = markBox(of: row, on: first).midX + origin.x
+            let top = first.rect.maxY + origin.y
+            let bottom = end.rect.maxY + origin.y
+            guard top < bottom else { continue }
+            theme.text.withAlphaComponent(0.12).setFill()
+            Self.roundedPath(CGRect(x: (x - 0.5).rounded(), y: top, width: 1, height: bottom - top), radius: 0).fill()
         }
 
         storage.enumerateAttribute(.prismPill, in: characters) { value, range, _ in
@@ -740,7 +768,7 @@ final class BodyLayoutManager: NSLayoutManager {
                 left = min(left, used.minX)
             }
             guard !whole.isNull else { return }
-            let bar = CGRect(x: max(left - 11, 0), y: whole.minY, width: 3, height: whole.height)
+            let bar = CGRect(x: max(left - theme.step / 2 - 2, 0), y: whole.minY, width: 4, height: whole.height)
             if let last = bars.last, abs(last.minX - bar.minX) < 1, bar.minY - last.maxY < size * 0.9 {
                 bars[bars.count - 1] = last.union(bar)
             } else {
@@ -764,17 +792,57 @@ final class BodyLayoutManager: NSLayoutManager {
 
         theme.faint.setFill()
         for bar in bars {
-            let drawn = CGRect(x: bar.minX, y: bar.minY + 2, width: bar.width, height: max(bar.height - 4, 2)).offsetBy(dx: origin.x, dy: origin.y)
-            Self.roundedPath(drawn, radius: 1.5).fill()
+            // Bike's quote: a faint, rounded box behind the words, the bar at its left edge.
+            let block = CGRect(x: bar.minX - 1, y: bar.minY, width: container.size.width - bar.minX + 1, height: bar.height).offsetBy(dx: origin.x, dy: origin.y)
+            theme.text.withAlphaComponent(0.025).setFill()
+            Self.roundedPath(block, radius: 3).fill()
+            theme.text.withAlphaComponent(0.06).setStroke()
+            let outline = Self.roundedPath(block.insetBy(dx: 0.25, dy: 0.25), radius: 3)
+            outline.lineWidth = 0.5
+            outline.stroke()
+            theme.secondary.setFill()
+            let drawn = CGRect(x: bar.minX, y: bar.minY + 2, width: 4, height: max(bar.height - 4, 2)).offsetBy(dx: origin.x, dy: origin.y)
+            Self.roundedPath(drawn, radius: 2).fill()
         }
+    }
+
+    /// A row's handle: a small triangle pointing at its words — down when its rows are shown.
+    private func drawHandle(midX: CGFloat, midY: CGFloat, expanded: Bool, dark: Bool) {
+        #if os(macOS)
+        guard let context = NSGraphicsContext.current?.cgContext else { return }
+        #else
+        guard let context = UIGraphicsGetCurrentContext() else { return }
+        #endif
+        let side = (size * 0.42).rounded()
+        let (x, y) = (midX.rounded(), midY.rounded())
+        let points: [CGPoint] = expanded
+            ? [CGPoint(x: x - side / 2, y: y - side * 0.3), CGPoint(x: x + side / 2, y: y - side * 0.3), CGPoint(x: x, y: y + side * 0.45)]
+            : [CGPoint(x: x - side * 0.3, y: y - side / 2), CGPoint(x: x + side * 0.45, y: y), CGPoint(x: x - side * 0.3, y: y + side / 2)]
+        context.saveGState()
+        context.setFillColor((dark ? theme.secondary : theme.text.withAlphaComponent(0.22)).cgColor)
+        context.addLines(between: points)
+        context.closePath()
+        context.fillPath()
+        context.restoreGState()
+    }
+
+    /// Weft's pill on a folded row, with how many it hides: not drawn, as Bike shows a fold by its handle.
+    static let drawsFoldPills = false
+
+    /// Where a row's last line is.
+    private func lastLine(of row: BodyLine) -> (rect: CGRect, baseline: CGFloat)? {
+        guard let storage = textStorage, row.end > row.start, Int(row.end) <= storage.length else { return firstLine(of: row) }
+        let glyph = glyphIndexForCharacter(at: Int(row.end) - 1)
+        let rect = lineFragmentRect(forGlyphAt: glyph, effectiveRange: nil)
+        return (rect, rect.minY + location(forGlyphAt: glyph).y)
     }
 
     // MARK: An outline's rows, where a touch finds them
 
     /// How many rows a row is under: what its mark is set in by.
     static func level(of row: BodyLine) -> Int {
-        if case .item = row.kind { return max(Int(row.depth) - 1, 0) }
-        return Int(row.depth)
+        // Every row as a row: a top-level row of any kind is at depth 1.
+        max(Int(row.depth) - 1, 0)
     }
 
     /// The row of an outline at a point of the container: its place
@@ -820,7 +888,7 @@ final class BodyLayoutManager: NSLayoutManager {
     /// The row whose mark — its bullet, its number, its box — is at a
     /// point, if one is: the step before its words, on any of its lines.
     func marker(at point: CGPoint, in container: NSTextContainer) -> Int? {
-        guard let index = row(at: point, in: container), case .item = lines[index].kind else { return nil }
+        guard let index = row(at: point, in: container) else { return nil }
         let left = theme.step * CGFloat(Self.level(of: lines[index]))
         return point.x > left - 6 && point.x < left + theme.step - 2 ? index : nil
     }
@@ -828,7 +896,8 @@ final class BodyLayoutManager: NSLayoutManager {
     /// Where a folded row's pill is, in the container: after the words of
     /// its last line, on the middle of their capitals.
     func foldPill(ofRow index: Int) -> CGRect? {
-        guard lines.indices.contains(index), lines[index].isFolded, let storage = textStorage else { return nil }
+        // Bike shows a folded row by its dark handle, and no pill.
+        guard Self.drawsFoldPills, lines.indices.contains(index), lines[index].isFolded, let storage = textStorage else { return nil }
         let line = lines[index]
         let font = theme.body
         let height = (font.capHeight + 9).rounded()
@@ -877,10 +946,10 @@ final class BodyLayoutManager: NSLayoutManager {
 
     /// The place in the text of the task whose box is at a point, if one is.
     func task(at point: CGPoint, in container: NSTextContainer) -> Int? {
-        // An outline's box is in the margin beside its row.
+        // An outline's box is in the step after its row's handle.
         for row in rows {
             guard case .item(_, let done, _) = row.kind, done != nil, let line = firstLine(of: row) else { continue }
-            if markBox(of: row, on: line).contains(point) { return Int(row.start) }
+            if markBox(of: row, on: line).offsetBy(dx: theme.step, dy: 0).contains(point) { return Int(row.start) }
         }
         guard let storage = textStorage, storage.length > 0 else { return nil }
         let glyph = glyphIndex(for: point, in: container)

@@ -20,7 +20,15 @@ def markdown(outline):
             words, kind = words[:m.start()], m.group(1)
         if words == "∅":
             words = ""
-        marker = "- [ ] " if kind == "task" else "- "
+        marker = {"task": "- [ ] ", "quote": "> ", "ordered": "1. ", "unordered": "* ", "heading": "# "}.get(kind, "- ")
+        if kind == "code":
+            lines.append("  " * depth + "```")
+            lines.append("  " * depth + words)
+            lines.append("  " * depth + "```")
+            continue
+        # An empty item cannot follow words straight away: a blank line holds it apart, as Weft writes it.
+        if not words and lines:
+            lines.append("")
         lines.append("  " * depth + marker + words + (" <!-- folded -->" if folded else ""))
     return "\n".join(lines) + "\n"
 

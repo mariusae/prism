@@ -1819,18 +1819,10 @@ public final class PageDraft {
         revision += 1
     }
 
-    /// How the page is shown: as it was last chosen to be on this device;
-    /// else as an outline if it opens with a list, as text if with prose.
+    /// How the page is shown: always as rows, as Bike shows everything —
+    /// prose as rows of paragraphs and headings. Its Markdown is never shown.
     private func chosenMode(for file: String) -> EditorMode {
-        switch (try? store?.engine.localValue(name: "weft/mode/\(path)")) ?? nil {
-        case "text": return .text
-        case "outline": return .outline
-        default: break
-        }
-        let probe = NoteEditor.open(source: file, mode: .text)
-        guard let first = probe.layout().lines.first(where: { $0.kind != .blank }) else { return .outline }
-        if case .item = first.kind { return .outline }
-        return .text
+        .outline
     }
 
     public func setMode(_ mode: EditorMode) {

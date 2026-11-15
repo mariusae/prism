@@ -352,6 +352,82 @@ pub fn move_down_shown(document: &mut Document, path: &[usize], shown: &[Path]) 
     Some(to)
 }
 
+/// Moves a row down at its level — ⌃⌥⌘↓: past the sibling after it; a
+/// last child, into the row shown after its parent's branch, as its first
+/// child — so it keeps its level, as Bike's does.
+pub fn move_down_keeping_level(document: &mut Document, path: &[usize], shown: &[Path]) -> Option<Path> {
+    if let Some(moved) = move_down(document, path) {
+        return Some(moved);
+    }
+    let at = shown.iter().position(|row| row == path)?;
+    let next = shown[at + 1..].iter().find(|row| !row.starts_with(path))?.clone();
+    if next.len() + 1 != path.len() || !document.get(&next)?.can_have_children() {
+        return None;
+    }
+    let block = remove(document, path)?;
+    // Taking it out moved nothing the next row's path counts through: it was a last child.
+    let host = document.get_mut(&next)?;
+    host.folded = false;
+    host.children.insert(0, block);
+    Some([&next[..], &[0]].concat())
+}
+
+/// Moves a row alone a line up or down — ⌃⌥↑ ⌃⌥↓ — as a line of
+/// indented text moves: it keeps its level, and the rows around it are
+/// put under whichever row then stands above them. A folded row's hidden
+/// rows go with it. A row can be no deeper than one past the row above.
+pub fn move_row_alone(document: &mut Document, path: &[usize], up: bool) -> Option<Path> {
+    // The rows as lines: each with its level, without its shown children.
+    fn flatten(blocks: &[Block], level: usize, at: &mut Path, lines: &mut Vec<(usize, Block, Path)>) {
+        for (index, block) in blocks.iter().enumerate() {
+            at.push(index);
+            let mut alone = block.clone();
+            if !block.folded {
+                alone.children.clear();
+            }
+            lines.push((level, alone, at.clone()));
+            if !block.folded {
+                flatten(&block.children, level + 1, at, lines);
+            }
+            at.pop();
+        }
+    }
+    let mut lines = Vec::new();
+    flatten(&document.blocks, 0, &mut Vec::new(), &mut lines);
+    let index = lines.iter().position(|(_, _, at)| at == path)?;
+    let other = if up { index.checked_sub(1)? } else { index + 1 };
+    if other >= lines.len() {
+        return None;
+    }
+    lines.swap(index, other);
+    // Rebuilt: each line under the last line before it one level up.
+    let mut blocks: Vec<Block> = Vec::new();
+    let mut previous: Option<usize> = None;
+    let mut moved = Vec::new();
+    for (position, (level, block, _)) in lines.into_iter().enumerate() {
+        let level = level.min(previous.map_or(0, |previous| previous + 1));
+        let mut siblings = &mut blocks;
+        let mut at = Vec::new();
+        for _ in 0..level {
+            let Some(last) = siblings.len().checked_sub(1) else { break };
+            if !siblings[last].can_have_children() {
+                break;
+            }
+            at.push(last);
+            siblings = &mut siblings[last].children;
+        }
+        at.push(siblings.len());
+        siblings.push(block);
+        previous = Some(at.len() - 1);
+        if position == other {
+            moved = at;
+        }
+    }
+    document.blocks = blocks;
+    renumber(&mut document.blocks);
+    Some(moved)
+}
+
 /// Opens an empty block above a block — what Return does at the start of
 /// a block's words, which stay where the caret is. The new block is of
 /// the block's own sort: a bullet above a bullet, an open task above any
@@ -615,6 +691,31 @@ mod tests {
         assert_eq!(group(&mut d, &[vec![0], vec![1]]), Some(vec![0]));
         d.get_mut(&[0]).unwrap().text = "g".into();
         assert_eq!(d.to_markdown(), "- g\n  - kid\n  - three\n");
+    }
+
+    #[test]
+    fn a_row_alone_moves_as_a_line_of_indented_text() {
+        // Up past a deeper row: it keeps its level, and the row it passed comes under it.
+        let mut d = doc("- alpha\n  - beta\n  - gamma\n- delta\n- epsilon\n");
+        assert_eq!(move_row_alone(&mut d, &[1], true), Some(vec![1]));
+        assert_eq!(d.to_markdown(), "- alpha\n  - beta\n- delta\n  - gamma\n- epsilon\n");
+        // A parent alone, down past its child: it keeps its level; the child goes under the row before.
+        let mut d = doc("- a\n- b\n  - b1\n- c\n");
+        assert_eq!(move_row_alone(&mut d, &[1], false), Some(vec![1]));
+        assert_eq!(d.to_markdown(), "- a\n  - b1\n- b\n- c\n");
+        assert_eq!(move_row_alone(&mut d, &[0], true), None);
+    }
+
+    #[test]
+    fn moving_down_at_the_same_level() {
+        let shown = |d: &Document| d.rows().into_iter().map(|row| row.path).collect::<Vec<_>>();
+        let mut d = doc("- one\n  - two\n  - three\n- four\n");
+        let rows = shown(&d);
+        assert_eq!(move_down_keeping_level(&mut d, &[0, 1], &rows), Some(vec![1, 0]));
+        assert_eq!(d.to_markdown(), "- one\n  - two\n- four\n  - three\n");
+        let mut d = doc("- one\n  - two\n- four\n");
+        let rows = shown(&d);
+        assert_eq!(move_down_keeping_level(&mut d, &[1], &rows), None);
     }
 
     #[test]
