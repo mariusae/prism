@@ -147,9 +147,10 @@ struct PhoneCard: View {
 
     private func focusDrawer(_ view: NoteEditor) -> some View {
         HStack(spacing: 0) {
-            drawerButton("arrow.down.right.and.arrow.up.left.circle", "Fold") { fold() }
+            drawerButton(card.folded ? "arrow.up.left.and.arrow.down.right.circle" : "arrow.down.right.and.arrow.up.left.circle", card.folded ? "Unfold" : "Fold") { fold() }
             drawerButton("arrow.up.left.circle", "Show the Row Above") { widen(view) }
             drawerButton("arrow.up.left.and.arrow.down.right.circle", "Show the Whole Note") { widen(view, to: 0, of: 0) }
+            moreButton
             drawerButton("xmark.circle", "Close") { withAnimation(.snappy(duration: 0.28)) { store.close(card.id, in: river) } }
         }
         .foregroundStyle(Color.inkAccent)
@@ -188,7 +189,8 @@ struct PhoneCard: View {
         }
         store.rememberRivers()
     }
-    private var showsDrawer: Bool { isSelected && !card.folded }
+    /// Under the card chosen, folded or not: what is done to it, and its menu, a tap away.
+    private var showsDrawer: Bool { isSelected }
     /// Its icon — or, holding a checklist and given none, how far along that is.
     private var emblem: Emblem {
         Emblem(title: draft.title, icon: draft.icon, color: draft.color, kindSymbol: isDay ? "calendar" : nil, letter: false, progress: draft.task == .none ? draft.checklist : nil)
@@ -559,7 +561,7 @@ struct PhoneCard: View {
     /// The strip under the card being written in, or tapped last.
     private var drawer: some View {
         HStack(spacing: 0) {
-            drawerButton("arrow.down.right.and.arrow.up.left.circle", "Fold") { fold() }
+            drawerButton(card.folded ? "arrow.up.left.and.arrow.down.right.circle" : "arrow.down.right.and.arrow.up.left.circle", card.folded ? "Unfold" : "Fold") { fold() }
             // Its pages to read: the reader, a tap away.
             if canRead { drawerButton("doc.richtext", "Read") { read() } }
             if isDay {
@@ -573,9 +575,7 @@ struct PhoneCard: View {
                     drawerButton("arrow.uturn.down.circle", "Release to Query") { withAnimation(.snappy(duration: 0.28)) { store.close(card.id, in: river) } }
                 }
             }
-            Menu { menuItems } label: {
-                Image(systemName: "ellipsis.circle").font(.system(size: 22)).frame(maxWidth: .infinity, minHeight: 40).contentShape(Rectangle())
-            }
+            moreButton
             drawerButton("xmark.circle", "Close") { withAnimation(.snappy(duration: 0.28)) { store.close(card.id, in: river) } }
         }
         .foregroundStyle(Color.inkAccent)
@@ -586,6 +586,14 @@ struct PhoneCard: View {
         .glassEffectTransition(.materialize)
         .padding(.top, 12)
         .padding(.horizontal, 24)
+    }
+
+    /// The card's menu, from its drawer.
+    private var moreButton: some View {
+        Menu { holdMenu } label: {
+            Image(systemName: "ellipsis.circle").font(.system(size: 22)).frame(maxWidth: .infinity, minHeight: 40).contentShape(Rectangle())
+        }
+        .accessibilityLabel("More")
     }
 
     private func drawerButton(_ symbol: String, _ name: String, action: @escaping () -> Void) -> some View {
@@ -628,51 +636,28 @@ struct PhoneCard: View {
 
     // MARK: Menus
 
-    /// What a hold on the title gives.
+    /// The card's menu, from a hold on it or from "…": what is done most
+    /// as a row of three — reading it first, when there is something to
+    /// read — and then everything, in the order the Mac's menu has.
     @ViewBuilder private var holdMenu: some View {
-        // What is done most, as a row of three at the top.
         ControlGroup {
+            if canRead {
+                Button("Read", systemImage: "doc.richtext") { read() }
+            } else if draft.exists, !isDay {
+                Button(store.isPinned(card.path) ? "Unpin" : "Pin", systemImage: store.isPinned(card.path) ? "pin.slash" : "pin") { store.togglePinned(path: card.path, title: draft.title) }
+            } else {
+                Button("Copy", systemImage: "doc.on.doc") { UIPasteboard.general.string = draft.markdown }
+            }
             Button("Move", systemImage: "arrow.right.square") { store.movingCards = .init(ids: [card.id], river: river) }
                 .disabled(river.query != nil && river.isFound(card.id))
-            Button("Icon", systemImage: "paintpalette") { choosesLook = true }
-                .disabled(!draft.exists)
-            Button("Copy", systemImage: "doc.on.doc") { UIPasteboard.general.string = draft.markdown }
+            ShareLink(item: draft.markdown) { Label("Share", systemImage: "square.and.arrow.up") }
         }
-        if !isDay { Button(isUntitled ? "Add Title…" : "Rename…", systemImage: "character.cursor.ibeam") { startRenaming() } }
-        if draft.exists, !isDay {
-            Button(store.isPinned(card.path) ? "Unpin" : "Pin", systemImage: store.isPinned(card.path) ? "pin.slash" : "pin") { store.togglePinned(path: card.path, title: draft.title) }
-            Button(store.isInInbox(card.path) ? "Out of the Inbox" : "Add to Inbox", systemImage: store.isInInbox(card.path) ? "tray.and.arrow.up" : "tray.and.arrow.down") { store.toggleInbox(path: card.path, title: draft.title) }
-            Button(store.isArchived(card.path) ? "Unarchive" : "Archive", systemImage: store.isArchived(card.path) ? "archivebox.fill" : "archivebox") { withAnimation(.snappy(duration: 0.2)) { store.toggleArchived(path: card.path, title: draft.title, closing: card.id, in: river) } }
-        }
-        if canRead { Button("Read", systemImage: "doc.richtext") { read() } }
-        Button("Copy Link", systemImage: "link") { UIPasteboard.general.string = "[[\(store.linkName(path: card.path, title: draft.title))]]" }
-        ShareLink(item: draft.markdown) { Label("Share", systemImage: "square.and.arrow.up") }
-        Menu("More", systemImage: "ellipsis.circle") { menuItems }
+        menuItems
     }
 
-    /// Everything that can be done with a card.
+    /// Everything that can be done with a card, after the menu's row of three.
     @ViewBuilder private var menuItems: some View {
-        if river.query == nil || !river.isFound(card.id) { MoveToRiverMenu(store: store, river: river, ids: [card.id]) }
-        // Writing in it, however it is filled: a note that is all pictures, or cards, has no words to touch.
-        if !isWriting {
-            Button("Edit", systemImage: "pencil") {
-                river.writingAtEnd = card.id
-                river.writing = card.id
-            }
-        }
-        Section {
-            if !isDay { Button(isUntitled ? "Add Title…" : "Rename…", systemImage: "character.cursor.ibeam") { startRenaming() } }
-            if isUntitled, !draft.isBlank { Button("Make First Line the Title", systemImage: "arrow.up") { withAnimation(.snappy(duration: 0.22)) { _ = draft.titleByFirstLine() } } }
-            if draft.exists { Button("Icon and Colour…", systemImage: "paintpalette") { choosesLook = true } }
-            if draft.exists { Button("Add Tag…", systemImage: "number") { addsTag = true } }
-            Button(draft.isProse ? "Show as Outline" : "Show as Prose", systemImage: draft.isProse ? "list.bullet.indent" : "text.alignleft") { draft.setProse(!draft.isProse) }
-            // Linked to today in its frontmatter: today's page lists it.
-            if !isDay {
-                let today = Days.name(Date())
-                Button(draft.isStamped(today) ? "Stamped with Today" : "Stamp with Today", systemImage: "calendar.badge.plus") { draft.stamp(today) }
-                    .disabled(draft.isStamped(today))
-            }
-        }
+        // What the note is.
         if draft.exists, !isDay {
             Section {
                 switch draft.task {
@@ -681,14 +666,40 @@ struct PhoneCard: View {
                 case .done: Button("Mark Not Done", systemImage: "circle") { draft.setTask(.todo) }
                 }
                 if draft.task != .none { Button("No Longer a To-Do", systemImage: "circle.slash") { draft.setTask(.none) } }
-                Button(store.isPinned(card.path) ? "Unpin" : "Pin", systemImage: store.isPinned(card.path) ? "pin.slash" : "pin") { store.togglePinned(path: card.path, title: draft.title) }
+                // Pin is in the row of three when there is nothing to read.
+                if canRead { Button(store.isPinned(card.path) ? "Unpin" : "Pin", systemImage: store.isPinned(card.path) ? "pin.slash" : "pin") { store.togglePinned(path: card.path, title: draft.title) } }
                 Button(store.isInInbox(card.path) ? "Out of the Inbox" : "Add to Inbox", systemImage: store.isInInbox(card.path) ? "tray.and.arrow.up" : "tray.and.arrow.down") { store.toggleInbox(path: card.path, title: draft.title) }
-            Button(store.isArchived(card.path) ? "Unarchive" : "Archive", systemImage: store.isArchived(card.path) ? "archivebox.fill" : "archivebox") { withAnimation(.snappy(duration: 0.2)) { store.toggleArchived(path: card.path, title: draft.title, closing: card.id, in: river) } }
+                Button(store.isArchived(card.path) ? "Unarchive" : "Archive", systemImage: store.isArchived(card.path) ? "archivebox.fill" : "archivebox") { withAnimation(.snappy(duration: 0.2)) { store.toggleArchived(path: card.path, title: draft.title, closing: card.id, in: river) } }
             }
         }
+        // How it is shown.
         Section {
+            ShowAsMenu(draft: draft)
             Button(card.folded ? "Unfold" : "Fold", systemImage: card.folded ? "chevron.down" : "chevron.right") { fold() }
-            if canRead { Button("Read", systemImage: "doc.richtext") { read() } }
+            // Writing in it, however it is filled: a note that is all pictures, or cards, has no words to touch.
+            if !isWriting {
+                Button("Edit", systemImage: "pencil") {
+                    river.writingAtEnd = card.id
+                    river.writing = card.id
+                }
+            }
+        }
+        // Its name and look.
+        Section {
+            if !isDay { Button(isUntitled ? "Add Title…" : "Rename…", systemImage: "character.cursor.ibeam") { startRenaming() } }
+            if isUntitled, !draft.isBlank { Button("Make First Line the Title", systemImage: "arrow.up") { withAnimation(.snappy(duration: 0.22)) { _ = draft.titleByFirstLine() } } }
+            if draft.exists { Button("Icon and Colour…", systemImage: "paintpalette") { choosesLook = true } }
+            if draft.exists { Button("Add Tag…", systemImage: "number") { addsTag = true } }
+            // Linked to today in its frontmatter: today's page lists it.
+            if !isDay {
+                let today = Days.name(Date())
+                Button(draft.isStamped(today) ? "Stamped with Today" : "Stamp with Today", systemImage: "calendar.badge.plus") { draft.stamp(today) }
+                    .disabled(draft.isStamped(today))
+            }
+        }
+        // Where it is.
+        Section {
+            if river.query == nil || !river.isFound(card.id) { MoveToRiverMenu(store: store, river: river, ids: [card.id]) }
             Button("Move to Top", systemImage: "arrow.up.to.line") {
                 withAnimation(.snappy(duration: 0.28)) { river.move(card.id, toPlace: 0) }
                 store.rememberRivers()
@@ -697,12 +708,23 @@ struct PhoneCard: View {
                 withAnimation(.snappy(duration: 0.28)) { river.move(card.id, toPlace: river.cards.count - 1) }
                 store.rememberRivers()
             }
-            Button("Close Others", systemImage: "rectangle.stack.badge.minus") { withAnimation(.snappy(duration: 0.28)) { store.closeAll(in: river, but: card.id) } }
-            Button("Close", systemImage: "xmark") { withAnimation(.snappy(duration: 0.28)) { store.close(card.id, in: river) } }
+            if river.query != nil {
+                if river.isFound(card.id) {
+                    Button("Keep at Top", systemImage: "pin.circle") { withAnimation(.snappy(duration: 0.28)) { river.hold(card.id) }; store.rememberRivers() }
+                } else {
+                    Button("Release to Query", systemImage: "arrow.uturn.down.circle") { withAnimation(.snappy(duration: 0.28)) { store.close(card.id, in: river) } }
+                }
+            }
         }
+        // Out of Weft.
         Section {
             Button("Copy Link", systemImage: "link") { UIPasteboard.general.string = "[[\(store.linkName(path: card.path, title: draft.title))]]" }
-            Button("Copy Contents", systemImage: "doc.on.doc") { UIPasteboard.general.string = draft.markdown }
+            if canRead || draft.exists && !isDay { Button("Copy Contents", systemImage: "doc.on.doc") { UIPasteboard.general.string = draft.markdown } }
+        }
+        // Put away.
+        Section {
+            Button(river.isFound(card.id) ? "Remove from River" : "Close", systemImage: "xmark") { withAnimation(.snappy(duration: 0.28)) { store.close(card.id, in: river) } }
+            Button("Close Others", systemImage: "rectangle.stack.badge.minus") { withAnimation(.snappy(duration: 0.28)) { store.closeAll(in: river, but: card.id) } }
         }
         if draft.exists {
             Button("Delete Note", systemImage: "trash", role: .destructive) { withAnimation(.snappy(duration: 0.28)) { store.delete(card.id, in: river) } }

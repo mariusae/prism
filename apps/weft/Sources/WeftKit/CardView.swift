@@ -627,8 +627,15 @@ struct CardView: View {
 
     // MARK: What can be done
 
+    /// The card's menu — from "…", and a right click — in the order the
+    /// phone's is: reading it; what the note is (a to-do, pinned, in the
+    /// inbox, archived); how it is shown; its name and look; where it is;
+    /// out of Weft; and last, putting it away.
     @ViewBuilder private var menu: some View {
-        Button(card.folded ? "Unfold" : "Fold", systemImage: card.folded ? "chevron.down" : "chevron.right") { fold() }
+        if canRead {
+            Button("Read", systemImage: "doc.richtext") { read() }
+            Divider()
+        }
         if draft.exists, !isDay {
             switch draft.task {
             case .none: Button("Make a To-Do", systemImage: "circle") { draft.setTask(.todo) }
@@ -639,28 +646,23 @@ struct CardView: View {
             Button(store.isPinned(card.path) ? "Unpin" : "Pin", systemImage: store.isPinned(card.path) ? "pin.slash" : "pin") { store.togglePinned(path: card.path, title: draft.title) }
             Button(store.isInInbox(card.path) ? "Out of the Inbox" : "Add to Inbox", systemImage: store.isInInbox(card.path) ? "tray.and.arrow.up" : "tray.and.arrow.down") { store.toggleInbox(path: card.path, title: draft.title) }
             Button(store.isArchived(card.path) ? "Unarchive" : "Archive", systemImage: store.isArchived(card.path) ? "archivebox.fill" : "archivebox") { withAnimation(.snappy(duration: 0.2)) { store.toggleArchived(path: card.path, title: draft.title, closing: card.id, in: river) } }
+            Divider()
         }
+        ShowAsMenu(draft: draft)
+        Button(card.folded ? "Unfold" : "Fold", systemImage: card.folded ? "chevron.down" : "chevron.right") { fold() }
         Divider()
         if !isDay { Button("Rename…", systemImage: "character.cursor.ibeam") { startRenaming() } }
         if isUntitled, !draft.isBlank { Button("Make First Line the Title", systemImage: "arrow.up") { withAnimation(.snappy(duration: 0.22)) { _ = draft.titleByFirstLine() } } }
         if draft.exists { Button("Icon and Colour…", systemImage: "paintpalette") { choosesLook = true } }
         if draft.exists { Button("Add Tag…", systemImage: "number") { addsTag = true } }
-        Button(draft.isProse ? "Show as Outline" : "Show as Prose", systemImage: draft.isProse ? "list.bullet.indent" : "text.alignleft") { draft.setProse(!draft.isProse) }
-        if river.query == nil || !river.isFound(card.id) { MoveToRiverMenu(store: store, river: river, ids: [card.id]) }
         if !isDay {
             let today = Days.name(Date())
             Button(draft.isStamped(today) ? "Stamped with Today" : "Stamp with Today", systemImage: "calendar.badge.plus") { draft.stamp(today) }
                 .keyboardShortcut("t", modifiers: [.command, .control])
                 .disabled(draft.isStamped(today))
         }
-        Button("Copy Link", systemImage: "link") { copy("[[\(store.linkName(path: card.path, title: draft.title))]]") }
-        Button("Copy Contents", systemImage: "doc.on.doc") { copy(draft.markdown) }
-        #if os(macOS)
-        Button("Show in Finder", systemImage: "folder") {
-            if let file = try? store.engine.absolutePath(path: card.path) { NSWorkspace.shared.activateFileViewerSelecting([URL(fileURLWithPath: file)]) }
-        }
-        #endif
         Divider()
+        if river.query == nil || !river.isFound(card.id) { MoveToRiverMenu(store: store, river: river, ids: [card.id]) }
         Button("Move to Top", systemImage: "arrow.up.to.line") {
             withAnimation(.snappy(duration: 0.28)) { river.move(card.id, toPlace: 0) }
             store.rememberRivers()
@@ -669,9 +671,6 @@ struct CardView: View {
             withAnimation(.snappy(duration: 0.28)) { river.move(card.id, toPlace: river.cards.count - 1) }
             store.rememberRivers()
         }
-        Button("Close Others", systemImage: "rectangle.stack.badge.minus") {
-            withAnimation(.snappy(duration: 0.28)) { store.closeAll(in: river, but: card.id) }
-        }
         if river.query != nil {
             if river.isFound(card.id) {
                 Button("Keep at Top", systemImage: "pin.circle") { withAnimation(.snappy(duration: 0.28)) { river.hold(card.id) }; store.rememberRivers() }
@@ -679,10 +678,30 @@ struct CardView: View {
                 Button("Release to Query", systemImage: "arrow.uturn.down.circle") { withAnimation(.snappy(duration: 0.28)) { river.close(card.id) }; store.rememberRivers() }
             }
         }
+        Divider()
+        Button("Copy Link", systemImage: "link") { copy("[[\(store.linkName(path: card.path, title: draft.title))]]") }
+        Button("Copy Contents", systemImage: "doc.on.doc") { copy(draft.markdown) }
+        Button("Show in Finder", systemImage: "folder") {
+            if let file = try? store.engine.absolutePath(path: card.path) { NSWorkspace.shared.activateFileViewerSelecting([URL(fileURLWithPath: file)]) }
+        }
+        Divider()
         Button(river.isFound(card.id) ? "Remove from River" : "Close", systemImage: "xmark") { close() }
+        Button("Close Others", systemImage: "rectangle.stack.badge.minus") {
+            withAnimation(.snappy(duration: 0.28)) { store.closeAll(in: river, but: card.id) }
+        }
         if draft.exists {
+            Divider()
             Button("Delete Note", systemImage: "trash", role: .destructive) { withAnimation(.snappy(duration: 0.28)) { store.delete(card.id, in: river) } }
         }
+    }
+
+    /// Whether the note has something to read: a page it keeps or links to, a PDF.
+    private var canRead: Bool { draft.exists && ReaderSource.any(in: draft.markdown, root: store.root) }
+
+    /// Read: on the Mac, the note's first page or PDF in the app that shows it.
+    private func read() {
+        guard let source = ReaderSource.all(in: draft.markdown, root: store.root).first else { return }
+        NSWorkspace.shared.open(source.url)
     }
 
     private func isFrontTag(_ tag: String) -> Bool {

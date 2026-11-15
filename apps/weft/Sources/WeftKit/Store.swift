@@ -1835,6 +1835,15 @@ public final class PageDraft {
     /// paragraphs. As it is written unless said otherwise, on this device:
     /// a look, kept apart from the note.
     public private(set) var isProse = false
+    /// How the note is said to be shown on this device: as it is written, or always one way.
+    public private(set) var shownAs: ShownAs = .automatic
+
+    public enum ShownAs: String, CaseIterable, Sendable {
+        /// Prose when the note reads as prose — paragraphs at its top level — else an outline.
+        case automatic
+        case outline
+        case prose
+    }
 
     /// The note as cards that show one row of it have it: each a note
     /// of its own, read from this one and focused there, good for as
@@ -1921,20 +1930,30 @@ public final class PageDraft {
 
     /// Prose or an outline, as said on this device — or, unsaid, as the note is written.
     private func chosenProse() -> Bool {
-        switch (try? store?.engine.localValue(name: "weft/prose/\(path)")) ?? nil {
-        case "prose": true
-        case "outline": false
-        default: editor.readsAsProse()
+        let said = (try? store?.engine.localValue(name: "weft/prose/\(path)")) ?? nil
+        shownAs = said.flatMap(ShownAs.init(rawValue:)) ?? .automatic
+        switch shownAs {
+        case .prose: return true
+        case .outline: return false
+        case .automatic: return editor.readsAsProse()
         }
     }
 
     /// Shows the note as prose, or as an outline; said for it on this
     /// device from now on. The note is not changed.
     public func setProse(_ prose: Bool) {
-        guard prose != isProse else { return }
-        isProse = prose
-        editor.setProse(prose: prose)
-        try? store?.engine.setLocalValue(name: "weft/prose/\(path)", value: prose ? "prose" : "outline")
+        show(as: prose ? .prose : .outline)
+    }
+
+    /// Shows the note as said — or, automatic, as it is written — on this device from now on. The note is not changed.
+    public func show(as shown: ShownAs) {
+        try? store?.engine.setLocalValue(name: "weft/prose/\(path)", value: shown == .automatic ? nil : shown.rawValue)
+        shownAs = shown
+        let prose = shown == .prose || (shown == .automatic && editor.readsAsProse())
+        if prose != isProse {
+            isProse = prose
+            editor.setProse(prose: prose)
+        }
         revision += 1
     }
 

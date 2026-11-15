@@ -111,7 +111,8 @@ public struct WeftMacApp: App {
                 Group {
                     format("Bullet", .bullet, "8", [.command, .shift])
                     Button("Checkbox") { _ = NoteTextView.writing?.run(.cycleChecklist) }
-                    Button("To-Do") { _ = NoteTextView.writing?.run(.toggleTask) }
+                    // ⇧⌘L, as a checklist is in Notes: the rows written in, or, written in nowhere, the note chosen.
+                    Button("To-Do") { toggleToDo() }.keyboardShortcut("l", modifiers: [.command, .shift])
                 }
             }
             CommandMenu("Outline") {
@@ -338,6 +339,19 @@ public struct WeftMacApp: App {
     private func fold(_ folded: Bool) {
         guard let river = store?.river, let selected = river.selected, let card = river.card(selected), card.folded != folded else { return }
         withAnimation(.snappy(duration: 0.22)) { river.toggleFold(selected) }
+    }
+
+    /// To-do or not: the rows being written in; or, with no card written in, the
+    /// chosen card's note itself — to-do, and back to a note (a done one, to a note too).
+    private func toggleToDo() {
+        if let text = NoteTextView.writing, text.window?.firstResponder === text {
+            if !text.run(.toggleTask) { NSSound.beep() }
+            return
+        }
+        guard let store, let id = store.river.selected, let card = store.river.card(id), !NotePath.isDay(card.path) else { return NSSound.beep() }
+        let draft = store.draft(path: card.path, title: card.title)
+        guard draft.exists else { return NSSound.beep() }
+        withAnimation(.snappy(duration: 0.2)) { draft.setTask(draft.task == .none ? .todo : .none) }
     }
 
     /// The first line of the card chosen — the one being written in, if one is — made its title.
