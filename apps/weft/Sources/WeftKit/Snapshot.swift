@@ -305,6 +305,19 @@ enum Snapshot {
                     notes[parts[1][0]].put(rows: [parts[0][1]], of: notes[parts[0][0]], before: parts[1][1], depth: parts[1][2])
                 }
             }
+            // WEFT_APP_CLICK=1: a click through the app, as one arrives — in the second note
+            // shown, at its first line — and which card is chosen before and after, said.
+            if let which = Int(environment["WEFT_APP_CLICK"] ?? ""), notes.indices.contains(which) {
+                @MainActor func chosen() -> String { store.river.selected.flatMap { store.river.card($0)?.title } ?? "none" }
+                print("chosen before: \(chosen())")
+                let place = notes[which].convert(NSPoint(x: 40, y: 12), to: nil)
+                for kind in [NSEvent.EventType.leftMouseDown, .leftMouseUp] {
+                    if let event = NSEvent.mouseEvent(with: kind, location: place, modifierFlags: [], timestamp: ProcessInfo.processInfo.systemUptime, windowNumber: window.windowNumber, context: nil, eventNumber: 0, clickCount: 1, pressure: 1) {
+                        NSApp.sendEvent(event)
+                    }
+                }
+                DispatchQueue.main.async { print("chosen after: \(chosen())") }
+            }
             // WEFT_CLICK="0:12,34": a click in the first note shown, at a point of its own.
             if let click = environment["WEFT_CLICK"] {
                 let parts = click.split(separator: ":")

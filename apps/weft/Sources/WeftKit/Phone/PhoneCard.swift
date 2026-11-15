@@ -235,6 +235,8 @@ struct PhoneCard: View {
             .shadow(color: .black.opacity(card.folded ? 0.02 : 0.045), radius: card.folded ? 4 : 10, y: card.folded ? 1 : 3)
             .contentShape(Rectangle())
             .simultaneousGesture(TapGesture().onEnded { river.selected = card.id })
+            // Held — for its menu, or to carry it — it is the card chosen too.
+            .simultaneousGesture(LongPressGesture(minimumDuration: 0.3).onEnded { _ in if river.selected != card.id { river.selected = card.id } })
             .modifier(CardSwipe(leading: leadingActions, trailing: trailingActions, enabled: !isWriting && !isRenaming))
             if showsDrawer, let focused {
                 focusDrawer(focused).transition(.scale(scale: 0.5, anchor: .top).combined(with: .opacity))

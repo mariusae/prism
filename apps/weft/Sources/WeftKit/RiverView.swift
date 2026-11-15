@@ -21,6 +21,8 @@ struct RiverView: View {
     @State private var carried: Card.ID?
     /// How far down the window's bar reaches over the river.
     @State private var barDepth: CGFloat = 52
+    /// Where each card is in the window: a click on any of it — its words, a link, a button — chooses it.
+    @State private var touches = CardTouches()
     /// Where the river was read to, kept and gone back to.
     @State private var scroll = RiverScroll()
     @State private var position = ScrollPosition()
@@ -72,6 +74,7 @@ struct RiverView: View {
                         ForEach(river.all) { card in
                             CardView(store: store, river: river, card: card)
                                 .onGeometryChange(for: CGFloat.self) { $0.size.height.rounded() } action: { heights[card.id] = $0 }
+                                .onGeometryChange(for: CGRect.self) { $0.frame(in: .global) } action: { touches.frames[card.id] = $0 }
                                 .onGeometryChange(for: CGRect.self) { $0.frame(in: .scrollView) } action: { frame in
                                     place(card.id, at: frame)
                                     scroll.saw(card, at: frame, in: river)
@@ -84,7 +87,10 @@ struct RiverView: View {
                                 }
                                 // Let go of by the lazy stack — scrolled far past, or jumped over —
                                 // a card may never be told it is out of sight: gone, it is.
-                                .onDisappear { showing.remove(card.id) }
+                                .onDisappear {
+                                    showing.remove(card.id)
+                                    touches.frames[card.id] = nil
+                                }
                                 .opacity(carried == card.id ? 0.45 : 1)
                                 // Picked up by anything of it that is not its words, and
                                 // carried: the others make room as it passes over them.
@@ -130,7 +136,11 @@ struct RiverView: View {
                 scroll.restore(river, proxy: proxy, position: $position)
             }
             .onScrollPhaseChange { _, phase in if phase == .idle { store.rememberRiversSoon() } }
-            .onGeometryChange(for: CGFloat.self) { $0.safeAreaInsets.top } action: { barDepth = $0 }
+            .onGeometryChange(for: CGFloat.self) { $0.safeAreaInsets.top } action: { barDepth = $0; touches.bar = $0 }
+            .onGeometryChange(for: CGRect.self) { $0.frame(in: .global) } action: { touches.sight = $0 }
+            .background(WindowCatcher { touches.window = $0 })
+            .onAppear { touches.start { id in if river.selected != id { river.selected = id } } }
+            .onDisappear { touches.stop() }
             // A card closed, or the river left: no card's title stays in the bar.
             .onChange(of: river.all.map(\.id)) { _, ids in
                 if let stuck = river.stuck, !ids.contains(stuck) { river.stuck = nil }
@@ -441,5 +451,57 @@ struct CardMove: DropDelegate {
 
     func dropExited(info: DropInfo) {}
 }
-#endif
+/// Each card's place in the window, and a watch on the window's clicks:
+/// one anywhere on a card — its words, a link, a box, a button, its menu —
+/// makes it the card chosen, before whatever was clicked does its part.
+@MainActor
+final class CardTouches {
+    var frames: [Card.ID: CGRect] = [:]
+    /// The river's sight in the window, and how much of its top the bar covers.
+    var sight: CGRect = .zero
+    var bar: CGFloat = 0
+    weak var window: NSWindow?
+    private var monitor: Any?
 
+    func start(_ choose: @escaping (Card.ID) -> Void) {
+        stop()
+        monitor = NSEvent.addLocalMonitorForEvents(matching: [.leftMouseDown, .rightMouseDown, .otherMouseDown]) { [weak self] event in
+            guard let self, let window = self.window, event.window === window, let content = window.contentView else { return event }
+            // From the window's foot, as AppKit counts, to its top, as the river's frames are.
+            let point = CGPoint(x: event.locationInWindow.x, y: content.bounds.height - event.locationInWindow.y)
+            guard self.sight.contains(point), point.y > self.sight.minY + self.bar else { return event }
+            if let hit = self.frames.first(where: { $0.value.contains(point) })?.key { choose(hit) }
+            return event
+        }
+    }
+
+    func stop() {
+        if let monitor { NSEvent.removeMonitor(monitor) }
+        monitor = nil
+    }
+}
+
+/// Says which window a view is in, once it is in one.
+struct WindowCatcher: NSViewRepresentable {
+    var found: (NSWindow?) -> Void
+
+    final class Catcher: NSView {
+        var found: (NSWindow?) -> Void = { _ in }
+        override func viewDidMoveToWindow() {
+            super.viewDidMoveToWindow()
+            found(window)
+        }
+    }
+
+    func makeNSView(context: Context) -> Catcher {
+        let view = Catcher()
+        view.found = found
+        return view
+    }
+
+    func updateNSView(_ view: Catcher, context: Context) {
+        view.found = found
+    }
+}
+
+#endif
