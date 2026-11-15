@@ -527,7 +527,7 @@ struct CardView: View {
                 // out — not a number that arrives a frame later and moves
                 // everything under it.
                 .fixedSize(horizontal: false, vertical: true)
-                .id(isFocus ? "focus" : "\(draft.mode)")
+                .id(isFocus ? "focus" : "note")
                 // A to-do done is set back: there, and no longer asking.
                 .opacity(draft.task == .done ? 0.5 : 1)
             }

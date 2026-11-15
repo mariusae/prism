@@ -89,7 +89,7 @@ extension GraphStore {
         // A page shared again is the note it was given then: its file is called by the same title, and says the same address.
         let first = "notes/\(slug(title: title)).md"
         if let known = (try? engine.read(path: first)) ?? nil, known.contains(page.url) {
-            let editor = NoteEditor.open(source: known, mode: .outline)
+            let editor = NoteEditor.open(source: known)
             let related = editor.fields().first { $0.key == "related" }?.values ?? []
             if !related.contains(where: { nameKey(name: $0.trimmingCharacters(in: CharacterSet(charactersIn: "[] "))) == nameKey(name: day) }) {
                 editor.setListField(key: "related", values: related + [day])
@@ -159,7 +159,7 @@ enum LinkNote {
             rows.append("  - " + selected.joined(separator: " "))
         }
         let source = "---\nid: \"\(id(for: page.url))\"\nicon: link\n---\n\n# \(title)\n\n" + rows.joined(separator: "\n") + "\n"
-        let editor = NoteEditor.open(source: source, mode: .outline)
+        let editor = NoteEditor.open(source: source)
         editor.setListField(key: "related", values: [day])
         return editor.markdown()
     }

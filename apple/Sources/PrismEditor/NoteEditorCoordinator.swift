@@ -20,8 +20,7 @@ extension NoteEditorView {
         weak var view: NoteTextView?
         /// What the editor shows, as the view last agreed it with it.
         private(set) var shown = ""
-        var shownMode: EditorMode = .text
-        private(set) var layout = BodyLayout(lines: [], runs: [], markersInText: true)
+        private(set) var layout = BodyLayout(lines: [], runs: [])
         private var revealed = Set<Int>()
         private(set) var isApplying = false
 
@@ -73,7 +72,6 @@ extension NoteEditorView {
         func load() {
             guard let view, let storage = view.noteStorage else { return }
             shown = editor.text()
-            shownMode = editor.mode()
             if storage.string != shown {
                 isApplying = true
                 let caret = min(view.caret.location, (shown as NSString).length)
@@ -111,15 +109,16 @@ extension NoteEditorView {
         func restyle() {
             guard let view, let storage = view.noteStorage, let manager = view.noteLayout as? BodyLayoutManager else { return }
             var styler = BodyStyler(theme: parent.theme, pageExists: parent.pageExists, linkLabel: parent.linkLabel, linkIcon: parent.linkIcon)
+            // A row's own Markdown: the view shows its words, not how they are written.
+            let editor = self.editor
+            styler.rowMarkdown = { row in editor.rowMarkdown(row: UInt32(row)) }
             styler.pageArchived = parent.pageArchived
             layout = editor.layout()
             let writing = view.isWriting
             revealed = writing ? BodyStyler.revealed(layout, selection: view.caret) : []
-            let outline = !layout.markersInText
             isApplying = true
             manager.theme = parent.theme
-            manager.lines = outline ? layout.lines : []
-            manager.isOutline = outline
+            manager.lines = layout.lines
             manager.isWriting = writing
             manager.lead = parent.lead
             if let first = layout.lines.first, case .item(let number, let done, _) = first.kind, number == nil, done == nil, first.depth <= 1 {
@@ -130,7 +129,7 @@ extension NoteEditorView {
             styler.style(storage, layout: layout, revealed: revealed)
             let replaced = placeBlocks(in: view, storage: storage)
             // A row an app's view stands in place of has no mark of its own to draw.
-            manager.rows = layout.markersInText ? [] : layout.lines.enumerated().filter { !replaced.contains($0.offset) }.map(\.element)
+            manager.rows = layout.lines.enumerated().filter { !replaced.contains($0.offset) }.map(\.element)
             view.typingAttributes = typingAttributes(styler)
             isApplying = false
             view.redraw()
@@ -190,49 +189,41 @@ extension NoteEditorView {
             var found: [(EditorBlock, ClosedRange<Int>, NSRange)] = []
             among = [:]
             let part = { (range: NSRange) in text.substring(with: range) }
-            if layout.markersInText {
-                var opened: Int?
-                for (index, line) in layout.lines.enumerated() where line.kind == .fence {
-                    guard let start = opened else {
-                        opened = index
-                        continue
-                    }
-                    opened = nil
-                    let first = layout.lines[start]
-                    let info = part(NSRange(location: Int(first.content), length: Int(first.end - first.content))).trimmingCharacters(in: CharacterSet(charactersIn: "`~ "))
-                    let bodyStart = min(Int(first.end) + 1, Int(line.start))
-                    let source = part(NSRange(location: bodyStart, length: max(Int(line.start) - bodyStart - 1, 0)))
-                    found.append((EditorBlock(info: info, source: source), start...index, NSRange(location: Int(first.start), length: Int(line.end - first.start))))
-                }
-            } else {
-                // In an outline a block of code is one row, its lines parted by U+2028.
-                for (index, line) in layout.lines.enumerated() where line.kind == .code {
-                    let range = NSRange(location: Int(line.start), length: Int(line.end - line.start))
-                    let parts = part(range).components(separatedBy: "\u{2028}")
-                    guard parts.count >= 2, let first = parts.first else { continue }
-                    let info = first.trimmingCharacters(in: CharacterSet(charactersIn: "`~ "))
-                    found.append((EditorBlock(info: info, source: parts.dropFirst().dropLast().joined(separator: "\n")), index...index, range))
-                }
+            // A block of code is one row, its lines parted by U+2028.
+            for (index, line) in layout.lines.enumerated() where line.kind == .code {
+                let range = NSRange(location: Int(line.start), length: Int(line.end - line.start))
+                let parts = part(range).components(separatedBy: "\u{2028}")
+                guard parts.count >= 2, let first = parts.first else { continue }
+                let info = first.trimmingCharacters(in: CharacterSet(charactersIn: "`~ "))
+                found.append((EditorBlock(info: info, source: parts.dropFirst().dropLast().joined(separator: "\n")), index...index, range))
             }
             // A row shown as the card of its link, its words a link alone: the card, in its place.
             var cards = Set<Int>()
+            // What a row is written as: its Markdown — the view shows only its words.
+            let written = { (index: Int, _: NSRange) -> String in
+                self.editor.rowMarkdown(row: UInt32(index)) ?? ""
+            }
             for (index, line) in layout.lines.enumerated() where line.isCard {
                 let range = NSRange(location: Int(line.content), length: max(Int(line.end) - Int(line.content), 0))
-                guard NSMaxRange(range) <= text.length, let link = EditorBlock.cardLink(part(range)) else { continue }
+                guard NSMaxRange(range) <= text.length, let link = EditorBlock.cardLink(written(index, range)) else { continue }
                 cards.insert(index)
                 found.append((EditorBlock(info: EditorBlock.card, source: link), index...index, NSRange(location: Int(line.start), length: Int(line.end - line.start))))
             }
-            // A line that is only pictures — one, or several — in either mode.
+            // A row that is only pictures — one, or several.
             for (index, line) in layout.lines.enumerated() where line.kind != .fence && line.kind != .code && !cards.contains(index) {
                 let range = NSRange(location: Int(line.content), length: max(Int(line.end) - Int(line.content), 0))
-                guard range.length > 4, NSMaxRange(range) <= text.length else { continue }
-                let words = part(range)
+                guard range.length > 0, NSMaxRange(range) <= text.length else { continue }
+                let words = written(index, range)
                 guard words.contains("![") else { continue }
                 guard EditorPicture.all(line: words) != nil else {
                     // Pictures among words: the words stay, and the pictures are shown under them.
                     let pictures = EditorPicture.among(line: words)
                     guard !pictures.isEmpty else { continue }
-                    among[index] = pictures.map { NSRange(location: range.location + $0.range.location, length: $0.range.length) }
+                    // Where they are in the view: each one character, as its run says.
+                    among[index] = layout.runs.filter { run in
+                        guard case .image = run.kind else { return false }
+                        return Int(run.start) >= range.location && Int(run.end) <= NSMaxRange(range)
+                    }.map { NSRange(location: Int($0.start), length: Int($0.end - $0.start)) }
                     found.append((EditorBlock(info: EditorBlock.picture, source: pictures.map(\.picture.line).joined(separator: " ")), index...index, NSRange(location: Int(line.start), length: Int(line.end - line.start))))
                     continue
                 }
@@ -340,7 +331,7 @@ extension NoteEditorView {
             if let line = layout.lines.first(where: { Int($0.start) <= caret && caret <= Int($0.end) }) {
                 let at = min(Int(line.start), max(storage.length - 1, 0))
                 if storage.length > 0, let style = storage.attribute(.paragraphStyle, at: at, effectiveRange: nil) { attributes[.paragraphStyle] = style }
-                if !layout.markersInText, case .item = line.kind, storage.length == Int(line.start) || line.start == line.end {
+                if case .item = line.kind, storage.length == Int(line.start) || line.start == line.end {
                     // An empty row has no character to carry its indentation.
                     let paragraph = NSMutableParagraphStyle()
                     paragraph.lineSpacing = 3
@@ -441,14 +432,14 @@ extension NoteEditorView {
         /// The row the caret is in: its place among the note's lines.
         /// `nil` for a note shown as text.
         var caretRow: Int? {
-            guard let view, !layout.markersInText else { return nil }
+            guard let view else { return nil }
             let caret = view.caret.location
             return layout.lines.lastIndex { Int($0.start) <= caret }
         }
 
         /// Whether a row of the outline is a list's: one that can have rows under it.
         func isListRow(_ row: Int) -> Bool {
-            guard !layout.markersInText, layout.lines.indices.contains(row), case .item = layout.lines[row].kind else { return false }
+            guard layout.lines.indices.contains(row), case .item = layout.lines[row].kind else { return false }
             return true
         }
 
@@ -498,11 +489,9 @@ extension NoteEditorView {
         /// Of a row of an outline that is a link alone — and so can be shown
         /// as the link's card — whether it is shown so; nil for any other row.
         func linkRowIsCard(_ row: Int) -> Bool? {
-            guard !layout.markersInText, layout.lines.indices.contains(row) else { return nil }
+            guard layout.lines.indices.contains(row) else { return nil }
             let line = layout.lines[row]
-            let text = shown as NSString
-            let range = NSRange(location: Int(line.content), length: max(Int(line.end) - Int(line.content), 0))
-            guard NSMaxRange(range) <= text.length, EditorBlock.cardLink(text.substring(with: range)) != nil else { return nil }
+            guard let written = editor.rowMarkdown(row: UInt32(row)), EditorBlock.cardLink(written) != nil else { return nil }
             return line.isCard
         }
 

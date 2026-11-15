@@ -11,17 +11,14 @@
 //!
 //! # Two ways of showing one tree
 //!
-//! - **[`Mode::Outline`]**: a row a block. The view holds each block's
-//!   words and nothing else; what kind of block it is — a bullet, a task,
-//!   a heading — and how deep, is for the view to draw beside them. Return
-//!   splits a block, Tab puts it under the one before, and every such
-//!   command is an operation on the tree ([`crate::outline`]).
-//! - **[`Mode::Text`]**: the body as its Markdown. The view holds the
-//!   text of the file; a change to it is read back into the tree.
-//!
-//! They are the same note, and going from one to the other changes no
-//! byte of it: a session's [`markdown`](Session::markdown) is the file,
-//! and what was not edited is written as it was read.
+//! A note is shown as rows, a row a block, as Bike shows an outline. The
+//! view holds each block's words as they read — rich text, never its
+//! Markdown ([`crate::rich`]); what kind of block it is — a bullet, a
+//! task, a heading — and how deep, is for the view to draw beside them.
+//! Return splits a block, Tab puts it under the one before, and every
+//! such command is an operation on the tree ([`crate::outline`]). A
+//! session's [`markdown`](Session::markdown) is the file, and what was
+//! not edited is written as it was read.
 //!
 //! Offsets are bytes of the projection. In an outline, a line break
 //! *inside* a block — a paragraph of two lines, a code block — is shown
@@ -33,17 +30,9 @@ use crate::frontmatter::Frontmatter;
 use crate::inline;
 use crate::note::name_key;
 use crate::outline::{self, Path};
+use crate::rich::{AtomKind, Mark, Rich};
 use crate::river::FoldedRow;
 use std::ops::Range;
-
-/// How a session shows its body.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Mode {
-    /// The body's Markdown, as the file has it.
-    Text,
-    /// A row a block: its words, with what it is drawn beside them.
-    Outline,
-}
 
 /// What a view should do after the session changed: replace a range of
 /// what it shows, and put the selection somewhere.
@@ -73,7 +62,6 @@ pub struct Session {
     /// apart, since a card shows the title on its own.
     heading: String,
     body: Document,
-    mode: Mode,
     /// What the view shows.
     text: String,
     /// In an outline: each row's block, and where its words are.
@@ -92,6 +80,9 @@ pub struct Session {
     /// — with what was typed and the kind it was: Delete straight after
     /// gives the typed characters back, as Bike's does.
     typed_kind: Option<(Path, String, BlockKind)>,
+    /// Styles put on — or off — with nothing chosen: what is typed next at
+    /// that place takes them, as Bike's typing attributes.
+    pending: Option<(usize, Vec<Mark>)>,
 }
 
 /// What a focused session is not showing: the whole body — but for the
@@ -105,14 +96,13 @@ struct Outer {
 
 impl Session {
     /// Opens a note's file.
-    pub fn new(source: &str, mode: Mode) -> Session {
+    pub fn new(source: &str) -> Session {
         let (frontmatter, rest) = Frontmatter::split(source);
         let heading_len = heading_len(rest);
         let mut session = Session {
             frontmatter,
             heading: rest[..heading_len].to_owned(),
             body: read_marks(Document::parse(&rest[heading_len..])),
-            mode,
             text: String::new(),
             rows: Vec::new(),
             undone: Vec::new(),
@@ -120,6 +110,7 @@ impl Session {
             typing: None,
             outer: None,
             typed_kind: None,
+            pending: None,
         };
         session.project();
         session
@@ -129,21 +120,6 @@ impl Session {
     pub fn markdown(&self) -> String {
         let front = self.frontmatter.as_ref().map(ToString::to_string).unwrap_or_default();
         format!("{front}{}{}", self.heading, written_marks(&self.whole()).to_markdown())
-    }
-
-    pub fn mode(&self) -> Mode {
-        self.mode
-    }
-
-    /// Shows the body another way. The note is not changed. (What was
-    /// done before cannot be undone after: its selections were of the
-    /// other showing.)
-    pub fn set_mode(&mut self, mode: Mode) {
-        self.mode = mode;
-        self.undone.clear();
-        self.redone.clear();
-        self.typing = None;
-        self.project();
     }
 
     // --- Undoing ---------------------------------------------------------------
@@ -298,9 +274,8 @@ impl Session {
 
     fn project(&mut self) {
         self.rows.clear();
-        match self.mode {
-            Mode::Text => self.text = self.body.to_markdown(),
-            Mode::Outline => {
+        {
+            {
                 // A row with nothing left under it has nothing folded.
                 fn tidy(blocks: &mut [Block]) {
                     for block in blocks {
@@ -316,7 +291,9 @@ impl Session {
                         text.push('\n');
                     }
                     let start = text.len();
-                    text.extend(block.text.chars().map(|c| if c == '\n' { SOFT_BREAK } else { c }));
+                    // A row's words as they read: its Markdown never in the view.
+                    let words = if is_rich(block) { Rich::parse(&block.text).text } else { block.text.clone() };
+                    text.extend(words.chars().map(|c| if c == '\n' { SOFT_BREAK } else { c }));
                     self.rows.push(RowSpan { path, range: start..text.len() });
                 }
                 self.text = text;
@@ -325,13 +302,12 @@ impl Session {
     }
 
     /// What the view shows, read for drawing: each line and what it is,
-    /// each run and what it means. In an outline a line is a row, and its
-    /// marker is not in the text: [`Layout::markers_in_text`] says which.
+    /// each run and what it means. A line is a row, and its marker is
+    /// not in the text: its kind says what to draw beside it.
     pub fn layout(&self) -> Layout {
-        match self.mode {
-            Mode::Text => editor::layout(&self.text),
-            Mode::Outline => {
-                let mut layout = Layout { lines: Vec::with_capacity(self.rows.len()), runs: Vec::new(), markers_in_text: false };
+        {
+            {
+                let mut layout = Layout { lines: Vec::with_capacity(self.rows.len()), runs: Vec::new() };
                 for row in &self.rows {
                     let Some(block) = self.body.get(&row.path) else { continue };
                     let (kind, depth) = match &block.kind {
@@ -350,7 +326,9 @@ impl Session {
                         BlockKind::Table => (LineKind::Table, row.path.len()),
                         BlockKind::Rule => (LineKind::Rule, row.path.len()),
                     };
-                    if block.has_inline_content() {
+                    if is_rich(block) {
+                        rich_runs(&Rich::parse(&block.text), row.range.start, &mut layout.runs);
+                    } else if block.has_inline_content() {
                         editor::read_inline(&self.text, row.range.clone(), &mut layout.runs);
                     }
                     layout.lines.push(Line { range: row.range.clone(), kind, indent: 0, content: row.range.start, depth });
@@ -384,46 +362,7 @@ impl Session {
     }
 
     fn replace_now(&mut self, range: Range<usize>, replacement: &str) -> Change {
-        match self.mode {
-            Mode::Text => {
-                let mut text = self.text.clone();
-                text.replace_range(range.clone(), replacement);
-                self.read(text);
-                let caret = range.start + replacement.len();
-                Change { range, replacement: replacement.to_owned(), selection: caret..caret }
-            }
-            Mode::Outline => self.replace_rows(range, replacement),
-        }
-    }
-
-    /// As text: the body read again from what the view now shows. What
-    /// was folded is folded still, for when it is shown as an outline.
-    fn read(&mut self, text: String) {
-        let folds = self.folded_rows();
-        // The rows with names of their own keep them, found again as folds are.
-        let named: Vec<(FoldedRow, String)> = self
-            .body
-            .rows()
-            .iter()
-            .enumerate()
-            .filter_map(|(index, row)| Some((FoldedRow { index, text: row.block.text.clone() }, row.block.anchor.clone()?)))
-            .collect();
-        self.body = read_marks(Document::parse(&text));
-        self.text = text;
-        if !folds.is_empty() {
-            self.fold(&folds);
-        }
-        for (row, name) in named {
-            let all = self.body.rows();
-            let fits =
-                |at: usize| all.get(at).is_some_and(|found| found.block.text == row.text && found.block.anchor.is_none() && found.block.can_have_children());
-            let at = if fits(row.index) { Some(row.index) } else { (0..all.len()).filter(|at| fits(*at)).min_by_key(|at| at.abs_diff(row.index)) };
-            let path = at.map(|at| all[at].path.clone());
-            drop(all);
-            if let Some(block) = path.and_then(|path| self.body.get_mut(&path)) {
-                block.anchor = Some(name);
-            }
-        }
+        self.replace_rows(range, replacement)
     }
 
     /// Carries out a command. `None` when it has nothing to do there, and
@@ -463,17 +402,7 @@ impl Session {
     }
 
     fn perform_now(&mut self, selection: Range<usize>, rows: Option<&[usize]>, command: Command) -> Option<Change> {
-        match self.mode {
-            Mode::Text => {
-                if rows.is_some() {
-                    return None;
-                }
-                let edit = editor::perform(&self.text, selection, command)?;
-                self.read(edit.apply(&self.text));
-                Some(Change { range: edit.range, replacement: edit.replacement, selection: edit.selection })
-            }
-            Mode::Outline => self.perform_rows(selection, rows, command),
-        }
+        self.perform_rows(selection, rows, command)
     }
 
     /// Links the words selected to an address — `[words](address)` — or,
@@ -484,21 +413,28 @@ impl Session {
     pub fn link(&mut self, selection: Range<usize>, address: &str) -> Option<Change> {
         let address = inline::address(address)?.to_owned();
         self.undoably(selection, |session, selection| {
-            // The line of the view the selection is on, which is all that changes.
-            let start = session.text[..selection.start].rfind('\n').map_or(0, |at| at + 1);
-            let end = selection.start + session.text[selection.start..].find('\n').unwrap_or(session.text.len() - selection.start);
-            if selection.end > end {
-                return None;
-            }
-            if session.mode == Mode::Outline
-                && !session.rows.get(session.row_at(selection.start)).and_then(|row| session.body.get(&row.path)).is_some_and(Block::has_inline_content)
             {
-                return None;
+                // The words chosen in a row, linked: a link mark on them.
+                let index = session.row_at(selection.start);
+                let row = session.rows.get(index)?.clone();
+                if selection.is_empty() || selection.end > row.range.end || !session.body.get(&row.path).is_some_and(is_rich) {
+                    return None;
+                }
+                let before = session.text.clone();
+                let view = &session.text[row.range.clone()];
+                let (a, b) = (rich_offset(view, selection.start - row.range.start), rich_offset(view, selection.end - row.range.start));
+                let block = session.body.get_mut(&row.path)?;
+                let mut words = words_of(block);
+                if inline::address(&words.text[a..b]).is_some() {
+                    return None;
+                }
+                // Brackets and spaces in an address would end its Markdown early.
+                let target = address.trim().replace(' ', "%20").replace('(', "%28").replace(')', "%29");
+                words.link(a..b, &target);
+                set_words(block, &words);
+                let caret = view_offset(&words.text, b);
+                Some(session.changed(before, (row.path, caret), None))
             }
-            let (linked, caret) = inline::link_to(&session.text[start..end], selection.start - start..selection.end - start, &address)?;
-            let mut change = session.replace_now(start..end, &linked);
-            change.selection = start + caret..start + caret;
-            Some(change)
         })
     }
 
@@ -550,9 +486,20 @@ impl Session {
             self.project();
         }
         let (first, last) = (self.row_at(range.start), self.row_at(range.end));
-        let prefix = self.text[self.rows[first].range.start..range.start].to_owned();
-        let suffix = self.text[range.end..self.rows[last].range.end].to_owned();
         let mut path = self.rows[first].path.clone();
+        // The range as places in the first and last rows' words.
+        let start = rich_offset(&self.text[self.rows[first].range.clone()], range.start - self.rows[first].range.start);
+        let end = rich_offset(&self.text[self.rows[last].range.clone()], range.end - self.rows[last].range.start);
+        let first_words = self.body.get(&path).map(words_of).unwrap_or_default();
+        let mut tail = self.body.get(&self.rows[last].path).map(words_of).unwrap_or_default();
+        let tail = tail.split_off(end);
+        // What is typed takes the marks of the words it joins — or those just put on there.
+        let pending = self.pending.take().filter(|(at, _)| *at == range.start && range.is_empty()).map(|(_, marks)| marks);
+        let within = first == last && start < end;
+        let marks = pending.unwrap_or_else(|| if within { first_words.marks_over(start..end) } else { first_words.marks_at(start) });
+        let mut words = first_words;
+        words.split_off(start);
+        let prefix = words.text.clone();
 
         // The rows after the first that the range reaches into are joined onto it.
         for row in first + 1..=last {
@@ -572,29 +519,35 @@ impl Session {
         }
 
         let splits = self.body.get(&path).is_some_and(Block::splits);
-        let written = format!("{prefix}{replacement}{suffix}");
         // Inside a block that is one piece, a line break stays inside it.
-        let pieces: Vec<&str> = if splits { written.split('\n').collect() } else { vec![written.as_str()] };
         let own = |piece: &str| piece.replace(SOFT_BREAK, "\n");
-        if let Some(block) = self.body.get_mut(&path) {
-            block.text = if splits { own(pieces[0]) } else { own(&written).replace('\r', "") };
+        let pieces: Vec<String> = if splits { replacement.split('\n').map(own).collect() } else { vec![own(replacement).replace('\r', "")] };
+        let rich = self.body.get(&path).is_some_and(is_rich);
+        let piece_words = |piece: &str| if rich { inserted(piece) } else { Rich::plain(piece) };
+        let at = words.text.len();
+        words.replace(at..at, &piece_words(&pieces[0]), Some(marks));
+        let mut caret_words = words.text.len();
+        if pieces.len() == 1 {
+            words.append(&tail);
         }
-        for piece in &pieces[1..] {
+        if let Some(block) = self.body.get_mut(&path) {
+            set_words(block, &words);
+        }
+        for (index, piece) in pieces.iter().enumerate().skip(1) {
             let end = self.body.get(&path).map_or(0, |block| block.text.len());
-            // What a folded row hides stays under it: the row after it comes after them.
-            let hidden = self.body.get_mut(&path).filter(|block| block.folded).map(|block| std::mem::take(&mut block.children));
-            let next = outline::split(&mut self.body, &path, end);
-            if let (Some(hidden), Some(block)) = (hidden, self.body.get_mut(&path)) {
-                block.children = hidden;
+            let Some(next) = outline::split(&mut self.body, &path, end) else { break };
+            let mut next_words = piece_words(piece);
+            caret_words = next_words.text.len();
+            if index == pieces.len() - 1 {
+                next_words.append(&tail);
             }
-            let Some(next) = next else { break };
             if let Some(block) = self.body.get_mut(&next) {
-                block.text = own(piece);
+                set_words(block, &next_words);
             }
             path = next;
+            words = next_words;
         }
-        let last_piece = pieces.last().copied().unwrap_or("");
-        let mut caret = (path.clone(), last_piece.len() - suffix.len().min(last_piece.len()));
+        let mut caret = (path.clone(), view_offset(&words.text, caret_words));
 
         // A marker typed at a row's start makes the row that kind. What was
         // typed is a step of its own to undo, as is Delete straight after it.
@@ -603,7 +556,7 @@ impl Session {
                 let literal = (self.body.clone(), self.rows[first].range.start + prefix.len() + 1..self.rows[first].range.start + prefix.len() + 1);
                 let was = self.body.get(&path).map(|block| block.kind.clone());
                 if let Some(block) = self.body.get_mut(&path) {
-                    block.text = own(&suffix);
+                    set_words(block, &tail);
                 }
                 outline::set_kind(&mut self.body, &path, kind);
                 self.undone.push(literal);
@@ -702,9 +655,20 @@ impl Session {
             let at = self.row_at(selection.start);
             let path = self.rows[at].path.clone();
             let next = self.rows.get(at + 1)?.path.clone();
-            let caret = own_offset(&self.text[self.rows[at].range.clone()], selection.start - self.rows[at].range.start);
+            let caret = selection.start - self.rows[at].range.start;
+            let (mut words, next_words) = (words_of(self.body.get(&path)?), words_of(self.body.get(&next)?));
             let (onto, _) = outline::join_next(&mut self.body, &path, &next)?;
-            let caret = shown_offset(&self.body.get(&onto)?.text, caret);
+            // The words joined as words: a space between, unless either has none to need.
+            if !words.text.is_empty()
+                && !next_words.text.is_empty()
+                && !words.text.ends_with(char::is_whitespace)
+                && !next_words.text.starts_with(char::is_whitespace)
+            {
+                let at = words.text.len();
+                words.replace(at..at, &Rich::plain(" "), Some(Vec::new()));
+            }
+            words.append(&next_words);
+            set_words(self.body.get_mut(&onto)?, &words);
             Some(self.changed(before.to_owned(), (onto, caret), None))
         })();
         Some(done)
@@ -761,16 +725,17 @@ impl Session {
                     }
                     return Some(self.changed(before, (path, 0), None));
                 }
-                let offset = own_offset(&self.text[self.rows[first].range.clone()], start.1);
-                let at_end = offset == block.text.len();
+                let words = words_of(block);
+                let offset = rich_offset(&self.text[self.rows[first].range.clone()], start.1);
+                let at_end = offset == words.text.len();
                 // Return after a fence — ``` or ```rust — and nothing else: the row
                 // is a code block, and the caret is on the line between its fences.
                 let fenced = at_end
                     && block.children.is_empty()
                     && matches!(kind, BlockKind::Paragraph | BlockKind::Item(_))
-                    && block.text.strip_prefix("```").is_some_and(|info| !info.contains(['`', '\n']));
+                    && words.text.strip_prefix("```").is_some_and(|info| !info.contains(['`', '\n']));
                 if fenced {
-                    let fence = block.text.clone();
+                    let fence = words.text.clone();
                     outline::set_kind(&mut self.body, &path, BlockKind::Code);
                     let code = format!("{fence}\n\n```");
                     let caret = shown_offset(&code, fence.len() + 1);
@@ -782,26 +747,31 @@ impl Session {
                     let below = outline::open_above(&mut self.body, &path)?;
                     return Some(self.changed(before, (below, 0), None));
                 }
-                // What a folded row hides stays under it: the new row comes after them.
-                let next = outline::split(&mut self.body, &path, offset);
-                Some(self.changed(before, (next?, 0), None))
+                // The words split as words: the first half stays, the second goes to the new row.
+                // (What a folded row hides stays under it: the new row comes after them.)
+                let mut head = words;
+                let tail = head.split_off(offset);
+                set_words(self.body.get_mut(&path)?, &head);
+                let end = self.body.get(&path)?.text.len();
+                let next = outline::split(&mut self.body, &path, end)?;
+                set_words(self.body.get_mut(&next)?, &tail);
+                Some(self.changed(before, (next, 0), None))
             }
             Command::DeleteBackward => {
                 if !collapsed {
                     return None;
                 }
                 if start.1 != 0 {
-                    // Just after a picture: the picture, whole.
-                    let row = self.rows[first].range.clone();
-                    let picture =
-                        inline::picture_before(&self.text[row.clone()], start.1).filter(|_| self.body.get(&path).is_some_and(Block::has_inline_content))?;
-                    return Some(self.replace_rows(row.start + picture.start..row.start + picture.end, ""));
+                    // Inside a row, the view's own: a picture is one character, and goes whole.
+                    return None;
                 }
                 // Straight after a kind was made by typing: what was typed, back as words.
                 if let Some((typed_path, typed, was)) = self.typed_kind.take().filter(|(typed_path, _, _)| *typed_path == path) {
                     outline::set_kind(&mut self.body, &typed_path, was);
                     let block = self.body.get_mut(&typed_path)?;
-                    block.text.insert_str(0, &typed);
+                    let mut words = words_of(block);
+                    words.replace(0..0, &Rich::plain(&typed), Some(Vec::new()));
+                    set_words(block, &words);
                     return Some(self.changed(before, (typed_path, typed.len()), None));
                 }
                 match kind {
@@ -836,12 +806,13 @@ impl Session {
                     // words go on the code's last line, inside the fence.
                     _ => {
                         let onto = self.rows.get(first.checked_sub(1)?)?.path.clone();
+                        let (onto_words, row_words) = (self.body.get(&onto).map(words_of).unwrap_or_default(), words_of(self.body.get(&path)?));
                         if self.body.get(&onto).is_some_and(|block| block.kind == BlockKind::Code) {
                             let row = self.body.get(&path)?;
                             if !row.children.is_empty() {
                                 return None;
                             }
-                            let words = row.text.clone();
+                            let words = words_of(row).text;
                             let code = &self.body.get(&onto)?.text;
                             let fence = code.rfind('\n').filter(|at| is_fence(&code[at + 1..]))?;
                             let mut joined = code.clone();
@@ -851,21 +822,46 @@ impl Session {
                             let offset = shown_offset(&self.body.get(&onto)?.text, fence);
                             return Some(self.changed(before, (onto, offset), None));
                         }
-                        let (onto, offset) = outline::join_onto(&mut self.body, &path, &onto)?;
-                        let offset = shown_offset(&self.body.get(&onto)?.text, offset);
+                        let (onto, _) = outline::join_onto(&mut self.body, &path, &onto)?;
+                        // The words joined as words, the caret where they meet.
+                        let mut joined = onto_words;
+                        let offset = view_offset(&joined.text, joined.text.len());
+                        joined.append(&row_words);
+                        set_words(self.body.get_mut(&onto)?, &joined);
                         return Some(self.changed(before, (onto, offset), None));
                     }
                 }
                 Some(self.changed(before, (path, 0), None))
             }
             Command::Toggle(style) => {
-                if first != end_row || !self.body.get(&path)?.has_inline_content() {
+                if first != end_row || !self.body.get(&path).is_some_and(is_rich) {
                     return None;
                 }
-                let row = self.rows[first].range.clone();
-                let (styled, range) = inline::toggle(&self.text[row.clone()], start.1..end.1, style);
-                self.body.get_mut(&path)?.text = styled.replace(SOFT_BREAK, "\n");
-                Some(self.changed(before, (path.clone(), range.end), Some((path, range.start))))
+                let view = &self.text[self.rows[first].range.clone()];
+                let (a, b) = (rich_offset(view, start.1), rich_offset(view, end.1));
+                let mark = match style {
+                    inline::Style::Strong => Mark::Strong,
+                    inline::Style::Emphasis => Mark::Emphasis('*'),
+                    inline::Style::Strikethrough => Mark::Strikethrough,
+                    inline::Style::Highlight => Mark::Highlight,
+                    inline::Style::Code => Mark::Code(1),
+                };
+                let mut words = words_of(self.body.get(&path)?);
+                if a == b {
+                    // Nothing chosen: what is typed next here takes the style on, or off.
+                    let mut marks = self.pending.take().filter(|(at, _)| *at == selection.start).map_or_else(|| words.marks_at(a), |(_, marks)| marks);
+                    match marks.iter().position(|had| std::mem::discriminant(had) == std::mem::discriminant(&mark)) {
+                        Some(at) => {
+                            marks.remove(at);
+                        }
+                        None => marks.push(mark),
+                    }
+                    self.pending = Some((selection.start, marks));
+                    return Some(Change { range: selection.start..selection.start, replacement: String::new(), selection: selection.clone() });
+                }
+                words.toggle(a..b, mark);
+                set_words(self.body.get_mut(&path)?, &words);
+                Some(self.changed(before, (path.clone(), view_offset(&words.text, b)), Some((path, view_offset(&words.text, a)))))
             }
             _ => None,
         }
@@ -914,8 +910,10 @@ impl Session {
         // The end first: a mark put in before it would move it.
         for (offset, mark) in [(selection.end, CARET), (selection.start, ANCHOR)] {
             let Some(row) = self.rows.get(self.row_at(offset)) else { continue };
-            let at = own_offset(&self.text[row.range.clone()], offset - row.range.start);
+            let view = self.text[row.range.clone()].to_owned();
             if let Some(block) = self.body.get_mut(&row.path.clone()) {
+                // Into the Markdown where the place is, so a row only moved is written as it was.
+                let at = markdown_at(block, rich_offset(&view, offset - row.range.start));
                 block.text.insert(at.min(block.text.len()), mark);
             }
         }
@@ -1143,7 +1141,7 @@ impl Session {
                 Some(depth) if folding => Some((path[..depth].to_vec(), 0)),
                 _ => {
                     self.reveal(&path);
-                    let offset = shown_offset(&self.body.get(&path)?.text, offset);
+                    let offset = shown_in(self.body.get(&path)?, offset);
                     Some((path, offset))
                 }
             }
@@ -1187,7 +1185,7 @@ impl Session {
     /// a row is under: 0 at the top. `None` where they cannot be put
     /// down: among the rows under one of them.
     pub fn drop_depth(&self, rows: &[usize], before: usize, depth: usize) -> Option<usize> {
-        if self.mode != Mode::Outline || self.rows.is_empty() {
+        if self.rows.is_empty() {
             return None;
         }
         self.drop_place(&self.chosen(&(0..0), Some(rows)), before, depth).map(|place| place.2)
@@ -1202,7 +1200,7 @@ impl Session {
     /// are, when it is among the rows under one of them, and as text.
     pub fn move_rows(&mut self, rows: &[usize], before: usize, depth: usize, selection: Range<usize>) -> Option<Change> {
         self.undoably(selection, |session, selection| {
-            if session.mode != Mode::Outline || session.rows.is_empty() {
+            if session.rows.is_empty() {
                 return None;
             }
             let before_text = session.text.clone();
@@ -1266,9 +1264,6 @@ impl Session {
     /// note shown as text, and for Markdown with nothing in it.
     pub fn insert_rows(&mut self, markdown: &str, before: usize, depth: usize, selection: Range<usize>) -> Option<Change> {
         self.undoably(selection, |session, _| {
-            if session.mode != Mode::Outline {
-                return None;
-            }
             let mut carried = read_marks(Document::parse(markdown)).blocks;
             if carried.is_empty() {
                 return None;
@@ -1361,10 +1356,36 @@ impl Session {
     /// own: what copying them puts on the pasteboard, and what goes with
     /// them to another note. A row under another of them is written once,
     /// under it.
-    pub fn markdown_of(&self, rows: &[usize]) -> String {
-        if self.mode != Mode::Outline {
+    /// A row's own Markdown: its words as the note has them.
+    pub fn row_markdown(&self, row: usize) -> Option<String> {
+        Some(self.body.get(&self.rows.get(row)?.path)?.text.clone())
+    }
+
+    /// What words chosen in the view are, as Markdown: what copying them
+    /// gives. Rows' words, each row on a line of its own.
+    pub fn markdown_between(&self, range: Range<usize>) -> String {
+        if self.rows.is_empty() {
             return String::new();
         }
+        let range = clamp(&self.text, range);
+        let (first, last) = (self.row_at(range.start), self.row_at(range.end));
+        let mut lines = Vec::new();
+        for index in first..=last {
+            let row = &self.rows[index];
+            let Some(block) = self.body.get(&row.path) else { continue };
+            let view = &self.text[row.range.clone()];
+            let a = if index == first { rich_offset(view, range.start.saturating_sub(row.range.start)) } else { 0 };
+            let b = if index == last { rich_offset(view, range.end.saturating_sub(row.range.start)) } else { usize::MAX };
+            let mut words = words_of(block);
+            let b = b.min(words.text.len());
+            words.split_off(b);
+            let words = words.split_off(a.min(b));
+            lines.push(if is_rich(block) { words.markdown(false) } else { words.text });
+        }
+        lines.join("\n")
+    }
+
+    pub fn markdown_of(&self, rows: &[usize]) -> String {
         let mut blocks: Vec<Block> = self.chosen(&(0..0), Some(rows)).iter().filter_map(|path| self.body.get(path).cloned()).collect();
         for block in &mut blocks {
             block.layout.extra_indent = 0;
@@ -1451,7 +1472,6 @@ impl Session {
         let shown = Document { blocks: under, final_newline: true, line_ending: self.body.line_ending, ..Document::default() };
         let whole = std::mem::replace(&mut self.body, shown);
         self.outer = Some(Outer { whole, root });
-        self.mode = Mode::Outline;
         true
     }
 
@@ -2056,6 +2076,90 @@ fn leaving_code(text: &str, offset: usize) -> Option<String> {
 
 /// An offset in a row as shown, as an offset in the block's own text:
 /// a soft break is three bytes shown, one kept.
+/// Whether a block's words are edited as rich text — shown without their
+/// Markdown — rather than as written: code and tables are as written.
+fn is_rich(block: &Block) -> bool {
+    matches!(block.kind, BlockKind::Paragraph | BlockKind::Heading(_) | BlockKind::Item(_) | BlockKind::Quote)
+}
+
+/// A block's words: rich, or as written.
+fn words_of(block: &Block) -> Rich {
+    if is_rich(block) {
+        Rich::parse(&block.text)
+    } else {
+        Rich::plain(&block.text)
+    }
+}
+
+/// Words put back in a block: as Markdown, or as written.
+fn set_words(block: &mut Block, words: &Rich) {
+    block.text = if is_rich(block) { words.markdown(!matches!(block.kind, BlockKind::Heading(_))) } else { words.text.clone() };
+}
+
+/// A place in a row as the view shows it — its line breaks U+2028 — as a
+/// place in its words, whose line breaks are `\n`.
+fn rich_offset(view_row: &str, offset: usize) -> usize {
+    let offset = offset.min(view_row.len());
+    offset - view_row[..offset].matches(SOFT_BREAK).count() * (SOFT_BREAK.len_utf8() - 1)
+}
+
+/// A place in a row's words as the view shows it.
+fn view_offset(words: &str, offset: usize) -> usize {
+    let offset = offset.min(words.len());
+    offset + words[..offset].matches('\n').count() * (SOFT_BREAK.len_utf8() - 1)
+}
+
+/// A block's Markdown, at a place in its words.
+fn markdown_at(block: &Block, rich: usize) -> usize {
+    if is_rich(block) {
+        Rich::markdown_offset(&block.text, rich, false)
+    } else {
+        rich
+    }
+}
+
+/// Where a place in a block's Markdown is shown in its row.
+fn shown_in(block: &Block, markdown: usize) -> usize {
+    let rich = if is_rich(block) { Rich::shown_offset(&block.text, markdown) } else { markdown };
+    view_offset(&words_of(block).text, rich)
+}
+
+/// What text inserted in words means: Markdown, for what was pasted or
+/// put in whole — a link completed, a picture — and plain for what is typed.
+fn inserted(piece: &str) -> Rich {
+    if piece.chars().count() > 1 {
+        let rich = Rich::parse(piece);
+        if !rich.runs.is_empty() {
+            return rich;
+        }
+    }
+    Rich::plain(piece)
+}
+
+/// The layout's runs for a rich row: its marks, and its atoms, in the view.
+fn rich_runs(words: &Rich, row_start: usize, runs: &mut Vec<editor::Run>) {
+    use editor::RunKind;
+    let at = |offset: usize| row_start + view_offset(&words.text, offset);
+    for run in &words.runs {
+        let kind = match &run.mark {
+            Mark::Strong => RunKind::Strong,
+            Mark::Emphasis(_) => RunKind::Emphasis,
+            Mark::Strikethrough => RunKind::Strikethrough,
+            Mark::Highlight => RunKind::Highlight,
+            Mark::Code(_) => RunKind::Code,
+            Mark::Link { target, .. } => RunKind::WebLink { url: target.clone() },
+            Mark::Autolink | Mark::Url => RunKind::WebLink { url: words.text[run.range.clone()].to_owned() },
+            Mark::Tag(name) => RunKind::Tag { name: name.clone() },
+            Mark::Atom(atom) => match &atom.kind {
+                AtomKind::Page { target, embed, .. } => RunKind::PageLink { target: target.clone(), embed: *embed },
+                AtomKind::Picture { source, alt, width, height } => RunKind::Image { source: source.clone(), alt: alt.clone(), width: *width, height: *height },
+                AtomKind::Comment => RunKind::Markup,
+            },
+        };
+        runs.push(editor::Run { range: at(run.range.start)..at(run.range.end), kind });
+    }
+}
+
 fn own_offset(shown: &str, offset: usize) -> usize {
     let offset = offset.min(shown.len());
     offset - shown[..offset].matches(SOFT_BREAK).count() * (SOFT_BREAK.len_utf8() - 1)
@@ -2104,25 +2208,19 @@ mod tests {
         let written = session.markdown();
         assert_eq!(written, "# Plan\n\n- one <!-- folded -->\n  - under\n- [ ] two <!-- folded -->\n  more of two\n  - under two\n- three\n");
         // Read again: folded as they were, and the marks no part of the rows' words.
-        let again = Session::new(&written, Mode::Outline);
+        let again = Session::new(&written);
         assert_eq!(again.folded_rows().iter().map(|row| (row.index, row.text.as_str())).collect::<Vec<_>>(), [(0, "one"), (2, "two\nmore of two")]);
         assert!(!again.text().contains("folded") && !again.text().contains("under"));
         assert_eq!(again.markdown(), written);
-        // As text, the marks are not shown, and are written still.
-        let mut text = Session::new(&written, Mode::Text);
-        assert!(!text.text().contains("folded"));
-        let end = text.text().len();
-        text.replace(end..end, "- four\n");
-        assert_eq!(text.markdown(), format!("{written}- four\n"));
         // Unfolded, a row is written as it was; a mark on a row with nothing under it is dropped.
         let (mut session, mut view) = outline(&written);
         on(&mut session, &mut view, &["one"], 0, Command::ToggleFold).unwrap();
         on(&mut session, &mut view, &["two"], 0, Command::ToggleFold).unwrap();
         assert_eq!(session.markdown(), NOTE);
-        assert_eq!(Session::new("- alone <!-- folded -->\n", Mode::Outline).markdown(), "- alone\n");
+        assert_eq!(Session::new("- alone <!-- folded -->\n").markdown(), "- alone\n");
         // In code, they are only words.
         const CODE: &str = "```\nx <!-- folded -->\n```\n";
-        assert_eq!(Session::new(CODE, Mode::Outline).markdown(), CODE);
+        assert_eq!(Session::new(CODE).markdown(), CODE);
     }
 
     #[test]
@@ -2130,7 +2228,7 @@ mod tests {
         const NOTE: &str = "# Day\n\n- standup\n- met with [[Ada Lovelace|Ada]] about\n  - the engine\n  - and [[Babbage]]\n- later #ada\n";
         let (mut session, view) = outline(NOTE);
         assert!(session.focus_on_links(&["Ada Lovelace".into()]));
-        assert_eq!((session.focus_title().as_deref(), session.text()), (Some("met with [[Ada Lovelace|Ada]] about"), "the engine\nand [[Babbage]]"));
+        assert_eq!((session.focus_title().as_deref(), session.text()), (Some("met with [[Ada Lovelace|Ada]] about"), "the engine\nand \u{FFFC}"));
         assert_eq!(session.focus(), None, "nothing is named for it");
         assert_eq!(session.markdown(), NOTE, "and nothing in the note changes");
         // A mention in a row with nothing under it: the row it is under — a
@@ -2181,8 +2279,8 @@ mod tests {
         let written = named.replace("- deep <", "- deep, renamed <").replace("      - deeper\n", "      - deeper!\n      - new\n");
         assert_eq!(session.markdown(), written);
         // Read again, focused again: by the name, whatever was written around it.
-        let mut again = Session::new(&written.replace("- one\n", "- zero\n- one\n  - under one\n"), Mode::Text);
-        assert!(again.set_focus(Some(&deep)) && again.mode() == Mode::Outline);
+        let mut again = Session::new(&written.replace("- one\n", "- zero\n- one\n  - under one\n"));
+        assert!(again.set_focus(Some(&deep)));
         assert_eq!(again.text(), "deeper!\nnew");
 
         // Out a level: the row over it, named now; and from the outermost, the whole note.
@@ -2193,7 +2291,7 @@ mod tests {
         let top = session.focus_out(1).unwrap();
         assert!(session.set_focus(Some(&top)) && session.focus_trail().is_empty() && session.focus_out(1).is_none());
         assert!(session.set_focus(None) && session.focus().is_none());
-        assert_eq!(session.text(), "one\ntwo **bold**\nunder two\ndeep, renamed\ndeeper!\nnew\nalso under\nthree");
+        assert_eq!(session.text(), "one\ntwo bold\nunder two\ndeep, renamed\ndeeper!\nnew\nalso under\nthree");
         assert_eq!(session.markdown().matches("<!-- ^").count(), 3);
 
         // A row with nothing under it is given a row to write in, which is no part of the note until it is.
@@ -2206,15 +2304,10 @@ mod tests {
         assert_eq!(session.markdown(), marked.replace("-->\n", "-->\n  - child\n"));
         // Folded and named both, a row is marked as both; a copy of a named row has no name; only a list's row has one.
         let (mut session, mut view) = outline(&format!("- a <!-- ^x1 --> {FOLDED}\n  - b\n\nprose <!-- ^no -->\n"));
-        assert_eq!((session.text(), session.folded_rows().len()), ("a\nprose <!-- ^no -->", 1));
+        assert_eq!((session.text(), session.folded_rows().len()), ("a\nprose \u{FFFC}", 1));
         assert_eq!(session.anchor_row(1), None);
         on(&mut session, &mut view, &["a"], 0, Command::DuplicateRows).unwrap();
         assert_eq!(session.markdown().matches("^x1").count(), 1);
-        // As text, names are not shown, and are kept.
-        let mut text = Session::new("- a <!-- ^x1 -->\n  - b\n", Mode::Text);
-        assert_eq!(text.text(), "- a\n  - b\n");
-        text.replace(0..0, "- first\n");
-        assert_eq!(text.markdown(), "- first\n- a <!-- ^x1 -->\n  - b\n");
     }
 
     /// The note's file, but for the marks of its folded rows.
@@ -2223,7 +2316,7 @@ mod tests {
     }
 
     fn outline(source: &str) -> (Session, String) {
-        let session = Session::new(source, Mode::Outline);
+        let session = Session::new(source);
         let view = session.text().to_owned();
         (session, view)
     }
@@ -2236,7 +2329,7 @@ mod tests {
 
     #[test]
     fn a_first_line_is_taken_to_be_the_title() {
-        let mut session = Session::new("- Plans for *spring*\n  - seeds\n  - beds\n- later\n", Mode::Outline);
+        let mut session = Session::new("- Plans for *spring*\n  - seeds\n  - beds\n- later\n");
         assert_eq!(session.first_line().as_deref(), Some("Plans for spring"));
         assert_eq!(session.take_first_line().as_deref(), Some("Plans for spring"));
         assert_eq!(session.text(), "seeds\nbeds\nlater");
@@ -2244,30 +2337,30 @@ mod tests {
         assert_eq!(session.markdown(), "# Plans for spring\n\n- seeds\n- beds\n- later\n");
 
         // A line that goes on keeps what it went on to say; a heading gives its words.
-        let mut text = Session::new("# A title typed\n\nAnd the rest.\n", Mode::Text);
+        let mut text = Session::new("# A title typed\n\nAnd the rest.\n");
         // Read as its title already: nothing left to take but the rest.
         assert_eq!(text.title().as_deref(), Some("A title typed"));
-        let mut plain = Session::new("First words\nsecond line\n\nmore\n", Mode::Text);
+        let mut plain = Session::new("First words\nsecond line\n\nmore\n");
         assert_eq!(plain.take_first_line().as_deref(), Some("First words"));
-        assert_eq!(plain.text(), "second line\n\nmore\n");
+        assert_eq!(plain.markdown(), "second line\n\nmore\n");
         // Code and pictures title nothing.
-        assert_eq!(Session::new("```\ncode\n```\n", Mode::Text).take_first_line(), None);
-        assert_eq!(Session::new("![](a.png)\n", Mode::Outline).take_first_line(), None);
+        assert_eq!(Session::new("```\ncode\n```\n").take_first_line(), None);
+        assert_eq!(Session::new("![](a.png)\n").take_first_line(), None);
         assert_eq!(text.take_first_line().as_deref(), Some("And the rest."));
     }
 
     #[test]
     fn arrows_are_made_as_they_are_typed() {
-        for mode in [Mode::Outline, Mode::Text] {
-            let mut session = Session::new("", mode);
+        {
+            let mut session = Session::new("");
             let mut caret = 0;
             for typed in "a -> b <- c, `x -> y`, <!-- no -->".chars() {
                 caret = session.replace(caret..caret, &typed.to_string()).selection.end;
             }
-            assert_eq!(session.text(), "a → b ← c, `x -> y`, <!-- no -->", "{mode:?}");
+            assert_eq!(session.text(), "a → b ← c, `x -> y`, <!-- no -->");
         }
         // What is pasted is left as it is.
-        let mut session = Session::new("", Mode::Text);
+        let mut session = Session::new("");
         session.replace(0..0, "a -> b");
         assert_eq!(session.text(), "a -> b");
     }
@@ -2275,9 +2368,9 @@ mod tests {
     #[test]
     fn a_heading_after_blank_lines_is_still_the_title() {
         let source = "---\nicon: link\n---\n\n# Cerebras on X\n\n- URL: <https://example.com>\n";
-        let mut session = Session::new(source, Mode::Outline);
+        let mut session = Session::new(source);
         assert_eq!(session.title().as_deref(), Some("Cerebras on X"));
-        assert_eq!(session.text(), "URL: <https://example.com>");
+        assert_eq!(session.text(), "URL: https://example.com");
         assert_eq!(session.markdown(), source);
         session.set_title("Cerebras");
         assert_eq!(session.markdown(), "---\nicon: link\n---\n\n# Cerebras\n\n- URL: <https://example.com>\n");
@@ -2285,43 +2378,32 @@ mod tests {
 
     #[test]
     fn a_note_opens_and_closes_as_it_was_in_either_mode() {
-        for mode in [Mode::Text, Mode::Outline] {
-            let mut session = Session::new(NOTE, mode);
-            assert_eq!(session.markdown(), NOTE);
-            assert_eq!(session.title().as_deref(), Some("Project Atlas"));
-            // Shown the other way and back: not a byte changes.
-            session.set_mode(if mode == Mode::Text { Mode::Outline } else { Mode::Text });
-            session.set_mode(mode);
-            assert_eq!(session.markdown(), NOTE);
-        }
-        assert_eq!(Session::new("", Mode::Outline).text(), "");
-        assert_eq!(Session::new("", Mode::Outline).markdown(), "");
-        assert_eq!(Session::new("- a day\n", Mode::Text).title(), None);
+        let session = Session::new(NOTE);
+        assert_eq!(session.markdown(), NOTE);
+        assert_eq!(session.title().as_deref(), Some("Project Atlas"));
+        assert_eq!(Session::new("").text(), "");
+        assert_eq!(Session::new("").markdown(), "");
+        assert_eq!(Session::new("- a day\n").title(), None);
     }
 
     #[test]
     fn an_outline_shows_a_row_a_block_and_only_its_words() {
-        let session = Session::new(NOTE, Mode::Outline);
+        let session = Session::new(NOTE);
         assert_eq!(
             session.text(),
-            "A paragraph\u{2028}of two lines.\nNext\nBook a room\nask [[Grace]]\nSend invites\nFirst\n```query\u{2028}tag: Person\u{2028}```"
+            "A paragraph\u{2028}of two lines.\nNext\nBook a room\nask \u{FFFC}\nSend invites\nFirst\n```query\u{2028}tag: Person\u{2028}```"
         );
         let layout = session.layout();
-        assert!(!layout.markers_in_text);
         let lines: Vec<_> = layout.lines.iter().map(|line| (&session.text()[line.range.clone()], line.kind.clone(), line.depth)).collect();
         use LineKind::*;
         assert_eq!(lines[1], ("Next", Heading(2), 1));
         assert_eq!(lines[2], ("Book a room", Item { ordered: None, task: None, bullet: '*' }, 1));
-        assert_eq!(lines[3], ("ask [[Grace]]", Item { ordered: None, task: None, bullet: '*' }, 2));
+        assert_eq!(lines[3], ("ask \u{FFFC}", Item { ordered: None, task: None, bullet: '*' }, 2));
         assert_eq!(lines[4], ("Send invites", Item { ordered: None, task: Some(false), bullet: '+' }, 1));
         assert_eq!(lines[5], ("First", Item { ordered: Some(1), task: None, bullet: '.' }, 1));
         assert_eq!(lines[6].1, Code);
         // A link in a row is a run of the view's text.
-        assert!(layout.runs.iter().any(|run| &session.text()[run.range.clone()] == "Grace"));
-        // In text, the same note is its Markdown, markers and all.
-        let text = Session::new(NOTE, Mode::Text);
-        assert!(text.text().starts_with("A paragraph\nof two lines.\n\n## Next\n\n*   Book a room\n"));
-        assert!(text.layout().markers_in_text);
+        assert!(layout.runs.iter().any(|run| matches!(&run.kind, crate::editor::RunKind::PageLink { target, .. } if target == "Grace")));
     }
 
     #[test]
@@ -2456,7 +2538,8 @@ mod tests {
         assert_eq!(session.markdown(), "# words\n");
         let change = session.perform(0..0, Command::DeleteBackward).unwrap();
         assert_eq!((session.text(), change.selection), ("# words", 2..2));
-        assert_eq!(session.markdown(), "- # words\n");
+        // Written so that it reads as words, not a heading in the list.
+        assert_eq!(session.markdown(), "- \\# words\n");
         let (mut session, _) = outline("- words\n");
         typed(&mut session);
         let change = session.undo().unwrap();
@@ -2521,7 +2604,7 @@ mod tests {
         assert_eq!(session.markdown(), "plain\n## item\n");
         // Words emboldened within their row.
         let change = session.perform(0..5, Command::Toggle(Style::Strong)).unwrap();
-        assert_eq!((session.markdown().as_str(), change.selection), ("**plain**\n## item\n", 2..7));
+        assert_eq!((session.markdown().as_str(), change.selection), ("**plain**\n## item\n", 0..5));
     }
 
     #[test]
@@ -2551,7 +2634,7 @@ mod tests {
         const NOTE: &str = "- [A page](https://a.example) <!-- card -->\n- plain\n";
         let (mut session, view) = outline(NOTE);
         // The mark is no part of the row's words, and the note is written as it was read.
-        assert_eq!(view, "[A page](https://a.example)\nplain");
+        assert_eq!(view, "A page\nplain");
         assert_eq!(session.row_cards(), [true, false]);
         assert_eq!(session.markdown(), NOTE);
         // Toggled: written without the mark, and back.
@@ -2629,25 +2712,8 @@ mod tests {
     }
 
     #[test]
-    fn text_mode_edits_the_same_tree_through_its_markdown() {
-        let mut session = Session::new("- one\n- two\n", Mode::Text);
-        let change = session.replace(5..5, " more");
-        assert_eq!((change.range, change.replacement.as_str(), change.selection), (5..5, " more", 10..10));
-        assert_eq!(session.body().blocks[0].text, "one more");
-        let change = session.perform(10..10, Command::Newline).unwrap();
-        assert_eq!(change.replacement, "\n- ");
-        assert_eq!(session.body().blocks.len(), 3);
-        // The same note, shown as an outline: three rows.
-        session.set_mode(Mode::Outline);
-        assert_eq!(session.text(), "one more\n\ntwo");
-        session.replace(9..9, "between");
-        session.set_mode(Mode::Text);
-        assert_eq!(session.text(), "- one more\n- between\n- two\n");
-    }
-
-    #[test]
     fn a_title_and_fields_are_the_notes_own() {
-        let mut session = Session::new("- no title yet\n", Mode::Outline);
+        let mut session = Session::new("- no title yet\n");
         session.set_title("  Atlas ");
         session.frontmatter_mut().set("pinned", "true");
         assert_eq!(session.markdown(), "---\npinned: true\n---\n# Atlas\n\n- no title yet\n");
@@ -2700,13 +2766,6 @@ mod tests {
         assert!(!session.can_redo());
         while session.undo().is_some() {}
         assert_eq!(session.markdown(), "- one\n- two\n");
-        // In text, the same.
-        let mut text = Session::new("- one\n", Mode::Text);
-        text.replace(5..5, "!");
-        text.perform(6..6, Command::Newline).unwrap();
-        text.undo();
-        let back = text.undo().unwrap();
-        assert_eq!((text.text(), back.selection), ("- one\n", 5..5));
     }
     const TREE: &str = "- one\n- two\n  - under two\n    - deep\n  - also under\n- three\n";
 
@@ -2777,23 +2836,17 @@ mod tests {
         // The same again changes nothing.
         assert!(!session.set_folded_rows(&[FoldedRow { index: 1, text: "two".into() }]));
         // The note changed underneath: a row added above. The row is known by its words.
-        let mut moved = Session::new(&format!("- new\n{TREE}"), Mode::Outline);
+        let mut moved = Session::new(&format!("- new\n{TREE}"));
         assert!(moved.set_folded_rows(&[FoldedRow { index: 1, text: "two".into() }, FoldedRow { index: 9, text: "gone".into() }]));
         assert_eq!(moved.text(), "new\none\ntwo\nthree");
         assert_eq!(moved.folded_rows(), [FoldedRow { index: 2, text: "two".into() }]);
         // Of two rows that say the same, the nearer; and a row with nothing under it is not folded.
-        let mut twins = Session::new("- a\n  - x\n- b\n- a\n  - y\n", Mode::Outline);
+        let mut twins = Session::new("- a\n  - x\n- b\n- a\n  - y\n");
         twins.set_folded_rows(&[FoldedRow { index: 2, text: "a".into() }, FoldedRow { index: 2, text: "b".into() }]);
         assert_eq!(twins.text(), "a\nx\nb\na");
         // None: all unfolded.
         assert!(twins.set_folded_rows(&[]));
         assert_eq!(twins.text(), "a\nx\nb\na\ny");
-        // As text nothing is hidden, and what was folded is folded still when it is an outline again.
-        session.set_mode(Mode::Text);
-        assert_eq!(session.text(), TREE);
-        session.replace(5..5, "!");
-        session.set_mode(Mode::Outline);
-        assert_eq!(session.text(), "one!\ntwo\nthree");
     }
 
     #[test]
@@ -2976,11 +3029,8 @@ mod tests {
         let at = view.find("two").unwrap() + 1;
         let change = on(&mut session, &mut view, &["two", "three"], at, Command::DeleteRows).unwrap();
         assert_eq!((view.as_str(), change.selection), ("four\none", 5..5));
-        // At the caret's own commands, and as text, there are no rows to give.
+        // At the caret's own commands there are no rows to give.
         assert_eq!(session.perform_on(&[0], 0..0, Command::Newline), None);
-        session.set_mode(Mode::Text);
-        assert_eq!(session.perform_on(&[0], 0..0, Command::Indent), None);
-        assert_eq!(session.perform(0..0, Command::Fold), None);
     }
 
     #[test]
@@ -3073,7 +3123,6 @@ mod tests {
         assert_eq!(empty.markdown(), "- a\n- b\n");
         empty.undo().unwrap();
         assert_eq!(empty.markdown(), "");
-        assert!(Session::new("- a\n", Mode::Text).insert_rows("- b\n", 0, 0, 0..0).is_none());
     }
 
     #[test]
@@ -3087,26 +3136,25 @@ mod tests {
     }
 
     #[test]
-    fn delete_after_a_picture_takes_it_whole_and_an_address_links_words() {
-        let (mut session, mut view) = outline("- see ![cat](assets/cat.png) <!-- {\"width\":40} --> there\n- ![](a.png) ![](b.png)\n");
-        let at = view.find(" there").unwrap();
-        let change = session.perform(at..at, Command::DeleteBackward).unwrap();
-        shown(&mut view, &change);
-        assert_eq!((view.as_str(), change.selection), ("see  there\n![](a.png) ![](b.png)", 4..4));
-        let end = view.len();
-        shown(&mut view, &session.perform(end..end, Command::DeleteBackward).unwrap());
-        assert_eq!(session.markdown(), "- see  there\n- ![](a.png) \n");
-        assert_eq!(session.perform(2..2, Command::DeleteBackward), None);
+    fn a_picture_is_one_character_and_an_address_links_words() {
+        let (mut session, view) = outline("- see ![cat](assets/cat.png) <!-- {\"width\":40} --> there\n- ![](a.png) ![](b.png)\n");
+        // A picture, with the size noted after it, is one character of the view: deleted, it goes whole.
+        assert_eq!(view.lines().next().unwrap().matches('\u{FFFC}').count(), 1);
+        let at = view.find('\u{FFFC}').unwrap();
+        session.replace(at..at + '\u{FFFC}'.len_utf8(), "");
+        assert!(!session.markdown().contains("cat.png") && !session.markdown().contains("width"), "{:?}", session.markdown());
+        assert_eq!(session.perform(2..2, Command::DeleteBackward), None, "inside a row, Delete is the view's own");
         // An address, on words selected: they link to it; on a link's words, it goes there instead.
         let change = session.link(0..3, " https://example.com/a(b)\n").unwrap();
-        shown(&mut view, &change);
-        assert_eq!((view.lines().next().unwrap(), change.selection), ("[see](https://example.com/a%28b%29)  there", 35..35));
-        shown(&mut view, &session.link(1..4, "mailto:ada@example.com").unwrap());
-        assert!(view.starts_with("[see](mailto:ada@example.com)  there"));
-        assert_eq!(session.link(0..view.len(), "https://example.com"), None, "not across rows");
+        assert!(session.markdown().starts_with("- [see](https://example.com/a%28b%29)"), "{:?}", session.markdown());
+        assert!(session.text().starts_with("see "), "the view shows the words, not the link");
+        assert_eq!(change.selection, 3..3);
+        session.link(1..2, "mailto:ada@example.com").unwrap();
+        assert!(session.markdown().starts_with("- [see](mailto:ada@example.com)"));
+        assert_eq!(session.link(0..session.text().len(), "https://example.com"), None, "not across rows");
         assert_eq!(session.link(0..2, "not an address"), None);
         assert_eq!(session.link(3..3, "https://example.com"), None);
         session.undo().unwrap();
-        assert!(session.markdown().starts_with("- [see](https://example.com/a%28b%29)  there\n"));
+        assert!(session.markdown().starts_with("- [see](https://example.com/a%28b%29)"));
     }
 }

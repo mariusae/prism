@@ -9,7 +9,7 @@ use crate::document::{FrontmatterField, NoteMeta};
 use crate::engine::RiverFoldedRow;
 use prism::markup::editor::{self, Command, CompletionKind, Layout, LineKind, RowKind, RunKind};
 use prism::markup::river::FoldedRow;
-use prism::markup::{inline, Mode, Note, Session, Style, Value};
+use prism::markup::{inline, Note, Session, Style, Value};
 use std::sync::{Arc, Mutex, MutexGuard};
 
 /// Byte offsets of a text as UTF-16 offsets, and back, each in one pass.
@@ -147,24 +147,12 @@ pub struct BodyRun {
 pub struct BodyLayout {
     pub lines: Vec<BodyLine>,
     pub runs: Vec<BodyRun>,
-    /// Whether each line's marker — its bullet, its hashes — is written
-    /// in the text. In an outline it is not: a line's kind says what to
-    /// draw beside it.
-    pub markers_in_text: bool,
-}
-
-/// Reads a body for a text view: what each line is, and what each run
-/// of it means.
-#[uniffi::export]
-pub fn body_layout(body: String) -> BodyLayout {
-    layout_of(editor::layout(&body), &body, &[], &[])
 }
 
 /// A layout in the view's own offsets. `folds` says of each line of an
 /// outline whether it is folded, and whether it has rows under it.
 fn layout_of(read: Layout, body: &str, folds: &[(bool, bool)], cards: &[bool]) -> BodyLayout {
     let offsets = Offsets::of(body);
-    let markers_in_text = read.markers_in_text;
     let lines = read
         .lines
         .into_iter()
@@ -216,7 +204,7 @@ fn layout_of(read: Layout, body: &str, folds: &[(bool, bool)], cards: &[bool]) -
             },
         })
         .collect();
-    BodyLayout { lines, runs, markers_in_text }
+    BodyLayout { lines, runs }
 }
 
 /// Something an editor does to a body beyond typing a character.
@@ -422,15 +410,6 @@ pub fn web_address(text: String) -> Option<String> {
     inline::address(&text).map(str::to_owned)
 }
 
-/// How an editor shows a note's body.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, uniffi::Enum)]
-pub enum EditorMode {
-    /// The body's Markdown, as the file has it.
-    Text,
-    /// A row a block: its words, with what it is drawn beside them.
-    Outline,
-}
-
 /// A note open for writing: what an editor holds.
 ///
 /// The note is here — its frontmatter, its title, its body as a tree —
@@ -474,27 +453,13 @@ impl NoteEditor {
 impl NoteEditor {
     /// Opens a note's file.
     #[uniffi::constructor]
-    pub fn open(source: String, mode: EditorMode) -> Arc<NoteEditor> {
-        let mode = if mode == EditorMode::Outline { Mode::Outline } else { Mode::Text };
-        Arc::new(NoteEditor { session: Mutex::new(Session::new(&source, mode)) })
+    pub fn open(source: String) -> Arc<NoteEditor> {
+        Arc::new(NoteEditor { session: Mutex::new(Session::new(&source)) })
     }
 
     /// The note's file, as it now is. What was not edited is as it was read.
     pub fn markdown(&self) -> String {
         self.session().markdown()
-    }
-
-    pub fn mode(&self) -> EditorMode {
-        if self.session().mode() == Mode::Outline {
-            EditorMode::Outline
-        } else {
-            EditorMode::Text
-        }
-    }
-
-    /// Shows the body another way. The note is not changed.
-    pub fn set_mode(&self, mode: EditorMode) {
-        self.session().set_mode(if mode == EditorMode::Outline { Mode::Outline } else { Mode::Text });
     }
 
     /// What the view shows.
@@ -586,6 +551,19 @@ impl NoteEditor {
     /// Some rows of an outline, with what is under them, as Markdown of
     /// their own: what copying them puts on the pasteboard, and what goes
     /// with them to another note.
+    /// A row's own Markdown — what a view shows as rich words: for what
+    /// is found in it (a link alone, pictures).
+    pub fn row_markdown(&self, row: u32) -> Option<String> {
+        self.session().row_markdown(row as usize)
+    }
+
+    /// The words chosen in the view, as Markdown: what copying them gives.
+    pub fn markdown_between(&self, start: u32, end: u32) -> String {
+        let session = self.session();
+        let offsets = Offsets::of(session.text());
+        session.markdown_between(offsets.to8(start)..offsets.to8(end.max(start)))
+    }
+
     pub fn markdown_of(&self, rows: Vec<u32>) -> String {
         let rows: Vec<usize> = rows.into_iter().map(|row| row as usize).collect();
         self.session().markdown_of(&rows)
@@ -827,13 +805,14 @@ mod tests {
 
     #[test]
     fn offsets_cross_in_utf16() {
-        let body = "- 🚀 **go** [[Café]]\n".to_owned();
-        let layout = body_layout(body.clone());
+        let editor = NoteEditor::open("- 🚀 **go** [[Café]]\n".into());
+        let (body, layout) = (editor.text(), editor.layout());
         let units: Vec<u16> = body.encode_utf16().collect();
         let text = |run: &BodyRun| String::from_utf16(&units[run.start as usize..run.end as usize]).unwrap();
         assert!(layout.runs.iter().any(|run| run.kind == BodyRunKind::Strong && text(run) == "go"));
-        assert!(layout.runs.iter().any(|run| matches!(&run.kind, BodyRunKind::PageLink { target, .. } if target == "Café") && text(run) == "Café"));
-        assert_eq!((layout.lines[0].content, layout.lines[0].end), (2, units.len() as u32 - 1));
+        // The page link is one character of the view, after "🚀 go ": 6 units in.
+        assert!(layout.runs.iter().any(|run| matches!(&run.kind, BodyRunKind::PageLink { target, .. } if target == "Café") && run.start == 6));
+        assert_eq!((layout.lines[0].content, layout.lines[0].end), (0, units.len() as u32));
         let typed = completion_at("🚀 see [[Caf".into(), 12).unwrap();
         assert_eq!((typed.kind, typed.typed.as_str(), typed.start, typed.end), (BodyCompletionKind::Link, "Caf", 7, 12));
     }
@@ -841,9 +820,8 @@ mod tests {
     #[test]
     fn an_editor_is_the_note_and_the_view_follows_it() {
         let source = "---\ntags: [a]\n---\n# Atlas 🚀\n\n- one 🚀\n- two\n";
-        let editor = NoteEditor::open(source.into(), EditorMode::Outline);
+        let editor = NoteEditor::open(source.into());
         assert_eq!((editor.text().as_str(), editor.title().as_deref()), ("one 🚀\ntwo", Some("Atlas 🚀")));
-        assert!(!editor.layout().markers_in_text);
         // Typed after the rocket, in UTF-16 as a text view counts: "one 🚀" is 6 units.
         let edit = editor.replace(6, 6, "!".into());
         assert_eq!((edit.start, edit.end, edit.replacement.as_str(), edit.selection_start), (6, 6, "!", 7));
@@ -855,10 +833,6 @@ mod tests {
         let edit = editor.perform(8, 8, EditCommand::Indent).unwrap();
         assert!(edit.start == edit.end && edit.replacement.is_empty() && edit.selection_start == 8);
         assert!(editor.undo().is_some() && editor.can_redo());
-        // The same note as text: its Markdown, markers and all.
-        editor.set_mode(EditorMode::Text);
-        assert_eq!(editor.text(), "- one 🚀!\n- \n- two\n");
-        assert!(editor.layout().markers_in_text);
         // Its title and fields are its own.
         editor.set_title("Atlas".into());
         editor.set_field("pinned".into(), "true".into());
@@ -870,7 +844,7 @@ mod tests {
 
     #[test]
     fn rows_fold_and_move_in_the_views_own_offsets() {
-        let editor = NoteEditor::open("- 🚀 one\n  - 9:00–9:30 two\n  - 10:00 three\n- last\n".into(), EditorMode::Outline);
+        let editor = NoteEditor::open("- 🚀 one\n  - 9:00–9:30 two\n  - 10:00 three\n- last\n".into());
         // Folded from elsewhere: the caret, in "last", stays in its word.
         let caret = editor.text().encode_utf16().count() as u32 - 2;
         let edit = editor.perform_on(vec![0], caret, caret, EditCommand::Fold).unwrap();
@@ -887,6 +861,8 @@ mod tests {
         assert_eq!(editor.markdown_of(vec![0, 1]), "- last\n- 🚀 one\n  - 9:00–9:30 two\n  - 10:00 three\n");
         assert_eq!(web_address(" https://example.com ".into()).as_deref(), Some("https://example.com"));
         let edit = editor.link(0, 4, "https://example.com".into()).unwrap();
-        assert!(editor.text().starts_with("[last](https://example.com)\n") && edit.selection_start == 27);
+        // The view shows the words; the note has the link.
+        assert!(editor.text().starts_with("last\n") && edit.selection_start == 4);
+        assert!(editor.markdown().starts_with("- [last](https://example.com)\n"));
     }
 }

@@ -214,7 +214,24 @@ block mode's arrows, ⌘↑ ⌘↓, Space, Return, typing, and Esc back to the
 caret where it was. Bike 2's keys are the editor's, and Weft's Format menu
 is Bike's Format and Outline menus.
 
-Also done: every note opens as rows (the Outline / Text choice is gone);
+Rich text (`crates/prism-markup/src/rich.rs`): a row's words are parsed
+from their Markdown into rich text — the words as they read, with runs
+for strong, emphasis, code, highlight, strikethrough and web links, and
+one character (an atom) for each page link, picture or comment. The view
+shows only the words; every edit — typing, Return, Delete, joining,
+formatting, links — is made to the rich text, and the row's Markdown is
+written again from it, escaping only what would otherwise read as
+Markdown (and what would start another kind of row). A row not edited is
+written as it was read. Typing takes the marks of the words it joins;
+formatting with nothing chosen applies to what is typed next. Copying
+words gives their Markdown. Checked against every row of a 25,000-row
+graph: all read back the same, and 98.6% are written byte for byte.
+
+Also done: every note is rows — there is no other way to edit one. The
+Markdown text mode is gone from the engine (`Session` has no mode), the
+FFI (`NoteEditor.open(source:)`, no `EditorMode`, no `markersInText`) and
+both apps. A "prose note" is only a note whose rows are paragraphs and
+headings: no setting, no mode;
 Markdown is never shown — a row's marks stay hidden while it is written
 in, the caret steps over them (one press at a formatting's edge is the
 caret's side, Bike's typing affinity, shown by a tail on the caret),
@@ -227,8 +244,8 @@ hidden Markdown and Bike's keys on a keyboard.
 
 Left, by area:
 
-- **Links**: a link shown by its page's title is one unit; Bike edits a
-  link's words as words. Needs a way to edit them (as Bike's link editor).
+- **Page links** are one unit, drawn as their page's title (a link to
+  the web is words, edited as words, as Bike's).
 - **Badges**: a heading's tasks done (½), a done row's "Done".
 - **Words chosen**: Bike's ¶ sliver for a chosen line break, dots for
   chosen spaces.

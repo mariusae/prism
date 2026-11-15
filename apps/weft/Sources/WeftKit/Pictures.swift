@@ -368,12 +368,12 @@ struct LinkCard: View {
     /// A note: one kept of a page on the web as that page's card; any other as its first lines.
     @ViewBuilder private func note(_ name: String) -> some View {
         if let path = store.resolve(name)?.path, let source = (try? store.engine.read(path: path)) ?? nil {
-            let editor = NoteEditor.open(source: source, mode: .text)
+            let editor = NoteEditor.open(source: source)
             let label = editor.label(path: path)
             if let address = Self.address(in: source), editor.field(key: "icon") == "link" || editor.field(key: "cover") != nil {
                 web(address, title: label, cover: editor.field(key: "cover").flatMap { Pictures.image(at: $0, in: store) }, written: .page(name))
             } else {
-                let lines = editor.text().split(whereSeparator: { $0 == "\n" || $0 == "\u{2028}" }).map { inlinePlainText(text: String($0)) }.filter { !$0.isEmpty && $0 != label }
+                let lines = editor.text().split(whereSeparator: { $0 == "\n" || $0 == "\u{2028}" }).map { inlinePlainText(text: String($0).replacingOccurrences(of: "\u{FFFC}", with: "")).trimmingCharacters(in: .whitespaces) }.filter { !$0.isEmpty && $0 != label }
                 VStack(alignment: .leading, spacing: 5) {
                     Text(label).font(.system(size: 13, weight: .semibold)).lineLimit(2)
                     if !lines.isEmpty {

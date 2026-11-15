@@ -156,7 +156,7 @@ public struct NoteEditorView: UIViewRepresentable {
         defer { if marked || other { coordinator.showMarks(goingTo: coordinator.parent.markAt != nil && marked) } }
         if view.tintColor != theme.accent { view.tintColor = theme.accent }
         let refolded = folds && coordinator.takeFolds(anew: other)
-        if other || refolded || coordinator.shownMode != editor.mode() || coordinator.shown != editor.text() {
+        if other || refolded || coordinator.shown != editor.text() {
             // …or the note was changed from outside the view: a link given its title, say.
             // Other rows than those that were chosen, or carried.
             view.hands?.letGo()
@@ -267,7 +267,6 @@ extension NoteEditorView.Coordinator: UITextViewDelegate {
     /// and so nothing to say where its caret goes. A note with nothing in
     /// it yet is such a row: where its first words will be.
     func emptyRowIndent(at caret: Int) -> CGFloat? {
-        guard shownMode == .outline else { return nil }
         if layout.lines.isEmpty { return parent.theme.step }
         guard let line = layout.lines.last(where: { Int($0.start) <= caret && caret <= Int($0.end) }), line.start == line.end else { return nil }
         return CGFloat(line.depth) * parent.theme.step
@@ -615,7 +614,6 @@ public final class NoteTextView: UITextView {
     /// bar for a note shown as text.
     func showFold() {
         guard let madeBar, let coordinator else { return }
-        madeBar.isOutline = coordinator.shownMode == .outline
         let row = coordinator.caretRow.flatMap { coordinator.layout.lines.indices.contains($0) ? coordinator.layout.lines[$0] : nil }
         madeBar.showFold(folded: row?.isFolded == true, foldable: row?.hasChildren == true)
     }
@@ -815,6 +813,19 @@ public final class NoteTextView: UITextView {
 
     /// Undo is the note's own: it puts structure back, which text alone cannot.
     public override var undoManager: UndoManager? { nil }
+
+    /// Words chosen, copied or cut: as the Markdown they are — the view shows only their words.
+    public override func copy(_ sender: Any?) {
+        let selection = selectedRange
+        guard selection.length > 0, let coordinator, !((layoutManager as? BodyLayoutManager)?.rows.isEmpty ?? true) else { return super.copy(sender) }
+        UIPasteboard.general.string = coordinator.editor.markdownBetween(start: UInt32(selection.location), end: UInt32(NSMaxRange(selection)))
+    }
+
+    public override func cut(_ sender: Any?) {
+        guard selectedRange.length > 0, !((layoutManager as? BodyLayoutManager)?.rows.isEmpty ?? true) else { return super.cut(sender) }
+        copy(sender)
+        deleteBackward()
+    }
 
     public override func deleteBackward() {
         if coordinator?.perform(.deleteBackward) == true { return }

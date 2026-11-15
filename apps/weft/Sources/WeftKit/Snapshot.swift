@@ -32,10 +32,8 @@ enum Snapshot {
         guard let largest = sources.first, !sources.isEmpty else { return }
         let middle = sources[sources.count / 2]
         for (name, note) in [("the largest note", largest), ("a middling note", middle)] {
-            for mode in [EditorMode.outline, .text] {
-                let cost = EditorBench.measure(source: note.text, mode: mode, theme: Ink.editorTheme)
-                print(String(format: "%@ (%d bytes) as %@: open %.2f ms, read %.2f ms, dress %.2f ms, a keystroke's change %.2f ms", name, note.text.utf8.count, mode == .outline ? "an outline" : "text", cost.open * 1000, cost.layout * 1000, cost.style * 1000, cost.replace * 1000))
-            }
+            let cost = EditorBench.measure(source: note.text, theme: Ink.editorTheme)
+            print(String(format: "%@ (%d bytes): open %.2f ms, read %.2f ms, dress %.2f ms, a keystroke's change %.2f ms", name, note.text.utf8.count, cost.open * 1000, cost.layout * 1000, cost.style * 1000, cost.replace * 1000))
         }
         var card: Card?
         print("opening a card (read, parse, backlinks, tags):", ms(clock.measure {
@@ -82,10 +80,6 @@ enum Snapshot {
         }
         // WEFT_SHOW=2: the river shown, by its place among the tabs.
         if let shown = Int(environment["WEFT_SHOW"] ?? ""), store.rivers.indices.contains(shown) { store.currentRiver = shown }
-        // WEFT_MODE=outline or text: every card open shown that way.
-        if let mode = environment["WEFT_MODE"] {
-            for card in store.river.cards { store.draft(path: card.path, title: card.title).setMode(mode == "outline" ? .outline : .text) }
-        }
         store.river.selected = nil
         if let edit = environment["WEFT_EDIT"], let card = store.river.cards.first(where: { $0.title == edit }) {
             store.river.selected = card.id

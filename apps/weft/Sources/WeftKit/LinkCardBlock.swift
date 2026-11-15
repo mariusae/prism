@@ -71,7 +71,7 @@ struct LinkCardBlock: View {
         let path = found?.path
         let source = path.flatMap { (try? store.engine.read(path: $0)) ?? nil }
         // As an outline: its rows' words, without their bullets.
-        let editor = source.map { NoteEditor.open(source: $0, mode: .outline) }
+        let editor = source.map { NoteEditor.open(source: $0) }
         let label = path.map { store.label(path: $0, title: Days.shown(name)) } ?? Days.shown(name)
         let emblem = path.map { store.emblem(path: $0, title: label) } ?? Emblem(title: label)
         let cover = editor?.field(key: "cover").flatMap { Pictures.image(at: $0, in: store) }

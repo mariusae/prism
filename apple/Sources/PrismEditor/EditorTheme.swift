@@ -323,10 +323,10 @@ public struct EditorPicture: Hashable {
 /// opening it, reading it for drawing, and dressing it — which is what
 /// each keystroke costs. Seconds.
 public enum EditorBench {
-    public static func measure(source: String, mode: EditorMode, theme: EditorTheme = .system(size: 14)) -> (open: Double, layout: Double, style: Double, replace: Double) {
+    public static func measure(source: String, theme: EditorTheme = .system(size: 14)) -> (open: Double, layout: Double, style: Double, replace: Double) {
         let clock = ContinuousClock()
         var editor: NoteEditor!
-        let open = clock.measure { editor = NoteEditor.open(source: source, mode: mode) }
+        let open = clock.measure { editor = NoteEditor.open(source: source) }
         var layout: BodyLayout!
         let read = clock.measure { layout = editor.layout() }
         let storage = NSTextStorage(string: editor.text())

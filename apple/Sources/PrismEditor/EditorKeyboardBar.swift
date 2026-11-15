@@ -71,15 +71,6 @@ final class EditorKeyboardBar: UIInputView {
         }
     }
 
-    /// Whether the note is shown as an outline: only then are there rows
-    /// to fold.
-    var isOutline = true {
-        didSet {
-            guard isOutline != oldValue else { return }
-            foldButton?.isHidden = !isOutline
-        }
-    }
-
     init(tint: UIColor, act: @escaping (Tool) -> Void) {
         self.tint = tint
         self.act = act

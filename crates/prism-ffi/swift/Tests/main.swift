@@ -41,25 +41,23 @@ try createBareRepository(path: remote, branch: "main")
 
 // --- A note open in an editor: the note is the engine's, the view only shows it
 
-let open = NoteEditor.open(source: "# Atlas\n\n- one\n- two\n", mode: .outline)
-expect(open.text() == "one\ntwo" && open.title() == "Atlas" && !open.layout().markersInText, "an outline shows a row a block, and only its words")
+let open = NoteEditor.open(source: "# Atlas\n\n- one\n- two\n")
+expect(open.text() == "one\ntwo" && open.title() == "Atlas", "an outline shows a row a block, and only its words")
 _ = open.replace(start: 3, end: 3, replacement: "!")
 let indented = open.perform(selectionStart: 6, selectionEnd: 6, command: .indent)
 expect(indented != nil && open.markdown() == "# Atlas\n\n- one!\n  - two\n", "typing and Tab change the note's tree")
 _ = open.undo()
 expect(open.markdown() == "# Atlas\n\n- one!\n- two\n" && open.canRedo(), "undo puts structure back")
-open.setMode(mode: .text)
-expect(open.text() == "- one!\n- two\n" && open.layout().markersInText, "the same note as text is its Markdown")
 
 // Rows fold, are carried, and tell the time: an outline's own, wherever the caret is.
-let outline = NoteEditor.open(source: "- one\n  - 9:00–9:30 two\n  - 10:00 three\n- last\n", mode: .outline)
+let outline = NoteEditor.open(source: "- one\n  - 9:00–9:30 two\n  - 10:00 three\n- last\n")
 let foldedRow = outline.performOn(rows: [0], selectionStart: 0, selectionEnd: 0, command: .fold)
 expect(foldedRow != nil && outline.text() == "one\nlast" && outline.markdown().contains("three"), "a folded row shows none of what is under it, and the note keeps it")
 expect(outline.layout().lines[0].isFolded && outline.foldedRows() == [RiverFoldedRow(index: 0, text: "one")], "a fold is told as a river keeps it")
 expect(outline.rowInfo(row: 0)?.hidden == 2 && outline.setFoldedRows(rows: []) && !outline.setFoldedRows(rows: []), "and set as an app remembers it")
 expect(outline.dropDepth(rows: [3], before: 1, depth: 9) == 1 && outline.moveRows(rows: [3], before: 1, depth: 9, selectionStart: 0, selectionEnd: 0) != nil, "a row is carried to a place and a depth")
 expect(outline.markdown() == "- one\n  - last\n  - 9:00–9:30 two\n  - 10:00 three\n" && outline.markdownOf(rows: [1]) == "- last\n", "and copied as Markdown of its own")
-expect(outline.link(selectionStart: 0, selectionEnd: 3, address: " https://example.com ") != nil && outline.text().hasPrefix("[one](https://example.com)"), "an address pasted on words links them")
+expect(outline.link(selectionStart: 0, selectionEnd: 3, address: " https://example.com ") != nil && outline.text().hasPrefix("one\n") && outline.markdown().hasPrefix("- [one](https://example.com)"), "an address pasted on words links them: the view shows the words, the note the link")
 expect(webAddress(text: "not one") == nil && outline.perform(selectionStart: 0, selectionEnd: 0, command: .turnTask) != nil && outline.markdown().hasPrefix("+ [ ] [one]"), "a row is turned into another kind")
 
 // --- A document, edited ------------------------------------------------------

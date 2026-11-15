@@ -430,7 +430,7 @@ struct PhoneCard: View {
                 onFollow: { follow($0) }
             )
             .fixedSize(horizontal: false, vertical: true)
-            .id(isFocus ? "focus" : "\(draft.mode)")
+            .id(isFocus ? "focus" : "note")
             .opacity(draft.task == .done ? 0.5 : 1)
         }
     }

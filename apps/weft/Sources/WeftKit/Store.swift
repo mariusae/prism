@@ -760,7 +760,7 @@ public final class GraphStore {
     /// The same, of a path. The file itself is asked, not the index:
     /// a note just made is there before it is indexed.
     private func isGone(path: String) -> Bool {
-        NoteEditor.open(source: "", mode: .outline).isUntitled(path: path) && ((try? engine.read(path: path)) ?? nil) == nil
+        NoteEditor.open(source: "").isUntitled(path: path) && ((try? engine.read(path: path)) ?? nil) == nil
     }
 
     /// What a card is called until its note is read: the page's title —
@@ -1756,7 +1756,7 @@ public final class PageDraft {
     public func view(of card: Card) -> NoteEditor? {
         guard let key = card.viewKey else { return nil }
         if let open = views[card.id], open.revision == revision, open.key == key { return open.editor }
-        let made = NoteEditor.open(source: editor.markdown(), mode: .outline)
+        let made = NoteEditor.open(source: editor.markdown())
         let found: Bool
         if let focus = card.focus {
             found = made.setFocus(name: focus)
@@ -1779,7 +1779,7 @@ public final class PageDraft {
     /// that card's note now says is what the note says, in every card.
     public func changed(from card: Card.ID) {
         guard let view = views[card] else { return changed() }
-        editor = NoteEditor.open(source: view.editor.markdown(), mode: editor.mode())
+        editor = NoteEditor.open(source: view.editor.markdown())
         revision += 1
         views[card] = (view.editor, revision, view.key)
         touch()
@@ -1797,11 +1797,9 @@ public final class PageDraft {
         self.path = path
         self.title = title
         fallbackTitle = title
-        editor = NoteEditor.open(source: "", mode: .outline)
+        editor = NoteEditor.open(source: "")
         read()
     }
-
-    public var mode: EditorMode { editor.mode() }
 
     private func read() {
         guard let store else { return }
@@ -1813,22 +1811,9 @@ public final class PageDraft {
 
     /// Takes a file's text as what the page says.
     private func take(_ file: String) {
-        editor = NoteEditor.open(source: file, mode: chosenMode(for: file))
+        editor = NoteEditor.open(source: file)
         title = editor.title() ?? ((try? store?.engine.page(path: path)) ?? nil)?.title ?? fallbackTitle
         isConflicted = conflictCount(source: file) > 0
-        revision += 1
-    }
-
-    /// How the page is shown: always as rows, as Bike shows everything —
-    /// prose as rows of paragraphs and headings. Its Markdown is never shown.
-    private func chosenMode(for file: String) -> EditorMode {
-        .outline
-    }
-
-    public func setMode(_ mode: EditorMode) {
-        guard mode != editor.mode() else { return }
-        editor.setMode(mode: mode)
-        try? store?.engine.setLocalValue(name: "weft/mode/\(path)", value: mode == .outline ? "outline" : "text")
         revision += 1
     }
 
@@ -1930,13 +1915,11 @@ public final class PageDraft {
         return bareLink(address) != nil
     }
 
-    /// The row of the note that is this link and nothing else — in an
-    /// outline — and whether it is shown as the link's card; nil where no
+    /// The row of the note that is this link and nothing else, and whether it is shown as the link's card; nil where no
     /// row is.
     public func cardRow(for link: EditorLink) -> (row: Int, isCard: Bool)? {
         _ = revision
         let layout = editor.layout()
-        guard !layout.markersInText else { return nil }
         let wanted: String
         switch link {
         case .web(let address): wanted = "web:" + address

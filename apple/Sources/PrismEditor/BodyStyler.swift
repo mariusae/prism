@@ -68,13 +68,8 @@ extension NSAttributedString.Key {
 /// The engine says what each line and run of the text *is*
 /// (`NoteEditor.layout`); this turns that into fonts, colours, and the
 /// marks the layout manager draws — pills, bullets, boxes. It knows no
-/// Markdown, and it serves both ways the engine shows a note:
-///
-/// - as **text**, each line's marker is in the text: hidden, with a dot
-///   or a box drawn in its place, except on the lines being written in,
-///   where the markup shows faint;
-/// - as an **outline**, a line is a row and holds only its words: what
-///   the row is, is drawn in the margin beside it.
+/// Markdown: a line is a row and holds only its words, and what the row
+/// is, is drawn in the margin beside it.
 struct BodyStyler {
     var theme: EditorTheme
     /// Says whether a page of this name is there, for a link's look.
@@ -85,6 +80,9 @@ struct BodyStyler {
     /// when that is not the name a link to it is written with: `nil`
     /// where the link already says it, or leads nowhere.
     var linkLabel: (String) -> String? = { _ in nil }
+    /// A row's own Markdown, by its place among the lines: the view shows
+    /// its words only.
+    var rowMarkdown: (Int) -> String? = { _ in nil }
     /// The icon the page a link leads to was given: an SF Symbol's name.
     var linkIcon: (String) -> String? = { _ in nil }
 
@@ -92,8 +90,6 @@ struct BodyStyler {
     /// A note's first heading is its own; those under it are structure, and read
     /// as a section's name — at the body's size, set apart by weight and room.
     static let headingScales: [CGFloat] = [1.3, 1.02, 1, 1, 0.95, 0.95]
-    /// How far each level of a list written as text is set in.
-    static let levelIndent: CGFloat = 20
 
     var size: CGFloat { theme.size }
     var iconSide: CGFloat { (size * 0.72).rounded() }
@@ -124,7 +120,6 @@ struct BodyStyler {
     /// written in; empty when the text is only read.
     func style(_ storage: NSTextStorage, layout: BodyLayout, revealed: Set<Int>) {
         let whole = NSRange(location: 0, length: storage.length)
-        let outline = !layout.markersInText
         storage.beginEditing()
         storage.setAttributes(baseAttributes, range: whole)
 
@@ -132,20 +127,13 @@ struct BodyStyler {
         for (index, line) in layout.lines.enumerated() {
             let range = NSRange(location: Int(line.start), length: Int(line.end - line.start))
             guard NSMaxRange(range) <= storage.length else { continue }
-            let shown = revealed.contains(index)
             let paragraph = NSMutableParagraphStyle()
             paragraph.lineSpacing = 3
-            if outline {
-                // A row stands in from the margin by its depth; what it is, is drawn in the step before it.
-                let indent = CGFloat(line.depth) * theme.step
-                paragraph.firstLineHeadIndent = indent
-                paragraph.headIndent = indent
-                paragraph.paragraphSpacing = (size * 0.2).rounded()
-            } else if line.indent > 0 {
-                // The spaces that place a line are the list's, not the reader's.
-                storage.addAttributes([.font: Self.hiddenFont, .foregroundColor: EditorColor.clear], range: NSRange(location: range.location, length: Int(line.indent)))
-            }
-            let depthIndent = CGFloat(max(Int(line.depth) - 1, 0)) * Self.levelIndent
+            // A row stands in from the margin by its depth; what it is, is drawn in the step before it.
+            let indent = CGFloat(line.depth) * theme.step
+            paragraph.firstLineHeadIndent = indent
+            paragraph.headIndent = indent
+            paragraph.paragraphSpacing = (size * 0.2).rounded()
             switch line.kind {
             case .heading(let level):
                 let scale = Self.headingScales[min(max(Int(level), 1), 6) - 1]
@@ -154,36 +142,20 @@ struct BodyStyler {
             case .item(let number, let done, let bullet):
                 // A typed row — a task, a number, a bulleted row — has its mark in a step of
                 // room before its words, after its handle, as Bike's list marks are.
-                if outline, done != nil || number != nil || bullet != "-" {
+                if done != nil || number != nil || bullet != "-" {
                     paragraph.firstLineHeadIndent += theme.step
                     paragraph.headIndent += theme.step
-                }
-                if !outline {
-                    let marker = done != nil && !shown ? taskRoom : width(of: storage, from: Int(line.start + line.indent), to: Int(line.content))
-                    paragraph.firstLineHeadIndent = depthIndent
-                    paragraph.headIndent = depthIndent + marker
                 }
                 if done == true {
                     // Done, as Bike's: struck through, thick.
                     let words = NSRange(location: Int(line.content), length: max(Int(line.end) - Int(line.content), 0))
                     storage.addAttributes([.foregroundColor: theme.secondary, .strikethroughStyle: NSUnderlineStyle.thick.rawValue, .strikethroughColor: theme.secondary], range: words)
                 }
-            case .paragraph where line.depth > 0 && !outline:
-                // A paragraph continuing an item stands under its words.
-                let under = CGFloat(Int(line.depth) - 1) * Self.levelIndent + bulletWidth
-                paragraph.firstLineHeadIndent = under
-                paragraph.headIndent = under
             case .quote:
-                if outline {
-                    // As Bike's: its words a step in, the bar in that step.
-                    paragraph.firstLineHeadIndent += theme.step
-                    paragraph.headIndent += theme.step
-                    storage.addAttribute(.prismQuote, value: true, range: range)
-                } else if !shown {
-                    paragraph.firstLineHeadIndent = 14
-                    paragraph.headIndent = 14
-                    storage.addAttribute(.prismQuote, value: true, range: range)
-                }
+                // As Bike's: its words a step in, the bar in that step.
+                paragraph.firstLineHeadIndent += theme.step
+                paragraph.headIndent += theme.step
+                storage.addAttribute(.prismQuote, value: true, range: range)
                 storage.addAttribute(.foregroundColor, value: theme.secondary, range: range)
             case .fence:
                 storage.addAttributes([.font: theme.mono(size * 0.92), .foregroundColor: EditorColor.clear, .prismFence: true], range: range)
@@ -192,7 +164,7 @@ struct BodyStyler {
                 // A row of code's fences, there to be edited and not read: faint,
                 // and their backticks — which sit at the top of a line — set down
                 // into it, so the fences stand evenly above and below the code.
-                if outline { dimFences(storage, in: range) }
+                dimFences(storage, in: range)
             case .rule:
                 storage.addAttribute(.foregroundColor, value: theme.faint, range: range)
             default:
@@ -207,14 +179,12 @@ struct BodyStyler {
         var lineIndex = 0
         var markupEnd: [Int: Int] = [:]
         for run in layout.runs where run.kind == .markup { markupEnd[Int(run.start)] = Int(run.end) }
-        let markupEnds = Set(markupEnd.values)
         // Rows drawn as their link's card: their words are put away under the card, and
         // are given no link's look — its icon would stand out in the margin.
-        let text = storage.string as NSString
         let cardLines = Set(layout.lines.indices.filter { index in
             let line = layout.lines[index]
-            let range = NSRange(location: Int(line.content), length: max(Int(line.end) - Int(line.content), 0))
-            return line.isCard && !revealed.contains(index) && NSMaxRange(range) <= text.length && EditorBlock.cardLink(text.substring(with: range)) != nil
+            let written = rowMarkdown(index) ?? ""
+            return line.isCard && !revealed.contains(index) && EditorBlock.cardLink(written) != nil
         })
         for run in layout.runs {
             let range = NSRange(location: Int(run.start), length: Int(run.end - run.start))
@@ -222,12 +192,10 @@ struct BodyStyler {
             while lineIndex + 1 < layout.lines.count, Int(layout.lines[lineIndex + 1].start) <= range.location { lineIndex += 1 }
             while lineIndex > 0, Int(layout.lines[lineIndex].start) > range.location { lineIndex -= 1 }
             let line = layout.lines[lineIndex]
-            // In an outline the Markdown is never seen, written in or not — as Bike's rich text.
-            let shown = !outline && revealed.contains(lineIndex)
             if cardLines.contains(lineIndex) { continue }
             switch run.kind {
             case .markup:
-                hide(storage, range, shown: shown)
+                hide(storage, range)
             case .strong:
                 restyle(storage, range) { theme.font($0.pointSize, weight: .semibold, italic: $0.isItalic) }
             case .emphasis:
@@ -244,23 +212,32 @@ struct BodyStyler {
                 let missing = !isRiver && !pageExists(target)
                 // Its icon before it only where the page has one of its own — a day's is the calendar.
                 let symbol = isRiver ? "square.stack" : (linkIcon(target) ?? (isDate(target) ? "calendar" : nil))
-                link(storage, range, to: .page(target), symbol: symbol, missing: missing, line: line, shown: shown, markupEnd: markupEnd, faint: !isRiver && !missing && pageArchived(target))
+                link(storage, range, to: .page(target), symbol: symbol, missing: missing, line: line, markupEnd: markupEnd, faint: !isRiver && !missing && pageArchived(target))
                 // A link written with its page's file's name shows the page's title — off the lines being written in.
-                if !shown, !isRiver, (storage.string as NSString).substring(with: range) == target, let label = linkLabel(target) {
+                let words = (storage.string as NSString).substring(with: range)
+                if words == "\u{FFFC}" {
+                    // A link to a page is one character: drawn as its page's title, or its own name.
+                    relabel(storage, range, as: isRiver ? target : (linkLabel(target) ?? target))
+                } else if !isRiver, words == target, let label = linkLabel(target) {
                     relabel(storage, range, as: label)
                 }
             case .webLink(let url):
                 // An address shown as itself is cut to what says where it leads.
                 let bare = (storage.string as NSString).substring(with: range) == url
-                link(storage, range, to: .web(url), symbol: nil, missing: false, line: line, shown: shown, markupEnd: markupEnd, leaves: true)
-                if bare, !shown { shorten(storage, range, address: url as NSString, lead: range.location == Int(line.start)) }
+                link(storage, range, to: .web(url), symbol: nil, missing: false, line: line, markupEnd: markupEnd, leaves: true)
+                if bare { shorten(storage, range, address: url as NSString, lead: range.location == Int(line.start)) }
             case .tag(let name):
-                link(storage, range, to: .tag(name), symbol: nil, missing: false, line: line, shown: shown, markupEnd: markupEnd)
+                link(storage, range, to: .tag(name), symbol: nil, missing: false, line: line, markupEnd: markupEnd)
             case .image:
-                storage.addAttribute(.foregroundColor, value: theme.faint, range: range)
+                if (storage.string as NSString).substring(with: range) == "\u{FFFC}" {
+                    // A picture, one character among the words: it takes no room; the picture is shown under them.
+                    storage.addAttributes([.font: Self.hiddenFont, .foregroundColor: EditorColor.clear], range: range)
+                } else {
+                    storage.addAttribute(.foregroundColor, value: theme.faint, range: range)
+                }
             case .bullet:
                 if case .item(let number, let done, let bullet) = line.kind {
-                    if shown || number != nil {
+                    if number != nil {
                         storage.addAttribute(.foregroundColor, value: theme.faint, range: range)
                     } else if let done {
                         // The box stands where the marker is written, in room of its own.
@@ -276,16 +253,12 @@ struct BodyStyler {
                     }
                 }
             case .checkbox:
-                if shown {
-                    storage.addAttribute(.foregroundColor, value: theme.faint, range: range)
-                } else {
-                    // With the space after it.
-                    let length = min(range.length + 1, Int(line.content) - range.location)
-                    storage.addAttributes([.font: Self.hiddenFont, .foregroundColor: EditorColor.clear], range: NSRange(location: range.location, length: max(length, range.length)))
-                }
+                // With the space after it.
+                let length = min(range.length + 1, Int(line.content) - range.location)
+                storage.addAttributes([.font: Self.hiddenFont, .foregroundColor: EditorColor.clear], range: NSRange(location: range.location, length: max(length, range.length)))
             case .quoteMark:
                 let length = min(Int(line.content) - range.location, storage.length - range.location)
-                hide(storage, NSRange(location: range.location, length: max(length, range.length)), shown: shown)
+                hide(storage, NSRange(location: range.location, length: max(length, range.length)))
             case .callout:
                 storage.addAttribute(.foregroundColor, value: theme.faint, range: range)
             case .fenceInfo:
@@ -315,33 +288,19 @@ struct BodyStyler {
         }
     }
 
-    private func hide(_ storage: NSTextStorage, _ range: NSRange, shown: Bool) {
-        if shown {
-            storage.addAttribute(.foregroundColor, value: theme.faint, range: range)
-        } else {
-            storage.addAttributes([.font: Self.hiddenFont, .foregroundColor: EditorColor.clear, .prismMarkup: true], range: range)
-        }
+    private func hide(_ storage: NSTextStorage, _ range: NSRange) {
+        storage.addAttributes([.font: Self.hiddenFont, .foregroundColor: EditorColor.clear, .prismMarkup: true], range: range)
     }
 
-    private func link(_ storage: NSTextStorage, _ range: NSRange, to target: EditorLink, symbol: String?, missing: Bool, line: BodyLine, shown: Bool, markupEnd: [Int: Int], leaves: Bool = false, faint: Bool = false) {
+    private func link(_ storage: NSTextStorage, _ range: NSRange, to target: EditorLink, symbol: String?, missing: Bool, line: BodyLine, markupEnd: [Int: Int], leaves: Bool = false, faint: Bool = false) {
         // A link to a page not written yet, or to one archived: in the secondary ink.
         let tint = missing || faint ? theme.secondary : theme.accent
         storage.addAttributes([.foregroundColor: tint, .prismLink: LinkBox(target)], range: range)
         if missing {
             restyle(storage, range) { theme.font($0.pointSize, weight: $0.isBold ? .semibold : .regular, italic: true) }
         }
-        // In a heading, and on a line being written in, a link is only coloured —
-        // and, being written, set in the code face, its markup with it: written as it is stored.
+        // In a heading, a link is only coloured.
         if case .heading = line.kind { return }
-        guard !shown else {
-            let mono = theme.mono(size * 0.92)
-            storage.addAttribute(.font, value: mono, range: range)
-            for (start, end) in markupEnd where end == range.location || start == NSMaxRange(range) {
-                guard end <= storage.length, end > start else { continue }
-                storage.addAttribute(.font, value: mono, range: NSRange(location: start, length: end - start))
-            }
-            return
-        }
         let closes = markupEnd[NSMaxRange(range)].map { $0 > NSMaxRange(range) } ?? false
         storage.addAttribute(.prismPill, value: Pill(symbol: symbol, tint: tint, isMissing: missing, leaves: leaves, roomInside: leaves && !closes), range: range)
         // Room for the icon, on the last character of the markup before the words…
@@ -411,10 +370,6 @@ struct BodyStyler {
             guard let font = value as? EditorFont, font.pointSize > 1 else { return }
             storage.addAttribute(.font, value: change(font), range: part)
         }
-    }
-
-    private var bulletWidth: CGFloat {
-        ("- " as NSString).size(withAttributes: [.font: theme.body]).width
     }
 
     private func width(of storage: NSTextStorage, from: Int, to: Int) -> CGFloat {
@@ -534,7 +489,7 @@ final class BodyLayoutManager: NSLayoutManager {
     /// it yet: the text system draws nothing for no text — not even what
     /// stands beside it — so the bullet would come only with the first word.
     func drawEmptyRow(at origin: CGPoint) {
-        guard textStorage?.length == 0, isOutline else { return }
+        guard textStorage?.length == 0 else { return }
         if !rows.isEmpty { return drawBackground(forGlyphRange: NSRange(location: 0, length: 0), at: origin) }
         // No row at all yet — a note just made: the bullet its first row will have, where the caret waits.
         guard isWriting else { return }
@@ -546,9 +501,8 @@ final class BodyLayoutManager: NSLayoutManager {
         Self.ovalPath(CGRect(x: box.midX - diameter / 2, y: baseline - theme.body.xHeight / 2 - diameter / 2, width: diameter, height: diameter).offsetBy(dx: origin.x, dy: origin.y)).fill()
     }
 
-    /// Whether the note is shown as an outline, and whether it is being written in: an empty
-    /// outline being written in shows the bullet its first row will have.
-    var isOutline = false
+    /// Whether the note is being written in: an empty one being written in
+    /// shows the bullet its first row will have.
     var isWriting = false
 
     /// Whether a point of the container is on the lead.

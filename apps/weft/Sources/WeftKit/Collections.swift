@@ -136,7 +136,7 @@ extension GraphStore {
         var changed = Set<String>()
         for page in pinned + inbox + wiki where !changed.contains(page.path) {
             guard let text = (try? engine.read(path: page.path)) ?? nil else { continue }
-            let editor = NoteEditor.open(source: text, mode: .text)
+            let editor = NoteEditor.open(source: text)
             for key in ["pinned", "inbox", "wiki"] { _ = editor.removeField(key: key) }
             let out = editor.markdown()
             if out != text, (try? engine.write(path: page.path, content: out)) != nil {

@@ -136,7 +136,7 @@ final class RowHands: NSObject, UIGestureRecognizerDelegate, @preconcurrency UIE
     /// and anywhere on it otherwise; never by a link, the lead, or what
     /// an app draws in place of a block.
     private func canHold(at point: CGPoint) -> Bool {
-        guard let view, let manager, let coordinator, coordinator.shownMode == .outline, !view.isComposing, choice == nil, carried == nil,
+        guard let view, let manager, let coordinator, !view.isComposing, choice == nil, carried == nil,
               view.row(at: point) != nil
         else { return false }
         let place = view.containerPoint(point)

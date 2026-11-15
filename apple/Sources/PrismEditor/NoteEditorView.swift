@@ -178,7 +178,7 @@ public struct NoteEditorView: NSViewRepresentable {
         coordinator.parent = self
         defer { if marked || other { coordinator.showMarks(goingTo: coordinator.parent.markAt != nil && marked) } }
         let refolded = folds && coordinator.takeFolds(anew: other)
-        if other || refolded || coordinator.shownMode != editor.mode() || coordinator.shown != editor.text() {
+        if other || refolded || coordinator.shown != editor.text() {
             // …or the note was changed from outside the view: a link given its title, say.
             coordinator.load()
         } else if looks {
@@ -943,9 +943,9 @@ public final class NoteTextView: NSTextView {
 
     /// Where rows carried over this note would be put down: before which
     /// row, how deep, and where the line that says so is drawn. Nothing,
-    /// when none are carried, or the note is shown as text.
+    /// when none are carried.
     private func rowsDrop(_ sender: any NSDraggingInfo) -> (before: Int, depth: Int, y: CGFloat, x: CGFloat)? {
-        guard sender.draggingPasteboard.availableType(from: [Self.rowsType]) != nil, let carried = Self.carried, let coordinator, !coordinator.layout.markersInText,
+        guard sender.draggingPasteboard.availableType(from: [Self.rowsType]) != nil, let carried = Self.carried, let coordinator,
               let manager = layoutManager as? BodyLayoutManager else { return nil }
         let place = convert(sender.draggingLocation, from: nil)
         let point = CGPoint(x: place.x - textContainerOrigin.x, y: place.y - textContainerOrigin.y)
@@ -984,18 +984,18 @@ public final class NoteTextView: NSTextView {
     }
 
     public override func draggingEntered(_ sender: any NSDraggingInfo) -> NSDragOperation {
-        guard carriesRows, coordinator?.layout.markersInText == false else { return super.draggingEntered(sender) }
+        guard carriesRows, coordinator != nil else { return super.draggingEntered(sender) }
         return showDrop(sender) ? operation(sender) : []
     }
 
     public override func draggingUpdated(_ sender: any NSDraggingInfo) -> NSDragOperation {
-        guard carriesRows, coordinator?.layout.markersInText == false else { return super.draggingUpdated(sender) }
+        guard carriesRows, coordinator != nil else { return super.draggingUpdated(sender) }
         return showDrop(sender) ? operation(sender) : []
     }
 
     public override func prepareForDragOperation(_ sender: any NSDraggingInfo) -> Bool {
         // Rows are this view's to take, whatever the text system makes of what is carried.
-        if carriesRows, coordinator?.layout.markersInText == false { return rowsDrop(sender) != nil }
+        if carriesRows, coordinator != nil { return rowsDrop(sender) != nil }
         return super.prepareForDragOperation(sender)
     }
 
@@ -1019,7 +1019,7 @@ public final class NoteTextView: NSTextView {
     /// Puts rows carried down where the line was. From another note, they
     /// are written here and then taken out there; within this one, moved.
     private func drop(rows sender: any NSDraggingInfo) -> Bool? {
-        guard carriesRows, let coordinator, !coordinator.layout.markersInText else { return nil }
+        guard carriesRows, coordinator != nil else { return nil }
         guard let drop = rowsDrop(sender), let carried = Self.carried else { return false }
         (layoutManager as? BodyLayoutManager)?.dropLine = nil
         needsDisplay = true
@@ -1103,8 +1103,7 @@ public final class NoteTextView: NSTextView {
     var isChoosingRows: Bool { rowsChosen != nil }
 
     private var outlineLines: [BodyLine] {
-        guard let layout = coordinator?.layout, !layout.markersInText else { return [] }
-        return layout.lines
+        coordinator?.layout.lines ?? []
     }
 
     /// Right-clicked: the text's own menu, and — on a link alone on its
@@ -1420,6 +1419,16 @@ public final class NoteTextView: NSTextView {
             return
         }
         super.copy(sender)
+    }
+
+    /// Words chosen, copied, cut or dragged: as the Markdown they are, links
+    /// and pictures and all — the view shows only their words.
+    public override func writeSelection(to board: NSPasteboard, types: [NSPasteboard.PasteboardType]) -> Bool {
+        let selection = selectedRange()
+        guard !outlineLines.isEmpty, !isChoosingRows, selection.length > 0, let coordinator else { return super.writeSelection(to: board, types: types) }
+        let markdown = coordinator.editor.markdownBetween(start: UInt32(selection.location), end: UInt32(NSMaxRange(selection)))
+        board.declareTypes([.string], owner: nil)
+        return board.setString(markdown, forType: .string)
     }
 
     public override func cut(_ sender: Any?) {
