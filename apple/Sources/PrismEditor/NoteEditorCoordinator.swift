@@ -126,7 +126,21 @@ extension NoteEditorView {
             view.setNeedsDisplay()
             #endif
             guard goingTo, let at = manager.foundAt else { return }
+            #if os(macOS)
             view.scrollRangeToVisible(at)
+            #else
+            // The text view does not scroll — the river it is in does: brought into sight there, in its middle.
+            DispatchQueue.main.async { [weak view] in
+                guard let view, let start = view.position(from: view.beginningOfDocument, offset: at.location),
+                      let end = view.position(from: start, offset: at.length), let range = view.textRange(from: start, to: end) else { return }
+                var river: UIView? = view.superview
+                while let next = river, !(next is UIScrollView) { river = next.superview }
+                guard let scroll = river as? UIScrollView else { return }
+                let rect = view.convert(view.firstRect(for: range), to: scroll)
+                let sight = scroll.bounds.height - scroll.adjustedContentInset.top - scroll.adjustedContentInset.bottom
+                scroll.scrollRectToVisible(rect.insetBy(dx: 0, dy: -max((sight - rect.height) / 2, 0)), animated: true)
+            }
+            #endif
         }
 
         /// Whether any of the app's views stand in the note: a picture, a query's findings.

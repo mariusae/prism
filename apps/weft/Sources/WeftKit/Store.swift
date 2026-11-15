@@ -1500,6 +1500,9 @@ public final class River: Identifiable {
     /// A row gone to (Go to Row): its card, and where in what the card shows the caret goes.
     /// Taken — and put back to nothing — by the card's editor once the caret is there.
     public var goingTo: (card: Card.ID, at: Int)?
+    /// A row shown (the phone's Go to Row): its card, and the row's words in what the card
+    /// shows — marked for a moment, and brought into sight.
+    public var shownRow: (card: Card.ID, range: NSRange)?
     /// Asks the river's view to bring a card into sight, moving no more
     /// than that takes: after a card was closed or folded, so that what
     /// is left is not a stretch of nothing. Moved each time.
@@ -2372,5 +2375,35 @@ extension GraphStore {
         river.goingTo = (id, Int(at))
         river.reveal(id, unfolding: false)
         rememberRivers()
+    }
+}
+
+extension GraphStore {
+    /// Shows a row of a card's note in the river, without writing in it —
+    /// as a phone goes to one: the card opened and brought into sight, the
+    /// rows the row is under unfolded, and the row marked for a moment.
+    public func showRow(card id: Card.ID, index: UInt32) {
+        let river = self.river
+        guard let card = river.card(id) else { return }
+        if card.folded { river.toggleFold(id) }
+        let draft = draft(path: card.path, title: card.title)
+        guard let shown = river.card(id) else { return }
+        let editor = draft.view(of: shown) ?? draft.editor
+        guard let at = editor.revealRow(index: index) else { return }
+        // The row's words: to the end of its line.
+        let text = editor.text() as NSString
+        let start = Int(at)
+        let end = text.rangeOfCharacter(from: .newlines, range: NSRange(location: start, length: text.length - start)).location
+        let range = NSRange(location: start, length: (end == NSNotFound ? text.length : end) - start)
+        river.selected = id
+        river.reveal(id, unfolding: false)
+        rememberRivers()
+        // Once the card is drawn where it was brought: the row marked, which brings it into sight.
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) { [weak river] in
+            river?.shownRow = (id, range)
+            DispatchQueue.main.asyncAfter(deadline: .now() + 1.8) {
+                if river?.shownRow?.card == id { river?.shownRow = nil }
+            }
+        }
     }
 }

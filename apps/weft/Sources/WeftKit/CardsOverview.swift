@@ -432,10 +432,86 @@ struct CardsOverview: View {
     @State private var typed = ""
     /// The tile held and carried, while it is.
     @State private var carried: Card.ID?
+    /// The river's outlines, read once something is typed: the rows that say it are listed.
+    @State private var outlines: [RiverOutline.Outline]?
+
+    private var isFinding: Bool { !typed.trimmingCharacters(in: .whitespaces).isEmpty }
 
     var body: some View {
         let cards = store.cards(of: river, saying: typed)
         NavigationStack {
+            Group {
+                if isFinding { rows } else { tiles(cards) }
+            }
+            .background(Color.inkPage)
+            .navigationTitle(store.title(of: river))
+            .navigationBarTitleDisplayMode(.inline)
+            .searchable(text: $typed, placement: .navigationBarDrawer(displayMode: .automatic), prompt: "Find a card or a row")
+            .toolbar { ToolbarItem(placement: .confirmationAction) { Button("Done") { isShown = false } } }
+            // Pinched open again: back to the river.
+            .simultaneousGesture(MagnifyGesture().onEnded { if $0.magnification > 1.25 { isShown = false } })
+            .onChange(of: isFinding) { _, finding in if finding, outlines == nil { outlines = RiverOutline.read(river, in: store) } }
+        }
+    }
+
+    /// What is typed, found in the river's outlines: each card that says it, and under it the
+    /// rows that do — with the rows they are under, quieter, so that the outline is still seen.
+    private var rows: some View {
+        let lines = RiverOutline.lines(outlines ?? [], typed: typed)
+        return ScrollView {
+            LazyVStack(alignment: .leading, spacing: 0) {
+                ForEach(lines) { line in
+                    row(line)
+                        .contentShape(Rectangle())
+                        .onTapGesture { go(to: line) }
+                }
+                if !lines.contains(where: \.isFound) {
+                    Text("No card or row says that").font(.callout).foregroundStyle(Color.inkFaint).padding(40)
+                }
+            }
+            .padding(.horizontal, 14)
+            .padding(.vertical, 8)
+        }
+        .scrollDismissesKeyboard(.interactively)
+    }
+
+    private func row(_ line: RiverOutline.Line) -> some View {
+        HStack(alignment: .firstTextBaseline, spacing: 8) {
+            if let emblem = line.emblem {
+                EmblemView(emblem, size: 17, style: .plain, quiet: Color.inkSecondary)
+                    .alignmentGuide(.firstTextBaseline) { $0[VerticalAlignment.center] + 5 }
+            } else {
+                Image(systemName: line.done == true ? "checkmark.square" : line.done == false ? "square" : "circle.fill")
+                    .font(.system(size: line.done == nil ? 5 : 13))
+                    .foregroundStyle(Color.inkFaint)
+                    .frame(width: 14)
+            }
+            Text(line.words.isEmpty ? " " : line.words)
+                .font(.system(size: line.row == nil ? 16 : 15.5, weight: line.row == nil || line.heading ? .semibold : .regular))
+                .foregroundStyle(line.isFound ? (line.done == true ? Color.inkSecondary : Color.inkText) : Color.inkFaint)
+                .strikethrough(line.done == true, color: Color.inkFaint)
+                .lineLimit(2)
+            Spacer(minLength: 0)
+        }
+        // Deep rows step in less and less: a phone is narrow.
+        .padding(.leading, CGFloat(min(line.depth, 6)) * 14)
+        .padding(.top, line.row == nil ? 16 : 0)
+        .frame(minHeight: 40)
+    }
+
+    /// A card gone to; or a row of one, shown where it is in its card.
+    private func go(to line: RiverOutline.Line) {
+        isShown = false
+        store.leaving()
+        if let row = line.row {
+            store.showRow(card: line.card, index: row)
+        } else {
+            withAnimation(.snappy(duration: 0.24)) { river.reveal(line.card) }
+            store.rememberRivers()
+        }
+    }
+
+    private func tiles(_ cards: [Card]) -> some View {
             ScrollView {
                 LazyVGrid(columns: [GridItem(.flexible(), spacing: 12, alignment: .top), GridItem(.flexible(), spacing: 12, alignment: .top)], spacing: 12) {
                     ForEach(cards) { card in
@@ -467,17 +543,9 @@ struct CardsOverview: View {
                 .padding(14)
                 .animation(.snappy(duration: 0.22), value: cards.map(\.id))
                 if cards.isEmpty {
-                    Text(typed.isEmpty ? "Nothing in this river yet" : "No card says that").font(.callout).foregroundStyle(Color.inkFaint).padding(40)
+                    Text("Nothing in this river yet").font(.callout).foregroundStyle(Color.inkFaint).padding(40)
                 }
             }
-            .background(Color.inkPage)
-            .navigationTitle(store.title(of: river))
-            .navigationBarTitleDisplayMode(.inline)
-            .searchable(text: $typed, placement: .navigationBarDrawer(displayMode: .automatic), prompt: "Narrow these cards")
-            .toolbar { ToolbarItem(placement: .confirmationAction) { Button("Done") { isShown = false } } }
-            // Pinched open again: back to the river.
-            .simultaneousGesture(MagnifyGesture().onEnded { if $0.magnification > 1.25 { isShown = false } })
-        }
     }
 
     private func act(_ change: () -> Void) {

@@ -420,7 +420,8 @@ struct PhoneCard: View {
                     savePictures: { pictures in pictures.compactMap { store.savePicture(data: $0.data, fileExtension: $0.fileExtension) } },
                 onZoom: { name, apart in zoom(name, apart: apart) },
                 onZoomOut: isFocus ? { widen(shown) } : nil,
-                marks: marks(in: shown, isFocus: isFocus),
+                marks: river.shownRow?.card == card.id ? [river.shownRow!.range] : marks(in: shown, isFocus: isFocus),
+                markAt: river.shownRow?.card == card.id ? 0 : nil,
                 onChange: { if isFocus { draft.changed(from: card.id) } else { draft.changed() } },
                 onFocus: { focused in
                     if focused {
