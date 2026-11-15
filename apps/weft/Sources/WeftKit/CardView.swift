@@ -56,7 +56,7 @@ struct CardView: View {
     private var isWriting: Bool { river.writing == card.id }
     private var isDay: Bool { card.path.hasPrefix("daily/") || card.path.hasPrefix("weekly/") }
     private var showsActions: Bool { isHovered || isSelected }
-    private var titleFont: Font { .system(size: TextSettings.titleSize, weight: .semibold, design: TextSettings.design) }
+    private var titleFont: Font { TextSettings.font(TextSettings.titleSize, weight: .semibold, role: .display) }
 
     var body: some View {
         // Read, so that the card is laid out again when the text's height changes.
@@ -131,7 +131,7 @@ struct CardView: View {
             RoundedRectangle(cornerRadius: Measures.cardRadius, style: .continuous)
                 .strokeBorder(isSelected ? Color.inkAccent.opacity(0.5) : Color.inkRule, lineWidth: 1)
         )
-        .shadow(color: .black.opacity(card.folded ? 0.03 : 0.07), radius: card.folded ? 4 : 10, y: card.folded ? 1 : 3)
+        .shadow(color: .black.opacity(card.folded ? 0.02 : 0.045), radius: card.folded ? 4 : 10, y: card.folded ? 1 : 3)
         .contentShape(Rectangle())
         .onTapGesture { river.selected = card.id }
         .onHover { isHovered = $0 }
@@ -266,7 +266,7 @@ struct CardView: View {
                     .fixedSize(horizontal: true, vertical: false)
             }
         }
-        .font(.system(size: 11.5, design: TextSettings.design))
+        .font(TextSettings.font(11.5, role: .label))
         .foregroundStyle(Color.inkSecondary)
         .pointerStyle(.link)
     }
@@ -312,7 +312,7 @@ struct CardView: View {
         row {
             HStack(alignment: .firstTextBaseline, spacing: 8) {
                 Text("\(Text(focusLabel(view)).bold().foregroundStyle(Color.inkText))  \(Text(([draft.label] + view.focusTrail().map(Days.shown)).joined(separator: " › ")).foregroundStyle(Color.inkSecondary))")
-                    .font(.system(size: TextSettings.size, design: TextSettings.design))
+                    .font(TextSettings.font(TextSettings.size))
                     .lineLimit(2)
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .contentShape(Rectangle())
@@ -455,7 +455,7 @@ struct CardView: View {
             ZStack(alignment: .topLeading) {
                 if isFocus ? shown.text().isEmpty : draft.isBlank, !isWriting {
                     Text(isFocus ? "Nothing under this row yet. Write here." : isDay ? "Nothing written on this day yet." : (draft.exists ? "Write here." : "No note has this title yet. Write here to make it."))
-                        .font(.system(size: TextSettings.size, design: TextSettings.design))
+                        .font(TextSettings.font(TextSettings.size))
                         .foregroundStyle(Color.inkFaint)
                         .padding(.top, 2)
                         // Under a row, beside the bullet its empty row is shown with: where its words will be.
@@ -604,7 +604,7 @@ struct CardView: View {
                 // a note that is only a picture is called nothing, and shown by it.
                 let named = !(thumb != nil && draft.isUntitled && draft.label == "Untitled")
                 Text("\(Text(named ? emblem.caption(draft.label) : "").bold().foregroundStyle(draft.task == .done ? Color.inkSecondary : Color.inkText).strikethrough(draft.task == .done))\(named ? "  " : "")\(Text(draft.summary).foregroundStyle(Color.inkSecondary))")
-                    .font(.system(size: TextSettings.size, design: TextSettings.design))
+                    .font(TextSettings.font(TextSettings.size))
                     .lineLimit(2)
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .contentShape(Rectangle())

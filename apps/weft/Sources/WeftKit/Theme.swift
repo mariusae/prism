@@ -19,10 +19,12 @@ public enum Ink {
     public static let shelf = pair(0xF2EDE5, 0x262320)
     public static let text = pair(0x2B2724, 0xECE6DC)
     public static let secondary = pair(0x6F665D, 0xA79E92)
-    public static let faint = pair(0x2B2724, 0xECE6DC, alpha: 0.32)
+    // Quiet, but never hard to see: a source's domain, a fold's handle.
+    public static let faint = pair(0x2B2724, 0xECE6DC, alpha: 0.40)
     public static let rule = pair(0x2B2724, 0xECE6DC, alpha: 0.10)
     public static let hover = pair(0x2B2724, 0xECE6DC, alpha: 0.06)
-    public static let accent = pair(0x265CD1, 0x85ADFF)
+    // A muted cobalt: a link's strong affordance, without a browser's blue in a warm page.
+    public static let accent = pair(0x315DBB, 0x93ACDD)
     public static let marked = pair(0xF5D76E, 0x8A6D1A, alpha: 0.45)
 
     static func rgb(_ hex: UInt32, _ alpha: CGFloat) -> PlatformColor {
@@ -147,6 +149,8 @@ public enum TextSettings {
             case "apple", "serif": .serif
             case "rounded": .rounded
             case "mono": .mono
+            // Chosen where its fonts are, and read where they are not: its system analog.
+            case "humanist": EditorFace.humanist.isAvailable ? .humanist : .serif
             default: .sans
             }
             return (size == 0 ? TextSettings.defaultSize : min(max(CGFloat(size), TextSettings.range.lowerBound), TextSettings.range.upperBound), face)
@@ -166,7 +170,35 @@ public enum TextSettings {
         set { Chosen.shared.face = newValue }
     }
 
-    @MainActor public static var isSerif: Bool { face == .serif }
+    @MainActor public static var isSerif: Bool { face == .serif || face == .humanist }
+
+    /// What a set is called, where it is chosen.
+    public static func name(for face: EditorFace) -> String {
+        switch face {
+        case .sans: "Sans"
+        case .serif: "Serif"
+        case .rounded: "Rounded"
+        case .mono: "Mono"
+        case .humanist: "Humanist"
+        }
+    }
+
+    /// A font of the chosen set, for SwiftUI: what is written, by default; a
+    /// title in its display face; what is said about a note in its label face.
+    @MainActor public static func font(_ size: CGFloat, weight: Font.Weight = .regular, role: EditorFace.Role = .text) -> Font {
+        let platform: PlatformFont.Weight = switch weight {
+        case .ultraLight: .ultraLight
+        case .thin: .thin
+        case .light: .light
+        case .medium: .medium
+        case .semibold: .semibold
+        case .bold: .bold
+        case .heavy: .heavy
+        case .black: .black
+        default: .regular
+        }
+        return Font(face.font(role, size: size, weight: platform))
+    }
     @MainActor public static var design: Font.Design { face.fontDesign }
 
     @MainActor public static var titleSize: CGFloat {

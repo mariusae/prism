@@ -7,7 +7,8 @@ import SwiftUI
 public struct SettingsView: View {
     public init() {}
 
-    private static let faces: [(face: EditorFace, name: String)] = [(.sans, "Sans"), (.serif, "Serif"), (.rounded, "Rounded"), (.mono, "Mono")]
+    /// The sets there are here: Humanist only where its families are installed.
+    private static var faces: [(face: EditorFace, name: String)] { EditorFace.available.map { ($0, TextSettings.name(for: $0)) } }
 
     public var body: some View {
         VStack(alignment: .leading, spacing: 18) {
@@ -18,7 +19,7 @@ public struct SettingsView: View {
                         let chosen = TextSettings.face == item.face
                         Button { TextSettings.face = item.face } label: {
                             VStack(spacing: 4) {
-                                Text("Ag").font(.system(size: 26, weight: .medium, design: item.face.fontDesign)).foregroundStyle(Color.inkText)
+                                Text("Ag").font(Font(item.face.font(.text, size: 26, weight: .medium))).foregroundStyle(Color.inkText)
                                 Text(item.name).font(.caption).foregroundStyle(chosen ? Color.inkAccent : Color.inkSecondary)
                             }
                             .frame(width: 84, height: 70)
@@ -39,16 +40,16 @@ public struct SettingsView: View {
                     Button("Reset") { TextSettings.size = TextSettings.defaultSize }.controlSize(.small).disabled(TextSettings.size == TextSettings.defaultSize)
                 }
                 HStack(spacing: 10) {
-                    Text("A").font(.system(size: 11, design: TextSettings.design)).foregroundStyle(Color.inkSecondary)
+                    Text("A").font(TextSettings.font(11)).foregroundStyle(Color.inkSecondary)
                     Slider(value: Binding(get: { Double(TextSettings.size) }, set: { TextSettings.size = CGFloat($0) }), in: Double(TextSettings.range.lowerBound)...Double(TextSettings.range.upperBound), step: 1)
-                    Text("A").font(.system(size: 20, design: TextSettings.design)).foregroundStyle(Color.inkSecondary)
+                    Text("A").font(TextSettings.font(20)).foregroundStyle(Color.inkSecondary)
                 }
             }
             // What a card will look like.
             VStack(alignment: .leading, spacing: 6) {
-                Text("A note\u{2019}s title").font(.system(size: TextSettings.titleSize, weight: .semibold, design: TextSettings.design))
+                Text("A note\u{2019}s title").font(TextSettings.font(TextSettings.titleSize, weight: .semibold))
                 Text("Notes are set like this: a line of writing, with a **bold** word and an *italic* one, long enough to wrap onto a second line.")
-                    .font(.system(size: TextSettings.size, design: TextSettings.design))
+                    .font(TextSettings.font(TextSettings.size))
                     .fixedSize(horizontal: false, vertical: true)
             }
             .foregroundStyle(Color.inkText)

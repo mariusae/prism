@@ -133,6 +133,7 @@
 				CF0000000000000000000007 /* Sources */,
 				CF0000000000000000000008 /* Frameworks */,
 				CF0000000000000000000009 /* Resources */,
+				DD00000000000000000000F2 /* Bundle Humanist Fonts */,
 			);
 			buildRules = (
 			);
@@ -156,6 +157,7 @@
 				AE0000000000000000000007 /* Sources */,
 				AE0000000000000000000008 /* Frameworks */,
 				AE0000000000000000000009 /* Resources */,
+				DD00000000000000000000F1 /* Bundle Humanist Fonts */,
 				BF0000000000000000000012 /* Embed Foundation Extensions */,
 			);
 			buildRules = (
@@ -266,6 +268,49 @@
 		};
 /* End PBXResourcesBuildPhase section */
 
+/* Begin PBXShellScriptBuildPhase section */
+		DD00000000000000000000F1 /* Bundle Humanist Fonts */ = {
+			isa = PBXShellScriptBuildPhase;
+			alwaysOutOfDate = 1;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			inputFileListPaths = (
+			);
+			inputPaths = (
+			);
+			name = "Bundle Humanist Fonts";
+			outputFileListPaths = (
+			);
+			outputPaths = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+			shellPath = /bin/sh;
+			shellScript = "# Humanist's fonts, from this Mac's own, into the app: licensed to the one using it, never kept in the repository. Where they are not installed, nothing is copied and the set is not offered.\nset -e\ndestination=\"${TARGET_BUILD_DIR}/${UNLOCALIZED_RESOURCES_FOLDER_PATH}/Fonts\"\nmkdir -p \"$destination\"\nfor folder in \"$HOME/Library/Fonts\" /Library/Fonts; do\n  for font in \"$folder\"/ChronicleSSm-*.otf \"$folder\"/IdealSansSSm-*.otf \"$folder\"/OperatorMonoSSm-*.otf; do\n    [ -f \"$font\" ] && cp -f \"$font\" \"$destination/\"\n  done\ndone\nexit 0\n";
+			showEnvVarsInLog = 0;
+		};
+		DD00000000000000000000F2 /* Bundle Humanist Fonts */ = {
+			isa = PBXShellScriptBuildPhase;
+			alwaysOutOfDate = 1;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			inputFileListPaths = (
+			);
+			inputPaths = (
+			);
+			name = "Bundle Humanist Fonts";
+			outputFileListPaths = (
+			);
+			outputPaths = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+			shellPath = /bin/sh;
+			shellScript = "# Humanist's fonts, from this Mac's own, into the app: licensed to the one using it, never kept in the repository. Where they are not installed, nothing is copied and the set is not offered.\nset -e\ndestination=\"${TARGET_BUILD_DIR}/${UNLOCALIZED_RESOURCES_FOLDER_PATH}/Fonts\"\nmkdir -p \"$destination\"\nfor folder in \"$HOME/Library/Fonts\" /Library/Fonts; do\n  for font in \"$folder\"/ChronicleSSm-*.otf \"$folder\"/IdealSansSSm-*.otf \"$folder\"/OperatorMonoSSm-*.otf; do\n    [ -f \"$font\" ] && cp -f \"$font\" \"$destination/\"\n  done\ndone\nexit 0\n";
+			showEnvVarsInLog = 0;
+		};
+/* End PBXShellScriptBuildPhase section */
+
 /* Begin PBXSourcesBuildPhase section */
 		CF0000000000000000000007 /* Sources */ = {
 			isa = PBXSourcesBuildPhase;
@@ -303,6 +348,7 @@
 			isa = XCBuildConfiguration;
 			baseConfigurationReference = AE000000000000000000001B /* GitHub.xcconfig */;
 			buildSettings = {
+				ENABLE_USER_SCRIPT_SANDBOXING = NO;
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				CODE_SIGN_ENTITLEMENTS = WeftReader.entitlements;
 				CODE_SIGN_STYLE = Automatic;
@@ -333,6 +379,7 @@
 			isa = XCBuildConfiguration;
 			baseConfigurationReference = AE000000000000000000001B /* GitHub.xcconfig */;
 			buildSettings = {
+				ENABLE_USER_SCRIPT_SANDBOXING = NO;
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				CODE_SIGN_ENTITLEMENTS = WeftReader.entitlements;
 				CODE_SIGN_STYLE = Automatic;
@@ -451,6 +498,7 @@
 			isa = XCBuildConfiguration;
 			baseConfigurationReference = AE000000000000000000001B /* GitHub.xcconfig */;
 			buildSettings = {
+				ENABLE_USER_SCRIPT_SANDBOXING = NO;
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				CODE_SIGN_ENTITLEMENTS = Weft.entitlements;
 				CODE_SIGN_STYLE = Automatic;
@@ -481,6 +529,7 @@
 			isa = XCBuildConfiguration;
 			baseConfigurationReference = AE000000000000000000001B /* GitHub.xcconfig */;
 			buildSettings = {
+				ENABLE_USER_SCRIPT_SANDBOXING = NO;
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				CODE_SIGN_ENTITLEMENTS = Weft.entitlements;
 				CODE_SIGN_STYLE = Automatic;

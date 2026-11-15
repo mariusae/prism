@@ -40,7 +40,7 @@ struct QueryView: View {
                             Button { open(page) } label: {
                                 HStack(spacing: 4) {
                                     if store.emblem(page).isShown { EmblemView(store.emblem(page), size: TextSettings.size * 0.95, style: .plain, quiet: Color.inkAccent) }
-                                    Text(store.emblem(page).caption(page.label)).font(.system(size: TextSettings.size, design: TextSettings.design)).lineLimit(1)
+                                    Text(store.emblem(page).caption(page.label)).font(TextSettings.font(TextSettings.size)).lineLimit(1)
                                 }
                                 .padding(.horizontal, 6)
                                 .padding(.vertical, 2)

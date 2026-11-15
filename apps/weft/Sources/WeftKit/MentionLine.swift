@@ -25,12 +25,9 @@ struct MentionLine: View {
         #endif
     }()
 
-    private static func measure(_ words: String) -> CGFloat {
-        #if os(macOS)
-        let font = NSFont.systemFont(ofSize: size)
-        #else
-        let font = UIFont.systemFont(ofSize: size)
-        #endif
+    /// How wide words are in the line's face: the set's label face — what is said about a note.
+    @MainActor private static func measure(_ words: String) -> CGFloat {
+        let font = TextSettings.face.font(.label, size: size)
         return ceil((words as NSString).size(withAttributes: [.font: font]).width)
     }
 
@@ -90,7 +87,7 @@ struct MentionLine: View {
             }
             Spacer(minLength: 0)
         }
-        .font(.system(size: Self.size))
+        .font(TextSettings.font(Self.size, role: .label))
         .lineLimit(1)
         .frame(maxWidth: .infinity, alignment: .leading)
         .onGeometryChange(for: CGFloat.self) { $0.size.width.rounded() } action: { width = $0 }

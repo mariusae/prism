@@ -461,7 +461,7 @@ struct PhoneSettings: View {
     private let account = Account.shared
     @Environment(\.dismiss) private var dismiss
 
-    private static let faces: [(face: EditorFace, name: String)] = [(.sans, "Sans"), (.serif, "Serif"), (.rounded, "Rounded"), (.mono, "Mono")]
+    private static var faces: [(face: EditorFace, name: String)] { EditorFace.available.map { ($0, TextSettings.name(for: $0)) } }
     private static let clock: DateFormatter = {
         let format = DateFormatter()
         format.dateFormat = "HH:mm:ss"
@@ -481,7 +481,7 @@ struct PhoneSettings: View {
                         Slider(value: Binding(get: { Double(TextSettings.size) }, set: { TextSettings.size = CGFloat($0) }), in: Double(TextSettings.range.lowerBound)...Double(TextSettings.range.upperBound), step: 1)
                         Text("A").font(.system(size: 22))
                     }
-                    Text("Notes are set like this, at \(Int(TextSettings.size)) points.").font(.system(size: TextSettings.size, design: TextSettings.design))
+                    Text("Notes are set like this, at \(Int(TextSettings.size)) points.").font(TextSettings.font(TextSettings.size))
                 }
                 Section {
                     Button("Make Pinned and Inbox Rivers") { converting = true }

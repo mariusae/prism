@@ -104,7 +104,7 @@ struct CalendarPopover: View {
         let thisWeek = Self.week(ofRow: [Date()])?.title
         VStack(alignment: .leading, spacing: 0) {
             HStack(spacing: 2) {
-                Text(month.title).font(.system(size: 16, weight: .bold, design: TextSettings.design)).foregroundStyle(Color.inkText)
+                Text(month.title).font(TextSettings.font(16, weight: .bold, role: .display)).foregroundStyle(Color.inkText)
                 Spacer()
                 step("chevron.left", "Previous Month", -1)
                 step("chevron.right", "Next Month", 1)

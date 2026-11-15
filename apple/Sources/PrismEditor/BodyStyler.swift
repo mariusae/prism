@@ -87,6 +87,9 @@ struct BodyStyler {
     /// when that is not the name a link to it is written with: `nil`
     /// where the link already says it, or leads nowhere.
     var linkLabel: (String) -> String? = { _ in nil }
+    /// Whether the note is being written in. Not, an empty typed row — a box,
+    /// a number with nothing by it — is put away: there for writing, not reading.
+    var isWriting = true
     /// Whether the note is shown as prose: every row a step further out,
     /// so its top-level rows stand at the margin, as paragraphs, apart.
     var prose = false
@@ -125,9 +128,51 @@ struct BodyStyler {
     var arrowRoom: CGFloat { (size * 0.7).rounded() + 3 }
     var taskRoom: CGFloat { (size * 1.5).rounded(.up) }
 
+    /// The room under each of a row's lines, for the line height a row of its
+    /// kind is set to: an outline compact but not dense (1.45), what is read
+    /// as prose — a paragraph shown as prose, a quote — more open (1.6), a
+    /// heading tight (1.15), code between. As the font's own height differs
+    /// from face to face, the room is what is left to the height asked for.
+    static func lineSpacing(for kind: BodyLineKind, depth: UInt32, prose: Bool, font: EditorFont) -> CGFloat {
+        let height: CGFloat = switch kind {
+        case .heading: 1.15
+        case .quote: 1.6
+        case .code, .fence: 1.3
+        default: prose && depth <= 1 ? 1.6 : 1.45
+        }
+        let natural = font.ascender - font.descender + font.leading
+        return max((font.pointSize * height - natural).rounded(), 0)
+    }
+
+    /// The properties a note is given as rows — a link kept, an article —
+    /// whose names are said as what they are: about the note, not of it.
+    static let propertyNames: Set<String> = ["url", "type", "description", "author", "source", "date"]
+
+    /// Where a row's property name is — `URL:`, its colon and the space after
+    /// — if the row begins with one of them.
+    static func propertyName(in text: NSString, range: NSRange) -> NSRange? {
+        guard range.length > 2, NSMaxRange(range) <= text.length else { return nil }
+        let words = text.substring(with: range)
+        guard let colon = words.firstIndex(of: ":"), words.distance(from: words.startIndex, to: colon) <= 12 else { return nil }
+        guard propertyNames.contains(words[..<colon].lowercased()) else { return nil }
+        let after = words.index(after: colon)
+        let spaces = words[after...].prefix { $0 == " " }.count
+        return NSRange(location: range.location, length: (String(words[..<after]) as NSString).length + spaces)
+    }
+
+    /// Whether a row is typed — a box, a number, a bullet — with nothing written by it.
+    static func isEmptyTyped(_ line: BodyLine) -> Bool {
+        guard line.end <= line.content, case .item(let number, let done, let bullet) = line.kind else { return false }
+        return done != nil || number != nil || bullet != "-"
+    }
+
+    /// How far a line of what is read as prose runs: about 75 characters,
+    /// measured from where its words begin. An outline's rows run the card's width.
+    func measure(from indent: CGFloat) -> CGFloat { indent + (size * 39).rounded() }
+
     var baseAttributes: [NSAttributedString.Key: Any] {
         let paragraph = NSMutableParagraphStyle()
-        paragraph.lineSpacing = 3
+        paragraph.lineSpacing = Self.lineSpacing(for: .paragraph, depth: 1, prose: false, font: theme.body)
         return [.font: theme.body, .foregroundColor: theme.text, .paragraphStyle: paragraph]
     }
 
@@ -154,7 +199,6 @@ struct BodyStyler {
             let range = NSRange(location: Int(line.start), length: Int(line.end - line.start))
             guard NSMaxRange(range) <= storage.length else { continue }
             let paragraph = NSMutableParagraphStyle()
-            paragraph.lineSpacing = 3
             let indent = Self.wordsIndent(of: line, step: theme.step, prose: prose)
             paragraph.firstLineHeadIndent = indent
             paragraph.headIndent = indent
@@ -162,18 +206,19 @@ struct BodyStyler {
             switch line.kind {
             case .heading(let level):
                 let scale = Self.headingScales[min(max(Int(level), 1), 6) - 1]
-                storage.addAttribute(.font, value: theme.font(size * scale, weight: .semibold), range: range)
+                storage.addAttribute(.font, value: theme.display(size * scale, weight: .semibold), range: range)
                 paragraph.paragraphSpacingBefore += index == 0 ? 0 : (size * 0.5).rounded()
             case .item(_, let done, _):
                 if done == true {
                     // Done, as Bike's: struck through, thick.
                     let words = NSRange(location: Int(line.content), length: max(Int(line.end) - Int(line.content), 0))
-                    storage.addAttributes([.foregroundColor: theme.secondary, .strikethroughStyle: NSUnderlineStyle.thick.rawValue, .strikethroughColor: theme.secondary], range: words)
+                    // Done: the row recedes as a whole — its words, its links, a light strike through them.
+                    storage.addAttributes([.foregroundColor: theme.secondary, .strikethroughStyle: NSUnderlineStyle.single.rawValue, .strikethroughColor: theme.faint], range: words)
                 }
             case .quote:
-                // As Bike's: its words a step in (see `wordsIndent`), the bar in that step.
+                // Its words a step in (see `wordsIndent`), a thin rule in that step; a little quieter than what is written.
                 storage.addAttribute(.prismQuote, value: true, range: range)
-                storage.addAttribute(.foregroundColor, value: theme.secondary, range: range)
+                storage.addAttribute(.foregroundColor, value: theme.text.withAlphaComponent(0.82), range: range)
             case .code:
                 // Only the code: its fences are Markdown, and never in the view. Room
                 // above and below it, where its fences stood, sets it apart.
@@ -185,6 +230,39 @@ struct BodyStyler {
             default:
                 break
             }
+            // A property, written as a row — `URL: …`, `Type: …` — says something about the note:
+            // its name in the set's label face, small and quiet; a URL's address the same, smaller.
+            if case .item(nil, nil, "-") = line.kind, let key = Self.propertyName(in: storage.string as NSString, range: range) {
+                storage.addAttributes([.font: theme.label((size * 0.85).rounded(), weight: .medium), .foregroundColor: theme.secondary], range: key)
+                if (storage.string as NSString).substring(with: key).lowercased().hasPrefix("url") {
+                    storage.addAttribute(.font, value: theme.label((size * 0.9).rounded()), range: NSRange(location: NSMaxRange(key), length: NSMaxRange(range) - NSMaxRange(key)))
+                }
+            } else if case .paragraph = line.kind, let key = Self.propertyName(in: storage.string as NSString, range: range) {
+                storage.addAttributes([.font: theme.label((size * 0.85).rounded(), weight: .medium), .foregroundColor: theme.secondary], range: key)
+            }
+            // An empty typed row, while the note is only read: no room at all.
+            if !isWriting, Self.isEmptyTyped(line) {
+                paragraph.minimumLineHeight = 0.01
+                paragraph.maximumLineHeight = 0.01
+                paragraph.paragraphSpacing = 0
+                let whole = NSRange(location: range.location, length: min(range.length + 1, storage.length - range.location))
+                if whole.length > 0 { storage.addAttribute(.paragraphStyle, value: paragraph, range: whole) }
+                continue
+            }
+            // The room between its lines, by its kind and the font it is set in.
+            let lineFont: EditorFont = switch line.kind {
+            case .heading(let level): theme.display(size * Self.headingScales[min(max(Int(level), 1), 6) - 1])
+            case .code, .fence: theme.mono(size * 0.92)
+            default: theme.body
+            }
+            paragraph.lineSpacing = Self.lineSpacing(for: line.kind, depth: line.depth, prose: prose, font: lineFont)
+            // What is read as prose — a paragraph shown as prose, a quote — runs no longer than a reader's measure.
+            let readAsProse: Bool = switch line.kind {
+            case .quote: true
+            case .paragraph, .item: prose && line.depth <= 1
+            default: false
+            }
+            if readAsProse { paragraph.tailIndent = measure(from: indent) }
             // The last row has nothing after it to be set apart from: no room after it,
             // which would only stand empty under the note.
             if index == layout.lines.count - 1 { paragraph.paragraphSpacing = 0 }
@@ -293,8 +371,10 @@ struct BodyStyler {
     }
 
     private func link(_ storage: NSTextStorage, _ range: NSRange, to target: EditorLink, symbol: String?, missing: Bool, line: BodyLine, markupEnd: [Int: Int], leaves: Bool = false, faint: Bool = false) {
-        // A link to a page not written yet, or to one archived: in the secondary ink.
-        let tint = missing || faint ? theme.secondary : theme.accent
+        // A link to a page not written yet, or to one archived — or in a row done: in the secondary ink.
+        var done = false
+        if case .item(_, let state, _) = line.kind { done = state == true }
+        let tint = missing || faint || done ? theme.secondary : theme.accent
         storage.addAttributes([.foregroundColor: tint, .prismLink: LinkBox(target)], range: range)
         if missing {
             restyle(storage, range) { theme.font($0.pointSize, weight: $0.isBold ? .semibold : .regular, italic: true) }
@@ -324,7 +404,14 @@ struct BodyStyler {
     /// ([`BodyLayoutManager`]). What is written is not touched.
     private func relabel(_ storage: NSTextStorage, _ range: NSRange, as label: String, lead: CGFloat = 0) {
         guard range.length > 0 else { return }
-        let font = (storage.attribute(.font, at: range.location, effectiveRange: nil) as? EditorFont) ?? theme.body
+        // The words' own font. A link to a page is one object-replacement character, which a
+        // typographer's face may have no glyph for — and is given another's: its neighbours say.
+        let string = storage.string as NSString
+        let atom = string.character(at: range.location) == 0xFFFC
+        let beside = [range.location - 1, NSMaxRange(range)].first { at in
+            at >= 0 && at < string.length && string.character(at: at) != 10 && string.character(at: at) != 0xFFFC
+        }
+        let font = ((atom ? beside : range.location).flatMap { storage.attribute(.font, at: $0, effectiveRange: nil) } as? EditorFont) ?? theme.body
         let color = (storage.attribute(.foregroundColor, at: range.location, effectiveRange: nil) as? EditorColor) ?? theme.accent
         // One line's worth: room left after a character cannot wrap.
         let words = label.count > 48 ? String(label.prefix(47)).trimmingCharacters(in: .whitespaces) + "…" : label
@@ -391,6 +478,8 @@ struct BodyStyler {
 
 extension EditorFont {
     var isBold: Bool {
+        // A set's own cut, by its name: Chronicle's Medium is a heading's semibold, and says nothing of it.
+        if let heavy = EditorFace.isHeavy(self) { return heavy }
         #if os(macOS)
         return fontDescriptor.symbolicTraits.contains(.bold)
         #else
@@ -618,7 +707,7 @@ final class BodyLayoutManager: NSLayoutManager {
             if let done {
                 let side = (size * 0.95).rounded()
                 let name = bullet == "+" ? (done ? "checkmark.circle.fill" : "circle") : (done ? "checkmark.square.fill" : "square")
-                Self.draw(symbol: name, in: CGRect(x: mark.midX - side / 2, y: baseline - font.capHeight / 2 - side / 2, width: side, height: side), pointSize: side, weight: .regular, colors: done ? [.white, theme.accent] : [theme.secondary])
+                Self.draw(symbol: name, in: CGRect(x: mark.midX - side / 2, y: baseline - font.capHeight / 2 - side / 2, width: side, height: side), pointSize: side, weight: .regular, colors: done ? [.white, theme.secondary] : [theme.secondary])
             } else if let number {
                 let label = "\(number)\(bullet)" as NSString
                 let attributes: [NSAttributedString.Key: Any] = [.font: EditorFont.monospacedDigitSystemFont(ofSize: size * 0.9, weight: .regular), .foregroundColor: theme.text]
@@ -691,8 +780,10 @@ final class BodyLayoutManager: NSLayoutManager {
             guard glyph.length > 0 else { return }
             let fragment = lineFragmentRect(forGlyphAt: glyph.location, effectiveRange: nil)
             let at = location(forGlyphAt: glyph.location)
-            let font = (label.text.attribute(.font, at: 0, effectiveRange: nil) as? EditorFont) ?? font
-            label.text.draw(at: CGPoint(x: fragment.minX + at.x + label.lead + origin.x, y: fragment.minY + at.y - font.ascender + origin.y))
+            // On the line's own baseline: drawn from a corner, a face with leading of its own — a
+            // typographer's — would sit below its neighbours by it.
+            let baseline = CGPoint(x: fragment.minX + at.x + label.lead + origin.x, y: fragment.minY + at.y + origin.y)
+            label.text.draw(with: CGRect(origin: baseline, size: CGSize(width: 10_000, height: 0)), options: [], context: nil)
         }
 
         storage.enumerateAttribute(.prismBullet, in: characters) { value, range, _ in
@@ -719,7 +810,7 @@ final class BodyLayoutManager: NSLayoutManager {
             let baseline = fragment.minY + start.y
             let box = CGRect(x: fragment.minX + start.x, y: baseline - font.capHeight / 2 - side / 2, width: side, height: side).offsetBy(dx: origin.x, dy: origin.y)
             let name = task.isRound ? (task.isDone ? "checkmark.circle.fill" : "circle") : (task.isDone ? "checkmark.square.fill" : "square")
-            Self.draw(symbol: name, in: box, pointSize: side, weight: .regular, colors: task.isDone ? [.white, theme.accent] : [theme.secondary])
+            Self.draw(symbol: name, in: box, pointSize: side, weight: .regular, colors: task.isDone ? [.white, theme.secondary] : [theme.secondary])
         }
 
         // A quote's bar beside it: one for quotes that follow one another, as one quote is.
@@ -742,19 +833,11 @@ final class BodyLayoutManager: NSLayoutManager {
                 bars.append(bar)
             }
         }
-        theme.faint.setFill()
         for bar in bars {
-            // Bike's quote: a faint, rounded box behind the words, the bar at its left edge.
-            let block = CGRect(x: bar.minX - 1, y: bar.minY, width: container.size.width - bar.minX + 1, height: bar.height).offsetBy(dx: origin.x, dy: origin.y)
-            theme.text.withAlphaComponent(0.025).setFill()
-            Self.roundedPath(block, radius: 3).fill()
-            theme.text.withAlphaComponent(0.06).setStroke()
-            let outline = Self.roundedPath(block.insetBy(dx: 0.25, dy: 0.25), radius: 3)
-            outline.lineWidth = 0.5
-            outline.stroke()
-            theme.secondary.setFill()
-            let drawn = CGRect(x: bar.minX, y: bar.minY + 2, width: 4, height: max(bar.height - 4, 2)).offsetBy(dx: origin.x, dy: origin.y)
-            Self.roundedPath(drawn, radius: 2).fill()
+            // A quote: a thin rule at its left, and nothing behind it — its words, and that line, say enough.
+            theme.faint.setFill()
+            let drawn = CGRect(x: bar.minX + 1, y: bar.minY + 3, width: 2, height: max(bar.height - 6, 2)).offsetBy(dx: origin.x, dy: origin.y)
+            Self.roundedPath(drawn, radius: 1).fill()
         }
     }
 
@@ -771,7 +854,7 @@ final class BodyLayoutManager: NSLayoutManager {
             ? [CGPoint(x: x - side / 2, y: y - side * 0.3), CGPoint(x: x + side / 2, y: y - side * 0.3), CGPoint(x: x, y: y + side * 0.45)]
             : [CGPoint(x: x - side * 0.3, y: y - side / 2), CGPoint(x: x + side * 0.45, y: y), CGPoint(x: x - side * 0.3, y: y + side / 2)]
         context.saveGState()
-        context.setFillColor((dark ? theme.secondary : theme.text.withAlphaComponent(0.22)).cgColor)
+        context.setFillColor((dark ? theme.secondary : theme.text.withAlphaComponent(0.3)).cgColor)
         context.addLines(between: points)
         context.closePath()
         context.fillPath()

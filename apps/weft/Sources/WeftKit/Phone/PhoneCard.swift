@@ -100,7 +100,7 @@ struct PhoneCard: View {
                 }
             }
             .buttonStyle(.plain)
-            .font(.system(size: 13, design: TextSettings.design))
+            .font(TextSettings.font(13, role: .label))
             .foregroundStyle(Color.inkSecondary)
             .padding(.vertical, 4)
         }
@@ -138,7 +138,7 @@ struct PhoneCard: View {
 
     private func focusPeek(_ view: NoteEditor) -> some View {
         Text("\(Text(focusLabel(view)).bold().foregroundStyle(Color.inkText))  \(Text(([draft.label] + view.focusTrail().map(Days.shown)).joined(separator: " › ")).foregroundStyle(Color.inkSecondary))")
-            .font(.system(size: TextSettings.size, design: TextSettings.design))
+            .font(TextSettings.font(TextSettings.size))
             .lineLimit(2)
             .frame(maxWidth: .infinity, alignment: .leading)
             .contentShape(Rectangle())
@@ -193,7 +193,7 @@ struct PhoneCard: View {
     private var emblem: Emblem {
         Emblem(title: draft.title, icon: draft.icon, color: draft.color, kindSymbol: isDay ? "calendar" : nil, letter: false, progress: draft.task == .none ? draft.checklist : nil)
     }
-    private var titleFont: Font { .system(size: TextSettings.titleSize, weight: .semibold, design: TextSettings.design) }
+    private var titleFont: Font { TextSettings.font(TextSettings.titleSize, weight: .semibold, role: .display) }
     /// Whether the note has anything to read: a link note's address, a link, a PDF.
     private var canRead: Bool { draft.exists && ReaderSource.any(in: draft.markdown, root: store.root) }
 
@@ -230,7 +230,7 @@ struct PhoneCard: View {
                 RoundedRectangle(cornerRadius: Measures.cardRadius, style: .continuous)
                     .strokeBorder(isSelected ? Color.inkAccent.opacity(0.5) : Color.inkRule, lineWidth: 1)
             )
-            .shadow(color: .black.opacity(card.folded ? 0.03 : 0.07), radius: card.folded ? 4 : 10, y: card.folded ? 1 : 3)
+            .shadow(color: .black.opacity(card.folded ? 0.02 : 0.045), radius: card.folded ? 4 : 10, y: card.folded ? 1 : 3)
             .contentShape(Rectangle())
             .simultaneousGesture(TapGesture().onEnded { river.selected = card.id })
             .modifier(CardSwipe(leading: leadingActions, trailing: trailingActions, enabled: !isWriting && !isRenaming))
@@ -372,7 +372,7 @@ struct PhoneCard: View {
         ZStack(alignment: .topLeading) {
             if isFocus ? shown.text().isEmpty : draft.isBlank, !isWriting {
                 Text(isFocus ? "Nothing under this row yet. Write here." : isDay ? "Nothing written on this day yet." : (draft.exists ? "Write here." : "No note has this title yet. Write here to make it."))
-                    .font(.system(size: TextSettings.size, design: TextSettings.design))
+                    .font(TextSettings.font(TextSettings.size))
                     .foregroundStyle(Color.inkFaint)
                     .padding(.top, 2)
                     // Under a row, beside the bullet its empty row is shown with: where its words will be.
@@ -536,7 +536,7 @@ struct PhoneCard: View {
             let thumb = draft.firstPicture.flatMap { Pictures.image(at: $0.address, in: store) }
             let named = !(thumb != nil && draft.isUntitled && draft.label == "Untitled")
             Text("\(Text(named ? emblem.caption(draft.label) : "").bold().foregroundStyle(draft.task == .done ? Color.inkSecondary : Color.inkText).strikethrough(draft.task == .done))\(named ? "  " : "")\(Text(draft.summary).foregroundStyle(Color.inkSecondary))")
-                .font(.system(size: TextSettings.size, design: TextSettings.design))
+                .font(TextSettings.font(TextSettings.size))
                 .lineLimit(3)
                 .frame(maxWidth: .infinity, alignment: .leading)
             if let thumb {
@@ -1018,7 +1018,7 @@ struct PhoneQuery: View {
                 FlowLayout(spacing: 6) {
                     ForEach(found.pages, id: \.path) { page in
                         Button { open(page) } label: {
-                            Text(store.emblem(page).caption(page.label)).font(.system(size: TextSettings.size - 1, design: TextSettings.design)).lineLimit(1)
+                            Text(store.emblem(page).caption(page.label)).font(TextSettings.font(TextSettings.size - 1)).lineLimit(1)
                                 .padding(.horizontal, 8).padding(.vertical, 3)
                                 .foregroundStyle(Color.inkAccent)
                                 .background(RoundedRectangle(cornerRadius: 6).fill(Color.inkAccent.opacity(0.12)))

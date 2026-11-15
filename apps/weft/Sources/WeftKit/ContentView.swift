@@ -336,9 +336,12 @@ struct RiverBar: View {
                         // One river with nothing of its own is simply the place to search from.
                         Image(systemName: "magnifyingglass").font(.system(size: 11, weight: .semibold)).foregroundStyle(Color.inkSecondary)
                     } else if shrunk {
-                        EmblemView(Emblem(title: store.title(of: river), icon: river.icon, color: river.color), size: 20, quiet: Color.inkSecondary)
+                        // The river shown — or the one under the pointer — in its colour; the rest quiet, grey and
+                        // plain, so that the one shown is what the bar is about.
+                        let lit = current || hovered == river.id
+                        EmblemView(Emblem(title: store.title(of: river), icon: river.icon, color: lit ? river.color : nil), size: 20, style: lit ? .tile : .plain, quiet: Color.inkSecondary)
                             // A river not saved is only passing through: its letter stands fainter.
-                            .opacity(river.name == nil ? 0.5 : 1)
+                            .opacity(river.name == nil ? 0.5 : (lit ? 1 : 0.75))
                     } else if river.icon != nil || river.color != nil {
                         // What it was given — and, clicked, where that is chosen.
                         Button { styling = river.id } label: {

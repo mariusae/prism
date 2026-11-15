@@ -470,11 +470,28 @@ function readerMarkAll(passages) {
     @MainActor
     static var userScript: WKUserScript { WKUserScript(source: script, injectionTime: .atDocumentEnd, forMainFrameOnly: true) }
 
+    /// Humanist's text face, carried in the page: a web view, a process of its
+    /// own, cannot see the fonts the app has taken up. Once, then kept.
+    @MainActor
+    static var fontFaces: String {
+        guard TextSettings.face == .humanist else { return "" }
+        if let made = madeFontFaces { return made }
+        let cuts = [("ChronicleSSm-Book", 400, "normal"), ("ChronicleSSm-BookItalic", 400, "italic"), ("ChronicleSSm-Bold", 700, "normal"), ("ChronicleSSm-BoldItalic", 700, "italic")]
+        let made = cuts.compactMap { name, weight, style -> String? in
+            guard let file = Humanist.file(named: name), let data = try? Data(contentsOf: file) else { return nil }
+            return "@font-face { font-family: 'Chronicle SSm'; font-weight: \(weight); font-style: \(style); src: url(data:font/otf;base64,\(data.base64EncodedString())) format('opentype'); }"
+        }.joined(separator: "\n")
+        madeFontFaces = made
+        return made
+    }
+    @MainActor private static var madeFontFaces: String?
+
     /// The face notes are set in, as a page's CSS names it.
     @MainActor
     static var face: String {
         switch TextSettings.face {
         case .serif: return "ui-serif, 'New York', Georgia, serif"
+        case .humanist: return "'Chronicle SSm', ui-serif, 'New York', Georgia, serif"
         case .rounded: return "ui-rounded, -apple-system, system-ui, sans-serif"
         case .mono: return "ui-monospace, Menlo, monospace"
         default: return "-apple-system, system-ui, sans-serif"
@@ -491,7 +508,8 @@ function readerMarkAll(passages) {
         <!doctype html><html><head><meta charset="utf-8">
         <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
         <style>
-        :root { --face: \(face); --size: \(Int(TextSettings.size))px; --leading: 1.55; }
+        \(fontFaces)
+        :root { --face: \(face); --size: \(Int(TextSettings.size))px; --leading: 1.6; }
         :root { --paper: #fdfcf9; --ink: #2b2724; --soft: #6f665d; --rule: rgba(0,0,0,.12); color-scheme: light dark; }
         @media (prefers-color-scheme: dark) { :root { --paper: #23201d; --ink: #ece6dc; --soft: #a79e92; --rule: rgba(255,255,255,.14); } }
         html { -webkit-text-size-adjust: 100%; }

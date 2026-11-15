@@ -443,7 +443,13 @@ public final class NoteTextView: UITextView {
         manager.ensureLayout(for: container)
         var used = manager.usedRect(for: container).height
         // An empty last line is the caret's to wait on.
-        used = max(used, manager.extraLineFragmentRect.maxY)
+        // …while it is written in: read, a last line put away takes no room — though what is
+        // used counts it.
+        if isWriting {
+            used = max(used, manager.extraLineFragmentRect.maxY)
+        } else if manager.extraLineFragmentRect.height > 0 {
+            used = min(used, manager.extraLineFragmentRect.minY)
+        }
         let size = (manager as? BodyLayoutManager)?.theme.size ?? 14
         return max((used + textContainerInset.top + textContainerInset.bottom).rounded(.up), (size * 1.5).rounded(.up), (blocksBottom + textContainerInset.bottom).rounded(.up))
     }

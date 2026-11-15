@@ -118,6 +118,7 @@ extension NoteEditorView {
             revealed = writing ? BodyStyler.revealed(layout, selection: view.caret) : []
             isApplying = true
             styler.prose = parent.prose
+            styler.isWriting = writing
             manager.prose = parent.prose
             manager.theme = parent.theme
             manager.lines = layout.lines
@@ -131,7 +132,8 @@ extension NoteEditorView {
             styler.style(storage, layout: layout, revealed: revealed)
             let replaced = placeBlocks(in: view, storage: storage)
             // A row an app's view stands in place of has no mark of its own to draw.
-            manager.rows = layout.lines.enumerated().filter { !replaced.contains($0.offset) }.map(\.element)
+            // …nor a typed row with nothing in it, while the note is only read.
+            manager.rows = layout.lines.enumerated().filter { !replaced.contains($0.offset) && (writing || !BodyStyler.isEmptyTyped($0.element)) }.map(\.element)
             view.typingAttributes = typingAttributes(styler)
             isApplying = false
             view.redraw()
@@ -339,7 +341,7 @@ extension NoteEditorView {
                 if storage.length == Int(line.start) || line.start == line.end {
                     // An empty row has no character to carry its indentation: the caret after its mark.
                     let paragraph = NSMutableParagraphStyle()
-                    paragraph.lineSpacing = 3
+                    paragraph.lineSpacing = BodyStyler.lineSpacing(for: line.kind, depth: line.depth, prose: parent.prose, font: parent.theme.body)
                     paragraph.firstLineHeadIndent = BodyStyler.wordsIndent(of: line, step: parent.theme.step, prose: parent.prose)
                     paragraph.headIndent = paragraph.firstLineHeadIndent
                     attributes[.paragraphStyle] = paragraph

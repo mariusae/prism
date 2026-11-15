@@ -1,3 +1,4 @@
+import CoreText
 import Prism
 import SwiftUI
 
@@ -15,14 +16,23 @@ public typealias EditorFont = UIFont
 public typealias EditorFontDescriptor = UIFontDescriptor
 #endif
 
-/// The faces text can be set in: the system's own, in its four designs.
+/// The faces text can be set in: font sets, each a face for every part a
+/// note is made of — what is written (`text`), titles and headings
+/// (`display`), what is said about it (`label`: tags, dates, a property's
+/// name) and code (`mono`). Four are the system's own designs; Humanist is
+/// a typographer's set, offered where its families are installed.
 public enum EditorFace: String, CaseIterable, Hashable, Sendable {
-    case sans, serif, rounded, mono
+    case sans, serif, rounded, mono, humanist
+
+    /// What a part of a note is, for the face it is set in.
+    public enum Role: Sendable {
+        case text, display, label, mono
+    }
 
     var design: EditorFontDescriptor.SystemDesign {
         switch self {
         case .sans: return .default
-        case .serif: return .serif
+        case .serif, .humanist: return .serif
         case .rounded: return .rounded
         case .mono: return .monospaced
         }
@@ -31,10 +41,149 @@ public enum EditorFace: String, CaseIterable, Hashable, Sendable {
     public var fontDesign: Font.Design {
         switch self {
         case .sans: return .default
-        case .serif: return .serif
+        case .serif, .humanist: return .serif
         case .rounded: return .rounded
         case .mono: return .monospaced
         }
+    }
+
+    /// Whether the set can be used here: the system's always; Humanist on a
+    /// Mac with Chronicle, Ideal Sans and Operator Mono installed.
+    public var isAvailable: Bool {
+        self != .humanist || Humanist.isInstalled
+    }
+
+    /// The sets that can be chosen here.
+    public static var available: [EditorFace] { allCases.filter(\.isAvailable) }
+
+    /// A font of the set, for a part of a note, at a size and weight. A set
+    /// that cannot be used here sets text as Serif does — its system analog.
+    public func font(_ role: Role, size: CGFloat, weight: EditorFont.Weight = .regular, italic: Bool = false) -> EditorFont {
+        if self == .humanist, let font = Humanist.font(role, size: size, weight: weight, italic: italic) { return font }
+        let face = self == .humanist ? EditorFace.serif : self
+        switch role {
+        case .mono:
+            return italicised(EditorFont.monospacedSystemFont(ofSize: size, weight: weight), italic: italic, size: size)
+        case .label:
+            // What is said about a note, in the system's own sans: machinery, not thought.
+            return italicised(EditorFont.systemFont(ofSize: size, weight: weight), italic: italic, size: size)
+        case .text, .display:
+            var descriptor = EditorFont.systemFont(ofSize: size, weight: weight).fontDescriptor
+            if face != .sans, let designed = descriptor.withDesign(face.design) { descriptor = designed }
+            #if os(macOS)
+            let font = NSFont(descriptor: descriptor, size: size) ?? EditorFont.systemFont(ofSize: size, weight: weight)
+            #else
+            let font = UIFont(descriptor: descriptor, size: size)
+            #endif
+            return italicised(font, italic: italic, size: size)
+        }
+    }
+
+    private func italicised(_ font: EditorFont, italic: Bool, size: CGFloat) -> EditorFont {
+        guard italic else { return font }
+        #if os(macOS)
+        return NSFont(descriptor: font.fontDescriptor.withSymbolicTraits(font.fontDescriptor.symbolicTraits.union(.italic)), size: size) ?? font
+        #else
+        return font.fontDescriptor.withSymbolicTraits(font.fontDescriptor.symbolicTraits.union(.traitItalic)).map { UIFont(descriptor: $0, size: size) } ?? font
+        #endif
+    }
+
+    /// Whether a font of a set is set heavy — bold, or the weight that stands
+    /// for it — where its family does not say so by its traits.
+    public static func isHeavy(_ font: EditorFont) -> Bool? {
+        Humanist.weight(ofCut: font.fontName).map { $0 >= .medium }
+    }
+}
+
+/// Chronicle for what is written and its headings, Ideal Sans for what is
+/// said about it, Operator Mono for code — Hoefler&Co.'s ScreenSmart cuts.
+/// Their weights are not to be asked for by number: a family's own report
+/// of them is uneven (Ideal Sans's Semibold says it is Book). Each weight
+/// is a cut, named.
+public enum Humanist {
+    /// A family's cuts, from lightest: each with the weight it is taken for.
+    private struct Family {
+        let cuts: [(weight: EditorFont.Weight, roman: String, italic: String)]
+
+        /// The cut for a weight: the heaviest no heavier than asked for, or the lightest.
+        func cut(for weight: EditorFont.Weight) -> (roman: String, italic: String) {
+            let fit = cuts.last { $0.weight <= weight } ?? cuts[0]
+            return (fit.roman, fit.italic)
+        }
+    }
+
+    // Chronicle has no Semibold: a heading's semibold is its Medium; a word set strong, its Bold.
+    private static let chronicleDisplay = Family(cuts: [
+        (.light, "ChronicleSSm-Light", "ChronicleSSm-LightItalic"),
+        (.regular, "ChronicleSSm-Book", "ChronicleSSm-BookItalic"),
+        (.medium, "ChronicleSSm-Medium", "ChronicleSSm-MediumItalic"),
+        (.bold, "ChronicleSSm-Bold", "ChronicleSSm-BoldItalic"),
+    ])
+    private static let chronicleText = Family(cuts: [
+        (.light, "ChronicleSSm-Light", "ChronicleSSm-LightItalic"),
+        (.regular, "ChronicleSSm-Book", "ChronicleSSm-BookItalic"),
+        (.medium, "ChronicleSSm-Medium", "ChronicleSSm-MediumItalic"),
+        (.semibold, "ChronicleSSm-Bold", "ChronicleSSm-BoldItalic"),
+    ])
+    private static let idealSans = Family(cuts: [
+        (.ultraLight, "IdealSansSSm-XLight", "IdealSansSSm-XLightItalic"),
+        (.light, "IdealSansSSm-Light", "IdealSansSSm-LightItalic"),
+        (.regular, "IdealSansSSm-Book", "IdealSansSSm-BookItalic"),
+        (.medium, "IdealSansSSm-Medium", "IdealSansSSm-MediumItalic"),
+        (.semibold, "IdealSansSSm-Semibold", "IdealSansSSm-SemiboldItalic"),
+        (.bold, "IdealSansSSm-Bold", "IdealSansSSm-BoldItalic"),
+    ])
+    private static let operatorMono = Family(cuts: [
+        (.light, "OperatorMonoSSm-Light", "OperatorMonoSSm-LightItalic"),
+        (.regular, "OperatorMonoSSm-Book", "OperatorMonoSSm-BookItalic"),
+        (.medium, "OperatorMonoSSm-Medium", "OperatorMonoSSm-MediumItalic"),
+        (.bold, "OperatorMonoSSm-Bold", "OperatorMonoSSm-BoldItalic"),
+    ])
+
+    private static func family(_ role: EditorFace.Role) -> Family {
+        switch role {
+        case .text: return chronicleText
+        case .display: return chronicleDisplay
+        case .label: return idealSans
+        case .mono: return operatorMono
+        }
+    }
+
+    /// Whether all three families are here: installed on a Mac; on the
+    /// phone, brought in the app by its build (`Fonts/`, from the Mac it was
+    /// built on — never kept in the repository) and taken up as it starts.
+    static let isInstalled: Bool = {
+        #if os(macOS)
+        return ["ChronicleSSm-Book", "IdealSansSSm-Book", "OperatorMonoSSm-Book"].allSatisfy { NSFont(name: $0, size: 12) != nil }
+        #else
+        if let folder = Bundle.main.url(forResource: "Fonts", withExtension: nil),
+           let files = try? FileManager.default.contentsOfDirectory(at: folder, includingPropertiesForKeys: nil) {
+            for file in files where file.pathExtension.lowercased() == "otf" {
+                CTFontManagerRegisterFontsForURL(file as CFURL, .process, nil)
+            }
+        }
+        return ["ChronicleSSm-Book", "IdealSansSSm-Book", "OperatorMonoSSm-Book"].allSatisfy { UIFont(name: $0, size: 12) != nil }
+        #endif
+    }()
+
+    /// A bundled font's file, for what cannot see the fonts the app has taken
+    /// up — a web view, in a process of its own.
+    public static func file(named name: String) -> URL? {
+        Bundle.main.url(forResource: name, withExtension: "otf", subdirectory: "Fonts")
+    }
+
+    static func font(_ role: EditorFace.Role, size: CGFloat, weight: EditorFont.Weight, italic: Bool) -> EditorFont? {
+        guard isInstalled else { return nil }
+        let cut = family(role).cut(for: weight)
+        return EditorFont(name: italic ? cut.italic : cut.roman, size: size)
+    }
+
+    /// The weight a cut of the set is taken for, by its name: what its traits may not say.
+    static func weight(ofCut name: String) -> EditorFont.Weight? {
+        for family in [chronicleDisplay, idealSans, operatorMono] {
+            if let cut = family.cuts.first(where: { $0.roman == name || $0.italic == name }) { return cut.weight }
+        }
+        return nil
     }
 }
 
@@ -83,27 +232,23 @@ public struct EditorTheme {
         #endif
     }
 
+    /// What is written: the set's text face.
     public func font(_ size: CGFloat, weight: EditorFont.Weight = .regular, italic: Bool = false) -> EditorFont {
-        var font = EditorFont.systemFont(ofSize: size, weight: weight)
-        var descriptor = font.fontDescriptor
-        if face != .sans, let designed = descriptor.withDesign(face.design) { descriptor = designed }
-        if italic {
-            #if os(macOS)
-            descriptor = descriptor.withSymbolicTraits(descriptor.symbolicTraits.union(.italic))
-            #else
-            descriptor = descriptor.withSymbolicTraits(descriptor.symbolicTraits.union(.traitItalic)) ?? descriptor
-            #endif
-        }
-        #if os(macOS)
-        font = NSFont(descriptor: descriptor, size: size) ?? font
-        #else
-        font = UIFont(descriptor: descriptor, size: size)
-        #endif
-        return font
+        face.font(.text, size: size, weight: weight, italic: italic)
+    }
+
+    /// A heading's face.
+    public func display(_ size: CGFloat, weight: EditorFont.Weight = .semibold, italic: Bool = false) -> EditorFont {
+        face.font(.display, size: size, weight: weight, italic: italic)
+    }
+
+    /// What is said about a note — tags, dates, a property's name — in the set's sans.
+    public func label(_ size: CGFloat, weight: EditorFont.Weight = .regular) -> EditorFont {
+        face.font(.label, size: size, weight: weight)
     }
 
     public func mono(_ size: CGFloat) -> EditorFont {
-        EditorFont.monospacedSystemFont(ofSize: size, weight: .regular)
+        face.font(.mono, size: size)
     }
 
     public var body: EditorFont { font(size) }
