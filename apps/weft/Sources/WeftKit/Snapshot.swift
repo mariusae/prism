@@ -220,6 +220,10 @@ enum Snapshot {
         }
         let delay = Double(environment["WEFT_DELAY"] ?? "") ?? 2
         DispatchQueue.main.asyncAfter(deadline: .now() + delay) {
+            // WEFT_FOLD_LATE=A|B: those cards folded once the window is up.
+            for name in names("WEFT_FOLD_LATE") {
+                if let card = store.river.cards.first(where: { $0.title == name }), !card.folded { store.river.toggleFold(card.id) }
+            }
             // WEFT_SCROLL=400: the river scrolled down by so many points.
             if let points = Double(environment["WEFT_SCROLL"] ?? "") {
                 func scrolls(in view: NSView) -> [NSScrollView] { ((view as? NSScrollView).map { [$0] } ?? []) + view.subviews.flatMap(scrolls) }

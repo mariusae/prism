@@ -182,6 +182,19 @@ struct CardView: View {
         content().padding(.leading, Measures.margin)
     }
 
+    /// Whether there is anything to stand before the title: a to-do's ring, or an icon.
+    private var hasLead: Bool { draft.task != .none || emblem.isShown }
+
+    /// The lead, hung in the margin before the words: as wide as the margin, and drawn there.
+    /// Its slot and the row's `spacing` after it are the margin's width: the row it
+    /// stands in is drawn that much to the left (`hangs`), its words at the edge.
+    @ViewBuilder private func hanging(size: CGFloat, spacing: CGFloat = 0) -> some View {
+        if hasLead { lead(size: size).frame(width: Measures.margin - spacing) }
+    }
+
+    /// How far a row with a lead hung in the margin is drawn to the left.
+    private var hangs: CGFloat { hasLead ? -Measures.margin : 0 }
+
     /// What stands before the title, as its first character would: a
     /// to-do's ring, which checks it off; or the note's icon, if it has
     /// one — a day's calendar, a link's, one it was given — which, clicked,
@@ -381,9 +394,9 @@ struct CardView: View {
                         .onTapGesture { fold() }
                         .help("Click to fold, double-click to rename")
                 } else {
-                    // The icon is the title's first character: on its line, at its edge.
-                    HStack(alignment: .firstTextBaseline, spacing: TextSettings.titleSize * 0.3) {
-                        lead(size: TextSettings.titleSize)
+                    // The icon hangs in the margin, beside the title: every card's words start at one edge.
+                    HStack(alignment: .firstTextBaseline, spacing: 0) {
+                        hanging(size: TextSettings.titleSize)
                         Text(emblem.caption(isDay ? draft.label : draft.title))
                             .font(titleFont)
                             .italic(!draft.exists)
@@ -394,6 +407,7 @@ struct CardView: View {
                             .onTapGesture { fold() }
                             .help("Click to fold, double-click to rename")
                     }
+                    .padding(.leading, hangs)
                     if store.isPinned(card.path) {
                         Image(systemName: "pin.fill").font(.caption).foregroundStyle(Color.inkAccent)
                     }
@@ -598,7 +612,8 @@ struct CardView: View {
     private var peek: some View {
         row {
             HStack(alignment: .firstTextBaseline, spacing: TextSettings.size * 0.35) {
-                lead(size: TextSettings.size * 1.1)
+                // Its ring or icon in the margin, as an open card's and a title's: its words at the edge the others' are.
+                hanging(size: TextSettings.size * 1.1, spacing: TextSettings.size * 0.35)
                 // Its pictures, small, at its end: often all there is to know it by.
                 let thumbs = draft.pictures.compactMap { Pictures.image(at: $0.address, in: store) }
                 let thumb = thumbs.first
@@ -624,6 +639,7 @@ struct CardView: View {
                 }
                 actions
             }
+            .padding(.leading, hangs)
         }
     }
 
