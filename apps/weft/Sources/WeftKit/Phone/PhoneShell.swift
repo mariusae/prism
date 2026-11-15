@@ -101,6 +101,18 @@ struct PhoneShell: View {
                     .offset(x: width + 14 + state.swipe)
                 }
             }
+            // In from the left edge, as anywhere on the phone: back to where the reader was.
+            .overlay(alignment: .leading) {
+                if store.canGoBack {
+                    Color.clear.frame(width: 16).contentShape(Rectangle())
+                        .gesture(DragGesture(minimumDistance: 12).onEnded { drag in
+                            guard drag.translation.width > 70, abs(drag.translation.width) > abs(drag.translation.height) * 1.5 else { return }
+                            UIImpactFeedbackGenerator(style: .light).impactOccurred()
+                            withAnimation(.snappy(duration: 0.28)) { store.goBack() }
+                        })
+                        .ignoresSafeArea(edges: .vertical)
+                }
+            }
             .environment(\.riverWidth, width)
             .environment(\.riverHeight, room.size.height)
             .environment(\.barOnSide, Self.barOnSide(room.safeAreaInsets))
@@ -448,6 +460,7 @@ struct PhoneBar: View {
     private var column: some View {
         GlassEffectContainer(spacing: 8) {
             VStack(spacing: 10) {
+                if store.canGoBack || store.canGoForward { back }
                 Button { state.showsOverview = true } label: {
                     Image(systemName: "square.on.square").font(.system(size: 17, weight: .medium)).frame(width: 48, height: 48).contentShape(Circle())
                 }
@@ -478,6 +491,31 @@ struct PhoneBar: View {
                 }
             }
         }
+    }
+
+    /// Back to where the reader was: tapped, a step; held, where they have
+    /// been — and forward again, if they had gone back. Gone all the way
+    /// back, it turns: forward, a step.
+    private var back: some View {
+        let backward = store.canGoBack
+        return Menu {
+            if store.canGoForward, backward {
+                Button("Forward", systemImage: "chevron.right") { withAnimation(.snappy(duration: 0.28)) { store.goForward() } }
+                Divider()
+            }
+            ForEach(Array(store.backPlaces.reversed().enumerated()), id: \.element.id) { index, place in
+                Button(place.title) { withAnimation(.snappy(duration: 0.28)) { store.goBack(index + 1) } }
+            }
+        } label: {
+            Image(systemName: backward ? "chevron.left" : "chevron.right").font(.system(size: 18, weight: .semibold)).frame(width: 48, height: 48).contentShape(Circle())
+        } primaryAction: {
+            withAnimation(.snappy(duration: 0.28)) { if backward { store.goBack() } else { store.goForward() } }
+        }
+        .menuIndicator(.hidden)
+        .foregroundStyle(Color.inkAccent)
+        .glassEffect(.regular.interactive(), in: .circle)
+        .accessibilityLabel(backward ? "Back" : "Forward")
+        .accessibilityHint("Hold for where you have been")
     }
 
     /// Today: tapped, today's note; held, any date.
@@ -524,6 +562,8 @@ struct PhoneBar: View {
                     .foregroundStyle(Color.inkSecondary)
             } else {
                 HStack(spacing: 8) {
+                    // Back, while there is somewhere to go back to — or forward, gone all the way back.
+                    if store.canGoBack || store.canGoForward, !nameOnly { back.transition(.scale.combined(with: .opacity)) }
                     // Today: tapped, today's note; held, any date. (Finding is the river's name, beside it.)
                     if !nameOnly { Image(systemName: "calendar").font(.system(size: 18, weight: .semibold)).frame(width: 48, height: 48)
                         .contentShape(Circle())
@@ -702,6 +742,7 @@ struct PhoneBar: View {
             if let shown = jump, let chosen = shown.chosen, shown.rows.indices.contains(chosen) {
                 let id = shown.rows[chosen].id
                 state.tucked = false
+                store.leaving()
                 withAnimation(.snappy(duration: 0.3)) { river.reveal(id) }
                 store.rememberRivers()
             }

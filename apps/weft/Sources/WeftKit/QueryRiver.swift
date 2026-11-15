@@ -66,6 +66,20 @@ struct QuerySpec: Equatable {
         }
     }
 
+    /// A name for a river of this query, when none is given: what it asks
+    /// for — its kinds, its tags, the note it links to, its words — or, asking
+    /// for nothing in particular, what it is sorted by.
+    var suggestedName: String {
+        var parts: [String] = Self.kinds.filter { kinds[$0.key] == .only }.map(\.name)
+        parts += Self.kinds.filter { kinds[$0.key] == .not }.map { "Not \($0.name)" }
+        parts += tags.map { "#\($0)" }
+        let link = linksTo.trimmingCharacters(in: .whitespaces)
+        if !link.isEmpty { parts.append("Linking to \(link)") }
+        let words = saying.trimmingCharacters(in: .whitespaces)
+        if !words.isEmpty { parts.append("“\(words)”") }
+        return parts.isEmpty ? sort.label : parts.joined(separator: ", ")
+    }
+
     /// The query's body: a clause a line.
     var body: String {
         var lines: [String] = []
@@ -178,7 +192,7 @@ struct QueryRiverEditor: View {
                             .buttonStyle(.plain)
                             .popover(isPresented: $choosesLook, arrowEdge: .bottom) { EmblemPicker(title: name.isEmpty ? "Query" : name, icon: $icon, color: $color) }
                             .help("Choose an icon and a colour")
-                        TextField("Title", text: $name, prompt: Text("Most Recent")).labelsHidden()
+                        TextField("Title", text: $name, prompt: Text(spec.suggestedName)).labelsHidden()
                     }
                 }
                 Section {
@@ -186,16 +200,26 @@ struct QueryRiverEditor: View {
                 }
                 Section("Kinds of Notes") {
                     ForEach(QuerySpec.kinds, id: \.key) { kind in
-                        Picker(kind.name, selection: Binding(get: { spec.kinds[kind.key] ?? .any }, set: { spec.kinds[kind.key] = $0 == .any ? nil : $0 })) {
+                        let picker = Picker(kind.name, selection: Binding(get: { spec.kinds[kind.key] ?? .any }, set: { spec.kinds[kind.key] = $0 == .any ? nil : $0 })) {
                             ForEach(QuerySpec.Want.allCases) { Text($0.label).tag($0) }
                         }
                         .pickerStyle(.segmented)
+                        #if os(iOS)
+                        // A segmented picker in a form on the phone shows no name: the kind's, over it.
+                        VStack(alignment: .leading, spacing: 8) {
+                            Text(kind.name)
+                            picker.labelsHidden()
+                        }
+                        .padding(.vertical, 2)
+                        #else
+                        picker
+                        #endif
                     }
                 }
                 Section {
-                    tags("Tagged", $spec.tags)
-                    tags("Excluding Tags", $spec.notTags)
-                    TextField("Linking To", text: $spec.linksTo, prompt: Text("A note's name"))
+                    named("Tagged") { tags("Tagged", $spec.tags) }
+                    named("Excluding Tags") { tags("Excluding Tags", $spec.notTags) }
+                    named("Linking To") { TextField("Linking To", text: $spec.linksTo, prompt: Text("A note's name")) }
                     // Names of notes, as they are typed: one clicked is the one meant.
                     let offered = linkOffers
                     if !offered.isEmpty {
@@ -220,8 +244,8 @@ struct QueryRiverEditor: View {
                             }
                         }
                     }
-                    TextField("Saying", text: $spec.saying, prompt: Text("Words it has"))
-                    TextField("At Most", text: $limitText, prompt: Text("\(GraphStore.foundLimit)"))
+                    named("Saying") { TextField("Saying", text: $spec.saying, prompt: Text("Words it has")) }
+                    named("At Most") { TextField("At Most", text: $limitText, prompt: Text("\(GraphStore.foundLimit)")) }
                 } header: {
                     Text("From")
                 } footer: {
@@ -243,7 +267,7 @@ struct QueryRiverEditor: View {
                 Button("Cancel") { dismiss() }.keyboardShortcut(.cancelAction)
                 Button(river == nil ? "Create" : "Done") { finish() }
                     .keyboardShortcut(.defaultAction)
-                    .disabled(name.trimmingCharacters(in: .whitespaces).isEmpty)
+
             }
             .padding(14)
         }
@@ -255,6 +279,16 @@ struct QueryRiverEditor: View {
     }
 
     /// Tags, as written — and a menu of those there are, to add from.
+    /// A field with its name beside it. The Mac's form shows a field's own
+    /// name; the phone's shows only what is written in it, or its prompt.
+    @ViewBuilder private func named<Content: View>(_ title: String, @ViewBuilder _ content: () -> Content) -> some View {
+        #if os(iOS)
+        LabeledContent(title) { content().multilineTextAlignment(.trailing) }
+        #else
+        content()
+        #endif
+    }
+
     private func tags(_ title: String, _ chosen: Binding<[String]>) -> some View {
         HStack {
             TextField(title, text: Binding(get: { chosen.wrappedValue.joined(separator: ", ") }, set: { chosen.wrappedValue = $0.split(separator: ",").map { $0.trimmingCharacters(in: .whitespaces) }.filter { !$0.isEmpty } }), prompt: Text("None"))
@@ -287,8 +321,25 @@ struct QueryRiverEditor: View {
         limitText = spec.limit.map(String.init) ?? ""
     }
 
+    /// The name given — or, none given, one from what the query asks for,
+    /// apart from the rivers there are already.
+    private var chosenName: String {
+        let typed = name.trimmingCharacters(in: .whitespaces)
+        if !typed.isEmpty { return typed }
+        if let river, let own = river.name { return own }
+        let base = spec.suggestedName
+        let taken = Set(store.savedRivers.map { $0.name.lowercased() })
+        var made = base
+        var count = 2
+        while taken.contains(made.lowercased()) {
+            made = "\(base) \(count)"
+            count += 1
+        }
+        return made
+    }
+
     private func finish() {
-        let name = name.trimmingCharacters(in: .whitespaces)
+        let name = chosenName
         if let river {
             river.query = spec.body
             river.icon = icon

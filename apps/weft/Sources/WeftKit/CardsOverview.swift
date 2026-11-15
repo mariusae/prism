@@ -417,6 +417,7 @@ struct CardsOverview: View {
 
     private func go(to id: Card.ID) {
         isShown = false
+        store.leaving()
         withAnimation(.snappy(duration: 0.24)) { river.reveal(id) }
         store.rememberRivers()
     }
@@ -450,6 +451,7 @@ struct CardsOverview: View {
                             .onDrop(of: [.text], delegate: TileMove(target: card.id, river: river, store: store, carried: $carried))
                             .onTapGesture {
                                 isShown = false
+                                store.leaving()
                                 withAnimation(.snappy(duration: 0.24)) { river.reveal(card.id) }
                                 store.rememberRivers()
                             }

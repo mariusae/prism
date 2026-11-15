@@ -1625,12 +1625,13 @@ public final class NoteTextView: NSTextView {
             askLink()
             return true
         }
-        // ⌘] shows the caret's row as a note of its own; with ⇧, in a card of its own. ⌘[ shows more again.
-        if key == "]" || key == "}", flags == [.command] || flags == [.command, .shift], coordinator?.parent.onZoom != nil {
+        // ⌥⌘→ shows the caret's row as a note of its own — Bike's focus in; with ⇧, in a card of its
+        // own. ⌥⌘← shows more again. (⌘[ ⌘] are the app's: back and forward.)
+        if event.specialKey == .rightArrow, flags == [.command, .option] || flags == [.command, .option, .shift], coordinator?.parent.onZoom != nil {
             if coordinator?.zoom(apart: flags.contains(.shift)) != true { NSSound.beep() }
             return true
         }
-        if key == "[", flags == [.command], let out = coordinator?.parent.onZoomOut {
+        if event.specialKey == .leftArrow, flags == [.command, .option], let out = coordinator?.parent.onZoomOut {
             out()
             return true
         }

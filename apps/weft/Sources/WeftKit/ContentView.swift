@@ -135,7 +135,26 @@ public struct ContentView: View {
                 .toolbarBackgroundVisibility(.hidden, for: .windowToolbar)
                 .background(ClearTitleBar())
                 .toolbar {
-                    ToolbarItem(placement: .principal) { RiverBar(store: store, room: min(max(detailWidth - 330, 220), 860), saves: actions.saveRiver, onFind: { show("") }) }
+                    // Back and forward through where the reader has been: a click a step; right-clicked, the list.
+                    ToolbarItemGroup(placement: .navigation) {
+                        Button { withAnimation(.snappy(duration: 0.24)) { store.goBack() } } label: { Label("Back", systemImage: "chevron.left") }
+                            .disabled(!store.canGoBack)
+                            .help("Back (⌘[)")
+                            .contextMenu {
+                                ForEach(Array(store.backPlaces.reversed().enumerated()), id: \.element.id) { index, place in
+                                    Button(place.title) { store.goBack(index + 1) }
+                                }
+                            }
+                        Button { withAnimation(.snappy(duration: 0.24)) { store.goForward() } } label: { Label("Forward", systemImage: "chevron.right") }
+                            .disabled(!store.canGoForward)
+                            .help("Forward (⌘])")
+                            .contextMenu {
+                                ForEach(Array(store.forwardPlaces.reversed().enumerated()), id: \.element.id) { index, place in
+                                    Button(place.title) { store.goForward(index + 1) }
+                                }
+                            }
+                    }
+                    ToolbarItem(placement: .principal) { RiverBar(store: store, room: min(max(detailWidth - 420, 220), 860), saves: actions.saveRiver, onFind: { show("") }) }
                     ToolbarItemGroup(placement: .primaryAction) {
                         if !store.conflicted.isEmpty {
                             Button {

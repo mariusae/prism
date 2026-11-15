@@ -50,7 +50,85 @@ public final class GraphStore {
     @ObservationIgnored private var observer: Observer?
 
     public var rivers: [River] = []
-    public var currentRiver = 0
+    /// The river shown. Going to another is a step of the history: Back comes here again.
+    public var currentRiver = 0 {
+        didSet {
+            if oldValue != currentRiver, rivers.indices.contains(oldValue) { remember(place(in: rivers[oldValue])) }
+        }
+    }
+
+    // MARK: - Where the reader has been
+
+    /// A place gone to: a river, and the card gone to in it.
+    public struct Place: Equatable, Identifiable {
+        public let id = UUID()
+        public let river: UUID
+        public let card: Card.ID?
+        /// What it is called, for a list of where the reader has been.
+        public let title: String
+        public static func == (a: Place, b: Place) -> Bool { a.river == b.river && a.card == b.card }
+    }
+
+    /// Where the reader has been, the last nearest; and, gone back, where they had gone on to.
+    public private(set) var backPlaces: [Place] = []
+    public private(set) var forwardPlaces: [Place] = []
+    /// Going back or forward: a step taken through the history, not one of it.
+    @ObservationIgnored private var travelling = false
+    private static let placesKept = 100
+
+    public var canGoBack: Bool { !backPlaces.isEmpty }
+    public var canGoForward: Bool { !forwardPlaces.isEmpty }
+
+    /// Where the reader is in a river: at the card chosen there.
+    func place(in river: River) -> Place {
+        let card = river.selected.flatMap { river.card($0) }
+        let name = title(of: river)
+        return Place(river: river.id, card: card?.id, title: card.map { "\(label(path: $0.path, title: $0.title)) — \(name)" } ?? name)
+    }
+
+    /// Notes that the reader is leaving a place: Back comes to it again,
+    /// and what they had gone back from is no longer ahead of them.
+    func remember(_ place: Place) {
+        guard !travelling else { return }
+        if backPlaces.last != place { backPlaces.append(place) }
+        if backPlaces.count > Self.placesKept { backPlaces.removeFirst() }
+        forwardPlaces.removeAll()
+    }
+
+    /// Notes the place shown now as left: before a link is followed, or a card gone to.
+    public func leaving() {
+        remember(place(in: river))
+    }
+
+    /// Back to where the reader was: `steps` back, the nearest first.
+    public func goBack(_ steps: Int = 1) { travel(steps, from: \.backPlaces, to: \.forwardPlaces) }
+
+    /// On to where the reader had gone before going back.
+    public func goForward(_ steps: Int = 1) { travel(steps, from: \.forwardPlaces, to: \.backPlaces) }
+
+    private func travel(_ steps: Int, from: ReferenceWritableKeyPath<GraphStore, [Place]>, to: ReferenceWritableKeyPath<GraphStore, [Place]>) {
+        var here = place(in: river)
+        for _ in 0..<steps {
+            // A place in a river closed since, or the one shown already, is no step: passed over.
+            while let next = self[keyPath: from].popLast() {
+                guard rivers.contains(where: { $0.id == next.river }), next != here else { continue }
+                self[keyPath: to].append(here)
+                here = next
+                break
+            }
+        }
+        go(to: here)
+    }
+
+    private func go(to place: Place) {
+        guard let index = rivers.firstIndex(where: { $0.id == place.river }) else { return }
+        travelling = true
+        defer { travelling = false }
+        currentRiver = index
+        let river = rivers[index]
+        // The card, if it is in the river still; else the river, where it was.
+        if let card = place.card, river.card(card) != nil { river.reveal(card, unfolding: false) }
+    }
 
     /// What pages were given to be shown by — `icon:` and `color:` in
     /// their frontmatter — by path: read off the index in one go, so that
@@ -601,6 +679,11 @@ public final class GraphStore {
 
     /// The icon the page a link leads to was given, if it was given one.
     public func linkIcon(_ name: String) -> String? {
+        // A river's link: the river's own icon, as its tab shows it.
+        if let river = Prism.riverName(linkTarget: name) {
+            let key = nameKey(name: river)
+            return savedRivers.first(where: { nameKey(name: $0.name) == key })?.icon
+        }
         guard let found = resolve(name), found.exists else { return nil }
         return icons[found.path]
     }
@@ -666,6 +749,7 @@ public final class GraphStore {
 
     /// Opens the page a name leads to in the river, after a card if one is given.
     public func open(name: String, after card: Card.ID? = nil, in river: River? = nil) {
+        leaving()
         let target = resolve(name)
         // A river's name leads to the river — never to the file it is kept in.
         if target?.exists != true, let saved = riverNamed(name) { return openSaved(saved) }
@@ -683,6 +767,7 @@ public final class GraphStore {
     /// Shows what a path is: a note as a card in the river — and a river
     /// as the river it is, never as the file it is kept in.
     public func show(path: String, title: String, after card: Card.ID? = nil, in river: River? = nil) {
+        leaving()
         if let name = Self.riverName(path) { return openSaved(name) }
         (river ?? self.river).open(Card(path: path, title: title), after: card)
         rememberRivers()

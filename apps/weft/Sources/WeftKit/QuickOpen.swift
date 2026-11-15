@@ -228,6 +228,7 @@ struct QuickOpen: View {
     private func card(_ card: Card, snippet: String? = nil) -> Row {
         let label = store.label(path: card.path, title: card.title)
         return Row(id: "card:\(card.id)\(snippet == nil ? "" : ":text")", symbol: "doc.text", name: label, detail: snippet == nil ? "In this river" : "", snippet: snippet, emblem: snippet == nil ? store.emblem(path: card.path, title: card.title) : nil) { store in
+            store.leaving()
             withAnimation(.snappy(duration: 0.24)) { store.river.reveal(card.id) }
         }
     }

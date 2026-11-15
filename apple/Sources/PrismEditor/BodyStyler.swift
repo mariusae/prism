@@ -229,14 +229,15 @@ struct BodyStyler {
                 let isRiver = riverName(linkTarget: target) != nil
                 let missing = !isRiver && !pageExists(target)
                 // Its icon before it only where the page has one of its own — a day's is the calendar.
-                let symbol = isRiver ? "square.stack" : (linkIcon(target) ?? (isDate(target) ? "calendar" : nil))
+                // A river's, the river's own icon — or, with none, the stack every river has.
+                let symbol = isRiver ? (linkIcon(target) ?? "square.stack") : (linkIcon(target) ?? (isDate(target) ? "calendar" : nil))
                 link(storage, range, to: .page(target), symbol: symbol, missing: missing, line: line, markupEnd: markupEnd, faint: !isRiver && !missing && pageArchived(target))
                 // A link written with its page's file's name shows the page's title — off the lines being written in.
                 let words = (storage.string as NSString).substring(with: range)
                 if words == "\u{FFFC}" {
                     // A link to a page is one character: drawn as its page's title, or its own name.
                     // Its icon in its own room, first: never out over what stands before the row's words.
-                    relabel(storage, range, as: isRiver ? target : (linkLabel(target) ?? target), lead: symbol == nil ? 0 : leadWidth)
+                    relabel(storage, range, as: isRiver ? (riverName(linkTarget: target) ?? target) : (linkLabel(target) ?? target), lead: symbol == nil ? 0 : leadWidth)
                 } else if !isRiver, words == target, let label = linkLabel(target) {
                     relabel(storage, range, as: label)
                 }

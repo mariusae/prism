@@ -159,11 +159,16 @@ public struct WeftMacApp: App {
                     format("Move Done to Bottom", .moveDoneToBottom, "d", [.command, .control, .shift])
                 }
                 Divider()
-                Button("Focus on Row") { NoteTextView.writing?.focusRow(apart: false) }.keyboardShortcut("]")
-                Button("Open Row as a Card") { NoteTextView.writing?.focusRow(apart: true) }.keyboardShortcut("]", modifiers: [.command, .shift])
-                Button("Show the Row Above") { NoteTextView.writing?.showRowAbove() }.keyboardShortcut("[")
+                // Bike's focus in and out; ⌘[ ⌘] are back and forward.
+                Button("Focus on Row") { NoteTextView.writing?.focusRow(apart: false) }.keyboardShortcut(.rightArrow, modifiers: [.command, .option])
+                Button("Open Row as a Card") { NoteTextView.writing?.focusRow(apart: true) }.keyboardShortcut(.rightArrow, modifiers: [.command, .option, .shift])
+                Button("Show the Row Above") { NoteTextView.writing?.showRowAbove() }.keyboardShortcut(.leftArrow, modifiers: [.command, .option])
             }
             CommandMenu("Story") {
+                // Where the reader has been: a link followed, a river gone to.
+                Button("Back") { withAnimation(.snappy(duration: 0.24)) { store?.goBack() } }.keyboardShortcut("[").disabled(store?.canGoBack != true)
+                Button("Forward") { withAnimation(.snappy(duration: 0.24)) { store?.goForward() } }.keyboardShortcut("]").disabled(store?.canGoForward != true)
+                Divider()
                 Button("Today") { today() }.keyboardShortcut("d")
                 // The note in hand, linked to today in its frontmatter: so today's page lists it.
                 Button("Stamp with Today") { if store?.stampToday() != true { NSSound.beep() } }.keyboardShortcut("t", modifiers: [.command, .control])
@@ -373,6 +378,32 @@ public struct WeftMacApp: App {
 enum RiverKeys {
     private static var monitor: Any?
     private static var flags: Any?
+    private static var travel: Any?
+    /// Two fingers swept across, while they are: how far, and whether across from the first.
+    private static var sweep: (distance: CGFloat, across: Bool)?
+
+    /// Two fingers swept far enough across — the way the system's own setting
+    /// says pages are swept — go back (to the right) or forward (to the left).
+    /// Mostly up and down, it is scrolling, and nothing else.
+    private static func swept(_ event: NSEvent, store: GraphStore) {
+        guard NSEvent.isSwipeTrackingFromScrollEventsEnabled, event.hasPreciseScrollingDeltas else { return }
+        switch event.phase {
+        case .began:
+            sweep = (0, abs(event.scrollingDeltaX) > abs(event.scrollingDeltaY) * 2)
+        case .changed:
+            if let now = sweep, now.across { sweep = (now.distance + event.scrollingDeltaX, true) }
+        case .ended:
+            defer { sweep = nil }
+            guard let now = sweep, now.across, abs(now.distance) > 160 else { return }
+            withAnimation(.snappy(duration: 0.24)) {
+                if now.distance > 0 { store.goBack() } else { store.goForward() }
+            }
+        case .cancelled:
+            sweep = nil
+        default:
+            break
+        }
+    }
     private static weak var store: GraphStore?
     private static weak var actions: WindowActions?
 
@@ -381,6 +412,19 @@ enum RiverKeys {
         self.actions = actions
         guard monitor == nil else { return }
         monitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { event in handle(event) ? nil : event }
+        // Back and forward: a mouse's side buttons, and two fingers swept across, as in Safari.
+        travel = NSEvent.addLocalMonitorForEvents(matching: [.otherMouseDown, .scrollWheel]) { event in
+            guard let store = self.store, let window = event.window, isRiverWindow(window) else { return event }
+            if event.type == .otherMouseDown {
+                switch event.buttonNumber {
+                case 3: withAnimation(.snappy(duration: 0.24)) { store.goBack() }; return nil
+                case 4: withAnimation(.snappy(duration: 0.24)) { store.goForward() }; return nil
+                default: return event
+                }
+            }
+            swept(event, store: store)
+            return event
+        }
         // ⌘ held, alone: the tabs say their numbers.
         flags = NSEvent.addLocalMonitorForEvents(matching: .flagsChanged) { event in
             CommandKey.shared.changed(event.modifierFlags)

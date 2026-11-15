@@ -251,8 +251,12 @@ Left, by area:
   chosen spaces.
 - **iPhone**: Bike's round handles at a selection's corners; the caret's
   tail.
-- **Navigation**: ⌘[ ⌘] back / forward, ⌥⌘→ ⌥⌘← focus in / out, ⌘P go to,
-  and ⌘→ at a row's end for its attributes — Weft has its own ways.
+- **Navigation**: done for back / forward and focus — ⌘[ ⌘] go back and
+  forward through where the reader has been (links followed, rivers gone to,
+  cards gone to; also the toolbar's buttons, a mouse's side buttons and a
+  two-finger swipe; on the iPhone, a chevron in the bar — held, the list —
+  and a swipe in from the left edge); ⌥⌘→ ⌥⌘← focus in and out, as Bike's.
+  Left: ⌘P go to, and ⌘→ at a row's end for its attributes.
 - **Note** rows: Weft has no such type.
 
 The earlier list, kept for the record:
