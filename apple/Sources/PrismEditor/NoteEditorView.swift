@@ -298,7 +298,6 @@ final class HoverCard {
     private weak var parent: NSWindow?
     /// Where the pointer was, on the screen.
     private let pointer: CGPoint
-    private var resized: NSObjectProtocol?
     /// Whether the pointer is on the card: it stays while it is.
     private(set) var isPointed = false
     /// The pointer left the card.
@@ -308,11 +307,13 @@ final class HoverCard {
         self.pointer = pointer
         self.parent = parent
         let shape = RoundedRectangle(cornerRadius: 12, style: .continuous)
-        let host = NSHostingController(rootView: AnyView(EmptyView()))
-        // It is as large as what it shows — which may grow, as a page's picture comes in.
-        host.sizingOptions = [.preferredContentSize]
+        let host = NSHostingView(rootView: AnyView(EmptyView()))
+        // The card sizes the panel itself, after its content has been laid out: a panel the
+        // hosting view sized (`.preferredContentSize`) relaid the content while resizing the
+        // window, which resized it again — without end, until the stack ran out.
+        host.sizingOptions = []
         panel = NSPanel(contentRect: .zero, styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: true)
-        panel.contentViewController = host
+        panel.contentView = host
         panel.isOpaque = false
         panel.backgroundColor = .clear
         panel.hasShadow = true
@@ -322,21 +323,31 @@ final class HoverCard {
         panel.isReleasedWhenClosed = false
         host.rootView = AnyView(
             content.background(.regularMaterial).clipShape(shape).overlay(shape.strokeBorder(.separator, lineWidth: 0.5))
+                // As large as it would be, whatever the panel is now — it may grow, as a page's picture comes in.
+                .fixedSize()
+                .onGeometryChange(for: CGSize.self) { $0.size } action: { [weak self] size in
+                    // Not within this layout: the next turn of the run loop.
+                    DispatchQueue.main.async { self?.resize(to: size) }
+                }
                 .onHover { [weak self] inside in
                     guard let self else { return }
                     self.isPointed = inside
                     if !inside { self.onLeave() }
                 }
+                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         )
-        panel.setContentSize(host.view.fittingSize)
-        place()
-        resized = NotificationCenter.default.addObserver(forName: NSWindow.didResizeNotification, object: panel, queue: .main) { [weak self] _ in
-            MainActor.assumeIsolated { self?.place() }
-        }
+        resize(to: host.fittingSize)
         parent.addChildWindow(panel, ordered: .above)
     }
 
-    /// Under the pointer and a little to its right — near enough to
+    private func resize(to size: CGSize) {
+        let size = CGSize(width: size.width.rounded(.up), height: size.height.rounded(.up))
+        guard size.width > 0, size.height > 0 else { return }
+        if panel.frame.size != size { panel.setContentSize(size) }
+        place()
+    }
+
+/// Under the pointer and a little to its right — near enough to
     /// reach without leaving it far behind; over it, where there is no
     /// room under; and never off the screen's edge.
     private func place() {
@@ -349,8 +360,6 @@ final class HoverCard {
     }
 
     func close() {
-        if let resized { NotificationCenter.default.removeObserver(resized) }
-        resized = nil
         parent?.removeChildWindow(panel)
         panel.orderOut(nil)
     }

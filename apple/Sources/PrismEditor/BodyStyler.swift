@@ -148,16 +148,59 @@ struct BodyStyler {
     /// whose names are said as what they are: about the note, not of it.
     static let propertyNames: Set<String> = ["url", "type", "description", "author", "source", "date"]
 
-    /// Where a row's property name is — `URL:`, its colon and the space after
-    /// — if the row begins with one of them.
+    /// Where a row's property name is — `URL:`, to its colon — if the row
+    /// begins with one of them. The space after is the value's: set in the
+    /// row's own face, it keeps the line as tall, and its words on the same
+    /// baseline, whether anything is written after the name yet or not.
     static func propertyName(in text: NSString, range: NSRange) -> NSRange? {
         guard range.length > 2, NSMaxRange(range) <= text.length else { return nil }
         let words = text.substring(with: range)
         guard let colon = words.firstIndex(of: ":"), words.distance(from: words.startIndex, to: colon) <= 12 else { return nil }
         guard propertyNames.contains(words[..<colon].lowercased()) else { return nil }
-        let after = words.index(after: colon)
-        let spaces = words[after...].prefix { $0 == " " }.count
-        return NSRange(location: range.location, length: (String(words[..<after]) as NSString).length + spaces)
+        return NSRange(location: range.location, length: (String(words[...colon]) as NSString).length)
+    }
+
+    /// A property row with nothing after its name yet: as tall as a row of
+    /// words, its name on their baseline — so that writing its value moves
+    /// nothing. (With words after it, they hold the line as it should be.)
+    private func holdLine(of paragraph: NSMutableParagraphStyle, key: NSRange, in row: NSRange, storage: NSTextStorage) {
+        let rest = (storage.string as NSString).substring(with: NSRange(location: NSMaxRange(key), length: NSMaxRange(row) - NSMaxRange(key)))
+        guard rest.trimmingCharacters(in: .whitespaces).isEmpty, let label = storage.attribute(.font, at: key.location, effectiveRange: nil) as? EditorFont else { return }
+        // As a line with both faces in it is laid out — measured, not reckoned: the text system's
+        // own heights are not the fonts' sums — and the name raised to where that line's baseline is.
+        let held = Self.heldLine(body: theme.body, label: label)
+        paragraph.minimumLineHeight = held.height
+        storage.addAttribute(.baselineOffset, value: held.raise, range: key)
+    }
+
+    /// A line of a name in the label face and words in the body face, as laid
+    /// out: how tall it is, and how far the name alone, on a line held that
+    /// tall, must be raised to stand on its baseline. Measured once a pair.
+    nonisolated(unsafe) private static var heldLines: [String: (height: CGFloat, raise: CGFloat)] = [:]
+
+    static func heldLine(body: EditorFont, label: EditorFont) -> (height: CGFloat, raise: CGFloat) {
+        let key = "\(body.fontName) \(body.pointSize) \(label.fontName) \(label.pointSize)"
+        if let known = heldLines[key] { return known }
+        func lay(_ text: NSAttributedString) -> (height: CGFloat, baseline: CGFloat) {
+            let storage = NSTextStorage(attributedString: text)
+            let manager = NSLayoutManager()
+            storage.addLayoutManager(manager)
+            let container = NSTextContainer(size: CGSize(width: 10_000, height: 10_000))
+            container.lineFragmentPadding = 0
+            manager.addTextContainer(container)
+            manager.ensureLayout(for: container)
+            let fragment = manager.lineFragmentRect(forGlyphAt: 0, effectiveRange: nil)
+            return (fragment.height, manager.location(forGlyphAt: 0).y)
+        }
+        let both = NSMutableAttributedString(string: "Name:", attributes: [.font: label])
+        both.append(NSAttributedString(string: " words", attributes: [.font: body]))
+        let mixed = lay(both)
+        let style = NSMutableParagraphStyle()
+        style.minimumLineHeight = mixed.height
+        let alone = lay(NSAttributedString(string: "Name:", attributes: [.font: label, .paragraphStyle: style]))
+        let measured = (mixed.height, alone.baseline - mixed.baseline)
+        heldLines[key] = measured
+        return measured
     }
 
     /// Whether a row is typed — a box, a number, a bullet — with nothing written by it.
@@ -234,11 +277,19 @@ struct BodyStyler {
             // its name in the set's label face, small and quiet; a URL's address the same, smaller.
             if case .item(nil, nil, "-") = line.kind, let key = Self.propertyName(in: storage.string as NSString, range: range) {
                 storage.addAttributes([.font: theme.label((size * 0.85).rounded(), weight: .medium), .foregroundColor: theme.secondary], range: key)
+                holdLine(of: paragraph, key: key, in: range, storage: storage)
                 if (storage.string as NSString).substring(with: key).lowercased().hasPrefix("url") {
-                    storage.addAttribute(.font, value: theme.label((size * 0.9).rounded()), range: NSRange(location: NSMaxRange(key), length: NSMaxRange(range) - NSMaxRange(key)))
+                    // The address only — not the space before it, which keeps the line as it is.
+                    let string = storage.string as NSString
+                    var start = NSMaxRange(key)
+                    while start < NSMaxRange(range), string.character(at: start) == 32 { start += 1 }
+                    if start < NSMaxRange(range) {
+                        storage.addAttribute(.font, value: theme.label((size * 0.9).rounded()), range: NSRange(location: start, length: NSMaxRange(range) - start))
+                    }
                 }
             } else if case .paragraph = line.kind, let key = Self.propertyName(in: storage.string as NSString, range: range) {
                 storage.addAttributes([.font: theme.label((size * 0.85).rounded(), weight: .medium), .foregroundColor: theme.secondary], range: key)
+                holdLine(of: paragraph, key: key, in: range, storage: storage)
             }
             // An empty typed row, while the note is only read: no room at all.
             if !isWriting, Self.isEmptyTyped(line) {
