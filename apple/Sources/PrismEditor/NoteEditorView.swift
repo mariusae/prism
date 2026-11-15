@@ -791,6 +791,17 @@ public final class NoteTextView: NSTextView {
 
     public override func keyDown(with event: NSEvent) {
         let flags = event.modifierFlags.intersection([.command, .shift, .option, .control])
+        // ⌃W, ⌃S: the word, the sentence.
+        if flags == [.control], !outlineLines.isEmpty, let key = event.charactersIgnoringModifiers?.lowercased(), key == "w" || key == "s" {
+            leaveRows()
+            return key == "w" ? selectWord() : selectSentence()
+        }
+        // Bike's keys with ⌃⌥ and no ⌘ — the row alone, promote and demote — are no menu's: taken here.
+        if !flags.contains(.command), flags.isSuperset(of: [.control, .option]), !outlineLines.isEmpty,
+           let command = Self.command(flags: flags, key: event.charactersIgnoringModifiers?.lowercased() ?? "", special: event.specialKey) {
+            if !perform(keyed: command) { NSSound.beep() }
+            return
+        }
         if event.keyCode == 49, flags == [.control, .option] {
             if !event.isARepeat, !holdsToTalk {
                 holdsToTalk = true
@@ -1064,6 +1075,16 @@ public final class NoteTextView: NSTextView {
     /// since: lines of the outline, counted from the first. Nothing,
     /// while the note is written in.
     private var rowsChosen: (anchor: Int, head: Int)?
+    /// Where the caret was when rows came to be chosen: where Esc goes back to.
+    private var caretBeforeRows: Int?
+    /// What Expand Selection went through, the last on top: what Contract Selection goes back to.
+    private var expansions: [Chosen] = []
+
+    /// A selection, as Expand Selection steps through them: words, or rows.
+    enum Chosen: Equatable {
+        case words(NSRange)
+        case rows(Int, Int)
+    }
     var isChoosingRows: Bool { rowsChosen != nil }
 
     private var outlineLines: [BodyLine] {
@@ -1124,6 +1145,7 @@ public final class NoteTextView: NSTextView {
     private func leaveRows(caretAt at: Int? = nil) {
         guard rowsChosen != nil else { return }
         rowsChosen = nil
+        caretBeforeRows = nil
         (layoutManager as? BodyLayoutManager)?.chosen = nil
         selectedTextAttributes = [.backgroundColor: NSColor.selectedTextBackgroundColor]
         insertionPointColor = coordinator?.parent.theme.accent ?? .controlAccentColor
@@ -1137,12 +1159,195 @@ public final class NoteTextView: NSTextView {
         chooseRows(anchor: extending ? chosen.anchor : head, head: head)
     }
 
+    /// ⇧↑ and ⇧↓, as Bike 2's: words are chosen within a row only — to its
+    /// start, or its end — then the row is chosen whole, then the rows
+    /// before it, or after.
     public override func moveUpAndModifySelection(_ sender: Any?) {
-        if isChoosingRows { stepRows(-1, extending: true) } else { super.moveUpAndModifySelection(sender) }
+        if isChoosingRows { return stepRows(-1, extending: true) }
+        guard let (index, line) = selectionRow() else { return super.moveUpAndModifySelection(sender) }
+        let selection = selectedRange()
+        if selection.location > Int(line.content) {
+            return setSelectedRange(NSRange(location: Int(line.content), length: NSMaxRange(selection) - Int(line.content)))
+        }
+        caretBeforeRows = caretBeforeRows ?? NSMaxRange(selection)
+        chooseRows(anchor: index, head: index)
     }
 
     public override func moveDownAndModifySelection(_ sender: Any?) {
-        if isChoosingRows { stepRows(1, extending: true) } else { super.moveDownAndModifySelection(sender) }
+        if isChoosingRows { return stepRows(1, extending: true) }
+        guard let (index, line) = selectionRow() else { return super.moveDownAndModifySelection(sender) }
+        let selection = selectedRange()
+        if NSMaxRange(selection) < Int(line.end) {
+            return setSelectedRange(NSRange(location: selection.location, length: Int(line.end) - selection.location))
+        }
+        caretBeforeRows = caretBeforeRows ?? selection.location
+        chooseRows(anchor: index, head: index)
+    }
+
+    /// ⇧← and ⇧→ go no further than the row's words.
+    public override func moveLeftAndModifySelection(_ sender: Any?) {
+        if isChoosingRows { return }
+        if let (_, line) = selectionRow(), selectedRange().location <= Int(line.content) { return }
+        super.moveLeftAndModifySelection(sender)
+    }
+
+    public override func moveRightAndModifySelection(_ sender: Any?) {
+        if isChoosingRows { return }
+        if let (_, line) = selectionRow(), NSMaxRange(selectedRange()) >= Int(line.end) { return }
+        super.moveRightAndModifySelection(sender)
+    }
+
+    /// The row the selection is in, in an outline — when it is all in one.
+    private func selectionRow() -> (Int, BodyLine)? {
+        let lines = outlineLines
+        let selection = selectedRange()
+        guard let index = row(at: selection.location), lines.indices.contains(index), NSMaxRange(selection) <= Int(lines[index].end) else { return nil }
+        return (index, lines[index])
+    }
+
+    // MARK: Rows chosen, moved about by keys
+    //
+    // With rows chosen, ← → ⌥← ⌥→ ⌥↑ ⌥↓ go back to writing — at the first
+    // row's start, or the last's end; ⌘↑ ⌘↓ choose the first or the last
+    // row, ⇧⌘↑ ⇧⌘↓ the rows to there.
+
+    private func leaveRows(atStart: Bool) {
+        guard let chosen = rowsChosen else { return }
+        let lines = outlineLines
+        let (first, last) = (min(chosen.anchor, chosen.head), max(chosen.anchor, chosen.head))
+        leaveRows(caretAt: atStart ? Int(lines[first].content) : Int(lines[last].end))
+    }
+
+    public override func moveLeft(_ sender: Any?) { if isChoosingRows { leaveRows(atStart: true) } else { super.moveLeft(sender) } }
+    public override func moveRight(_ sender: Any?) { if isChoosingRows { leaveRows(atStart: false) } else { super.moveRight(sender) } }
+    public override func moveWordLeft(_ sender: Any?) { if isChoosingRows { leaveRows(atStart: true) } else { super.moveWordLeft(sender) } }
+    public override func moveWordRight(_ sender: Any?) { if isChoosingRows { leaveRows(atStart: false) } else { super.moveWordRight(sender) } }
+    public override func moveToBeginningOfParagraph(_ sender: Any?) { if isChoosingRows { leaveRows(atStart: true) } else { super.moveToBeginningOfParagraph(sender) } }
+    public override func moveToEndOfParagraph(_ sender: Any?) { if isChoosingRows { leaveRows(atStart: false) } else { super.moveToEndOfParagraph(sender) } }
+    public override func moveParagraphBackwardAndModifySelection(_ sender: Any?) { if isChoosingRows { leaveRows(atStart: true) } else { super.moveParagraphBackwardAndModifySelection(sender) } }
+    public override func moveParagraphForwardAndModifySelection(_ sender: Any?) { if isChoosingRows { leaveRows(atStart: false) } else { super.moveParagraphForwardAndModifySelection(sender) } }
+
+    public override func moveToBeginningOfDocument(_ sender: Any?) {
+        if isChoosingRows { return chooseRows(anchor: 0, head: 0) }
+        super.moveToBeginningOfDocument(sender)
+    }
+
+    public override func moveToEndOfDocument(_ sender: Any?) {
+        let last = outlineLines.count - 1
+        if isChoosingRows { return chooseRows(anchor: last, head: last) }
+        super.moveToEndOfDocument(sender)
+    }
+
+    public override func moveToBeginningOfDocumentAndModifySelection(_ sender: Any?) {
+        if let chosen = rowsChosen { return chooseRows(anchor: chosen.anchor, head: 0) }
+        super.moveToBeginningOfDocumentAndModifySelection(sender)
+    }
+
+    public override func moveToEndOfDocumentAndModifySelection(_ sender: Any?) {
+        if let chosen = rowsChosen { return chooseRows(anchor: chosen.anchor, head: outlineLines.count - 1) }
+        super.moveToEndOfDocumentAndModifySelection(sender)
+    }
+
+    /// ⌘A: every row, chosen as rows.
+    public override func selectAll(_ sender: Any?) {
+        let lines = outlineLines
+        guard !lines.isEmpty else { return super.selectAll(sender) }
+        if !isChoosingRows { caretBeforeRows = selectedRange().location }
+        chooseRows(anchor: 0, head: lines.count - 1)
+    }
+
+    // MARK: Expand and contract selection
+    //
+    // ⌃⇧⌘→: the word, the sentence, the row's words, the row, its branch,
+    // its parent's branch, and on out. ⌃⇧⌘← goes back a step.
+
+    private var chosenNow: Chosen {
+        if let chosen = rowsChosen { return .rows(min(chosen.anchor, chosen.head), max(chosen.anchor, chosen.head)) }
+        return .words(selectedRange())
+    }
+
+    private func choose(_ chosen: Chosen) {
+        switch chosen {
+        case .words(let range):
+            leaveRows()
+            setSelectedRange(range)
+        case .rows(let first, let last):
+            if !isChoosingRows { caretBeforeRows = selectedRange().location }
+            chooseRows(anchor: first, head: last)
+        }
+    }
+
+    /// The rows a row's branch shows: it, and every row after it deeper than it.
+    private func branch(of index: Int, in lines: [BodyLine]) -> ClosedRange<Int> {
+        var last = index
+        while last + 1 < lines.count, lines[last + 1].depth > lines[index].depth { last += 1 }
+        return index...last
+    }
+
+    /// What Expand Selection goes to from a selection.
+    private func expanded(from chosen: Chosen) -> Chosen? {
+        let lines = outlineLines
+        let text = string as NSString
+        switch chosen {
+        case .words(let range):
+            guard let index = row(at: range.location), lines.indices.contains(index) else { return nil }
+            let line = lines[index]
+            let words = NSRange(location: Int(line.content), length: Int(line.end) - Int(line.content))
+            // The word, then the sentence, then the row's words: each the first that holds more than is chosen.
+            var steps: [NSRange] = [selectionRange(forProposedRange: NSRange(location: range.location, length: max(range.length, 0)), granularity: .selectByWord)]
+            text.enumerateSubstrings(in: words, options: [.bySentences, .substringNotRequired]) { _, sentence, _, stop in
+                if NSIntersectionRange(sentence, range).length > 0 || (range.length == 0 && NSLocationInRange(range.location, sentence)) {
+                    steps.append(sentence)
+                    stop.pointee = true
+                }
+            }
+            steps.append(words)
+            if let next = steps.first(where: { NSUnionRange($0, range) == $0 && $0 != range && NSIntersectionRange($0, words) == $0 }) { return .words(next) }
+            return .rows(index, index)
+        case .rows(let first, let last):
+            let whole = branch(of: first, in: lines)
+            if whole.upperBound > last || first != whole.lowerBound { return .rows(whole.lowerBound, max(whole.upperBound, last)) }
+            // Out to the parent's branch.
+            guard let parent = (0..<first).last(where: { lines[$0].depth < lines[first].depth }) else {
+                return lines.isEmpty || (first == 0 && last == lines.count - 1) ? nil : .rows(0, lines.count - 1)
+            }
+            return .rows(parent, branch(of: parent, in: lines).upperBound)
+        }
+    }
+
+    func expandSelection() {
+        let now = chosenNow
+        guard !outlineLines.isEmpty, let next = expanded(from: now) else { return NSSound.beep() }
+        if expansions.last != now { expansions = [] }
+        expansions.append(now)
+        choose(next)
+        expansions.append(next)
+    }
+
+    func contractSelection() {
+        // Back a step only from where expanding left it.
+        guard expansions.count >= 2, expansions.last == chosenNow else { return NSSound.beep() }
+        expansions.removeLast()
+        let back = expansions.removeLast()
+        choose(back)
+        if !expansions.isEmpty { expansions.append(back) }
+    }
+
+    /// ⌃W, ⌃S: the word, or the sentence, the caret is in.
+    func selectWord() {
+        setSelectedRange(selectionRange(forProposedRange: selectedRange(), granularity: .selectByWord))
+    }
+
+    func selectSentence() {
+        guard let (_, line) = selectionRow() else { return }
+        let words = NSRange(location: Int(line.content), length: Int(line.end) - Int(line.content))
+        let at = selectedRange().location
+        (string as NSString).enumerateSubstrings(in: words, options: [.bySentences, .substringNotRequired]) { _, sentence, _, stop in
+            if NSLocationInRange(at, sentence) || NSMaxRange(sentence) == at {
+                self.setSelectedRange(sentence)
+                stop.pointee = true
+            }
+        }
     }
 
     public override func insertBacktab(_ sender: Any?) {
@@ -1151,11 +1356,17 @@ public final class NoteTextView: NSTextView {
     }
 
     public override func insertText(_ string: Any, replacementRange: NSRange) {
-        // Typed over rows chosen: written at the end of the last of them, not in their place.
+        // Typed with rows chosen: Space checks the tasks among them off, or opens them again; nothing else is typed.
         if let chosen = rowsChosen {
+            guard (string as? String) == " " || (string as? NSAttributedString)?.string == " " else { return }
             let lines = outlineLines
-            leaveRows(caretAt: lines.indices.contains(chosen.head) ? Int(lines[chosen.head].end) : nil)
-            return super.insertText(string, replacementRange: selectedRange())
+            let tasks = (min(chosen.anchor, chosen.head)...max(chosen.anchor, chosen.head)).filter { index in
+                guard lines.indices.contains(index), case .item(_, let done, _) = lines[index].kind else { return false }
+                return done != nil
+            }
+            if tasks.isEmpty || coordinator?.perform(.toggleCheckbox, onRows: tasks) != true { return }
+            chooseRows(anchor: chosen.anchor, head: chosen.head)
+            return
         }
         super.insertText(string, replacementRange: replacementRange)
     }
@@ -1177,10 +1388,12 @@ public final class NoteTextView: NSTextView {
     }
 
     public override func insertNewline(_ sender: Any?) {
-        // Return, with rows chosen: back to writing, at the end of the last gone to.
+        // Return, with rows chosen: a new row after them, as Return at the last one's end makes, written in.
         if let chosen = rowsChosen {
             let lines = outlineLines
-            return leaveRows(caretAt: lines.indices.contains(chosen.head) ? Int(lines[chosen.head].end) : nil)
+            leaveRows(caretAt: lines.indices.contains(max(chosen.anchor, chosen.head)) ? Int(lines[max(chosen.anchor, chosen.head)].end) : nil)
+            if coordinator?.perform(.newline) != true { NSSound.beep() }
+            return
         }
         if coordinator?.acceptOffer() == true { return }
         // Return at the end of a first line written as a heading: that line, the title.
@@ -1190,8 +1403,18 @@ public final class NoteTextView: NSTextView {
 
     public override func insertTab(_ sender: Any?) {
         if coordinator?.acceptOffer() == true { return }
-        if coordinator?.perform(.indent) != true, !isChoosingRows { super.insertTab(sender) }
+        // In an outline Tab only ever indents: a row that cannot go in stays, and no tab is typed.
+        if coordinator?.perform(.indent) != true, !isChoosingRows, outlineLines.isEmpty { super.insertTab(sender) }
         chooseSelectedRows()
+    }
+
+    /// ⇧↩ and ⌥↩ split a row as ↩ does — in an outline, which has no line breaks within rows.
+    public override func insertLineBreak(_ sender: Any?) {
+        if outlineLines.isEmpty { super.insertLineBreak(sender) } else { insertNewline(sender) }
+    }
+
+    public override func insertNewlineIgnoringFieldEditor(_ sender: Any?) {
+        if outlineLines.isEmpty { super.insertNewlineIgnoringFieldEditor(sender) } else { insertNewline(sender) }
     }
 
     public override func moveUp(_ sender: Any?) {
@@ -1219,10 +1442,24 @@ public final class NoteTextView: NSTextView {
 
     public override func cancelOperation(_ sender: Any?) {
         if coordinator?.isOffering == true { return coordinator?.dismissOffers() ?? () }
-        // In an outline, Esc first chooses the row being written in; again, it leaves the note.
-        if !isChoosingRows, !hasMarkedText(), let at = row(at: selectedRange().location) { return chooseRows(anchor: at, head: at) }
-        leaveRows()
-        window?.makeFirstResponder(nil)
+        let lines = outlineLines
+        // As text, a note has no rows: Esc leaves it.
+        guard !lines.isEmpty, !hasMarkedText() else {
+            leaveRows()
+            window?.makeFirstResponder(nil)
+            return
+        }
+        // Esc goes between writing and rows chosen, as Bike's does: back to the caret where it was.
+        if let chosen = rowsChosen {
+            let (first, last) = (lines[min(chosen.anchor, chosen.head)], lines[max(chosen.anchor, chosen.head)])
+            let kept = caretBeforeRows.flatMap { $0 >= Int(first.start) && $0 <= Int(last.end) ? $0 : nil }
+            let at = kept ?? Int(lines[chosen.head].end)
+            return leaveRows(caretAt: at)
+        }
+        let selection = selectedRange()
+        guard let first = row(at: selection.location), let last = row(at: max(NSMaxRange(selection) - (selection.length > 0 ? 1 : 0), selection.location)) else { return }
+        caretBeforeRows = selection.location
+        chooseRows(anchor: first, head: last)
     }
 
     public override func performKeyEquivalent(with event: NSEvent) -> Bool {
@@ -1250,12 +1487,37 @@ public final class NoteTextView: NSTextView {
             out()
             return true
         }
+        // ⌘A in an outline: every row, chosen as rows.
+        if key == "a", flags == [.command], !outlineLines.isEmpty {
+            selectAll(nil)
+            return true
+        }
+        if flags == [.command, .control, .shift], !outlineLines.isEmpty, event.specialKey == .rightArrow || event.specialKey == .leftArrow {
+            if event.specialKey == .rightArrow { expandSelection() } else { contractSelection() }
+            return true
+        }
         guard let command = Self.command(flags: flags, key: key, special: event.specialKey) else { return super.performKeyEquivalent(with: event) }
-        let done = coordinator?.perform(command) ?? false
-        // Done to rows chosen: they are chosen still, wherever they went.
-        if done { chooseSelectedRows() }
+        let done = perform(keyed: command)
         // A fold with nothing to fold leaves its key — ⌘0 is many an app's own — to whoever wants it.
         return done || !Self.outlineOnly.contains(command) || super.performKeyEquivalent(with: event)
+    }
+
+    /// A command its keys gave, and where the selection then is, as Bike has
+    /// it: writing in a row put in, joined or grouped; the copy chosen as
+    /// rows; after rows deleted, the next row chosen; else as it was.
+    private func perform(keyed command: EditCommand) -> Bool {
+        let done = coordinator?.perform(command) ?? false
+        guard done else { return false }
+        switch command {
+        case .insertBelow, .insertAbove, .insertChild, .group, .joinRows:
+            leaveRows()
+        case .duplicateRows, .deleteRows:
+            if let at = row(at: selectedRange().location) { chooseRows(anchor: at, head: at) }
+        default:
+            // Done to rows chosen: they are chosen still, wherever they went.
+            chooseSelectedRows()
+        }
+        return true
     }
 
     /// The commands only an outline has, whose keys are let by when there is nothing for them to do.
@@ -1344,8 +1606,8 @@ public final class NoteTextView: NSTextView {
     /// Does a command, as its keys would. Says whether there was anything to do.
     @discardableResult
     public func run(_ command: EditCommand) -> Bool {
-        let done = coordinator?.perform(command) ?? false
-        if done { chooseSelectedRows() } else { NSSound.beep() }
+        let done = perform(keyed: command)
+        if !done { NSSound.beep() }
         return done
     }
 
@@ -1442,42 +1704,81 @@ public final class NoteTextView: NSTextView {
         return true
     }
 
-    private static func command(flags: NSEvent.ModifierFlags, key: String, special: NSEvent.SpecialKey?) -> EditCommand? {
+    /// Bike 2's keys, as its menus and key maps have them (`docs/bike-parity.md`).
+    static func command(flags: NSEvent.ModifierFlags, key: String, special: NSEvent.SpecialKey?) -> EditCommand? {
         switch (flags, key) {
         case ([.command], "b"): return .bold
         case ([.command], "i"): return .italic
         case ([.command, .shift], "h"): return .highlight
-        // With ⇧, the keys say what they say shifted: ` is ~, - is _.
-        case ([.command, .shift], "`"), ([.command, .shift], "~"): return .code
+        case ([.command, .shift], "c"): return .code
+        // With ⇧, the keys say what they say shifted: - is _.
         case ([.command, .shift], "-"), ([.command, .shift], "_"): return .strikethrough
         case ([.command, .shift], "k"): return .deleteRows
-        case ([.command, .shift], "d"): return .duplicateRows
+        case ([.control, .option], "k"): return .deleteRowOnly
+        case ([.command], "d"): return .duplicateRows
+        case ([.command, .option], "g"): return .group
         case ([.command, .shift], "8"), ([.command, .shift], "*"): return .bullet
         case ([.command], "9"): return .fold
         case ([.command], "0"): return .unfold
-        case ([.command, .control], "9"): return .foldCompletely
-        case ([.command, .control], "0"): return .unfoldCompletely
-        case ([.command, .option], "9"): return .foldAll
-        case ([.command, .option], "0"): return .unfoldAll
+        case ([.command, .option], "9"): return .foldCompletely
+        case ([.command, .option], "0"): return .unfoldCompletely
+        case ([.command, .control], "9"): return .foldAll
+        case ([.command, .control], "0"): return .unfoldAll
         case ([.command, .control, .shift], "d"): return .moveDoneToBottom
         default: break
         }
         if special == .carriageReturn || special == .enter || key == "\r" {
-            if flags == [.command] { return .cycleChecklist }
-            if flags == [.command, .shift] { return .toggleTask }
+            if flags == [.command] { return .insertBelow }
+            if flags == [.command, .shift] { return .insertAbove }
+            if flags == [.command, .option] { return .insertChild }
         }
-        if flags == [.command, .control] {
-            switch special {
-            case .upArrow: return .moveUp
-            case .downArrow: return .moveDown
-            case .rightArrow: return .indent
-            case .leftArrow: return .outdent
-            default: break
-            }
+        if (special == .delete || special == .backspace || key == "\u{7F}" || key == "\u{8}"), flags == [.command, .control] { return .joinRows }
+        let arrows: [NSEvent.SpecialKey: Int] = [.upArrow: 0, .downArrow: 1, .rightArrow: 2, .leftArrow: 3]
+        guard let special, let arrow = arrows[special] else { return nil }
+        switch flags {
+        case [.command, .control]: return [EditCommand.moveUp, .moveDown, .indent, .outdent][arrow]
+        case [.command, .control, .option]: return [EditCommand.moveUpKeepingLevel, .moveDownKeepingLevel, nil, nil][arrow]
+        case [.control, .option]: return [nil, nil, EditCommand.indentRowOnly, .outdentRowOnly][arrow]
+        case [.control, .option, .shift]: return [nil, nil, EditCommand.demoteSiblings, .promoteChildren][arrow]
+        default: return nil
         }
-        return nil
     }
 }
+#if DEBUG
+/// For a harness driving the editor as Bike is driven, to compare the two:
+/// what is shown — each row's words, depth and fold — and what is chosen.
+extension NoteTextView {
+    public var probeState: [String: Any] {
+        let text = string as NSString
+        let rows: [[String: Any]] = outlineLines.map { line in
+            let words = text.substring(with: NSRange(location: Int(line.content), length: max(Int(line.end) - Int(line.content), 0)))
+            var kind = "body"
+            switch line.kind {
+            case .heading: kind = "heading"
+            case .item(let number, let done, _): kind = done != nil ? "task" : number != nil ? "ordered" : "body"
+            case .quote: kind = "quote"
+            default: break
+            }
+            return ["name": words, "depth": Int(line.depth), "folded": line.isFolded, "children": line.hasChildren, "type": kind, "done": { if case .item(_, let done, _) = line.kind { return done == true } else { return false } }(), "start": Int(line.start), "end": Int(line.end), "content": Int(line.content)]
+        }
+        let range = selectedRange()
+        var state: [String: Any] = ["rows": rows, "selection": [range.location, range.length], "selectedText": text.substring(with: range), "markdown": coordinator?.editor.markdown() ?? ""]
+        if let chosen = rowsChosen { state["chosen"] = [min(chosen.anchor, chosen.head), max(chosen.anchor, chosen.head)] }
+        state["focused"] = window?.firstResponder === self
+        state["view"] = String(UInt(bitPattern: ObjectIdentifier(self).hashValue), radix: 16)
+        state["responder"] = window?.firstResponder.map { String(describing: type(of: $0)) } ?? "none"
+        return state
+    }
+
+    /// The caret put at a place of the text, writing.
+    public func probeCaret(at location: Int) {
+        window?.makeFirstResponder(self)
+        leaveRows()
+        setSelectedRange(NSRange(location: min(location, (string as NSString).length), length: 0))
+    }
+}
+#endif
+
 extension NoteTextView: NSPopoverDelegate {
     public func popoverDidClose(_ notification: Notification) {
         if (notification.object as? NSPopover) === linkPrompt { linkPrompt = nil }

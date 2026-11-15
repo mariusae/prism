@@ -639,11 +639,49 @@ impl Session {
         if at_caret {
             return self.perform_at_caret(before, selection, command);
         }
+        if let Some(change) = self.perform_beside(&before, &selection, rows, &command) {
+            return change;
+        }
         let chosen = self.chosen(&selection, rows);
         let position = self.rows.iter().position(|row| Some(&row.path) == chosen.first())?;
         self.mark(&selection, &chosen);
         let done = self.rearrange(&command);
         self.rearranged(before, done, position, matches!(command, Command::Fold | Command::ToggleFold | Command::FoldCompletely | Command::FoldAll))
+    }
+
+    /// The commands that put a row beside the rows, join, or group them:
+    /// the caret goes to where the writing goes on. `None` for any other
+    /// command; `Some(None)` when it had nothing to do.
+    fn perform_beside(&mut self, before: &str, selection: &Range<usize>, rows: Option<&[usize]>, command: &Command) -> Option<Option<Change>> {
+        let beside = match command {
+            Command::InsertBelow => Some(outline::Beside::Below),
+            Command::InsertAbove => Some(outline::Beside::Above),
+            Command::InsertChild => Some(outline::Beside::Child),
+            Command::JoinRows | Command::Group => None,
+            _ => return None,
+        };
+        let chosen = self.chosen(selection, rows);
+        let done = (|| {
+            if let Some(beside) = beside {
+                // Above the first of them; below, or under, the last.
+                let path = if beside == outline::Beside::Above { chosen.first()? } else { chosen.last()? }.clone();
+                let new = outline::insert_row(&mut self.body, &path, beside)?;
+                return Some(self.changed(before.to_owned(), (new, 0), None));
+            }
+            if *command == Command::Group {
+                let new = outline::group(&mut self.body, &chosen)?;
+                return Some(self.changed(before.to_owned(), (new, 0), None));
+            }
+            // Joined: the row the caret is in, and the row shown after it. The caret stays.
+            let at = self.row_at(selection.start);
+            let path = self.rows[at].path.clone();
+            let next = self.rows.get(at + 1)?.path.clone();
+            let caret = own_offset(&self.text[self.rows[at].range.clone()], selection.start - self.rows[at].range.start);
+            let (onto, _) = outline::join_next(&mut self.body, &path, &next)?;
+            let caret = shown_offset(&self.body.get(&onto)?.text, caret);
+            Some(self.changed(before.to_owned(), (onto, caret), None))
+        })();
+        Some(done)
     }
 
     /// The commands given where the caret is.
@@ -677,17 +715,28 @@ impl Session {
                     // In code, a line of the same block.
                     return Some(self.replace_rows(selection, &SOFT_BREAK.to_string()));
                 }
-                if block.text.is_empty() && block.children.is_empty() && matches!(kind, BlockKind::Item(_) | BlockKind::Quote) {
-                    // Return on a row with nothing in it: out a level, then plain.
-                    if path.len() > 1 {
-                        let out = outline::outdent(&mut self.body, &path)?;
-                        return Some(self.changed(before, (out, 0), None));
+                // Return on a typed row with nothing in it — a task, a number, a
+                // quote, a heading — makes it a plain row, where it is. On a plain
+                // one it is a new row, as anywhere: never out a level.
+                let typed = match &kind {
+                    BlockKind::Item(Item { task, marker }) => task.is_some() || matches!(marker, Marker::Ordered { .. }),
+                    BlockKind::Quote | BlockKind::Heading(_) => true,
+                    _ => false,
+                };
+                if block.text.is_empty() && typed {
+                    let plain = if matches!(kind, BlockKind::Item(_)) || path.len() > 1 {
+                        BlockKind::Item(Item { marker: Marker::Bullet('-'), task: None })
+                    } else {
+                        BlockKind::Paragraph
+                    };
+                    outline::set_kind(&mut self.body, &path, plain);
+                    if let Some(siblings) = self.body.siblings_mut(&path) {
+                        outline::renumber(siblings);
                     }
-                    outline::set_kind(&mut self.body, &path, BlockKind::Paragraph);
                     return Some(self.changed(before, (path, 0), None));
                 }
                 let offset = own_offset(&self.text[self.rows[first].range.clone()], start.1);
-                let (at_end, folded) = (offset == block.text.len(), block.folded);
+                let at_end = offset == block.text.len();
                 // Return after a fence — ``` or ```rust — and nothing else: the row
                 // is a code block, and the caret is on the line between its fences.
                 let fenced = at_end
@@ -708,11 +757,7 @@ impl Session {
                     return Some(self.changed(before, (below, 0), None));
                 }
                 // What a folded row hides stays under it: the new row comes after them.
-                let hidden = self.body.get_mut(&path).filter(|_| at_end && folded).map(|block| std::mem::take(&mut block.children));
                 let next = outline::split(&mut self.body, &path, offset);
-                if let (Some(hidden), Some(block)) = (hidden, self.body.get_mut(&path)) {
-                    block.children = hidden;
-                }
                 Some(self.changed(before, (next?, 0), None))
             }
             Command::DeleteBackward => {
@@ -846,9 +891,20 @@ impl Session {
     fn rearrange(&mut self, command: &Command) -> Option<()> {
         let mut any = false;
         match command {
-            Command::Indent | Command::Outdent | Command::MoveUp | Command::MoveDown => {
+            Command::Indent
+            | Command::Outdent
+            | Command::MoveUp
+            | Command::MoveDown
+            | Command::MoveUpKeepingLevel
+            | Command::MoveDownKeepingLevel
+            | Command::IndentRowOnly
+            | Command::OutdentRowOnly
+            | Command::PromoteChildren
+            | Command::DemoteSiblings => {
                 // Moved down, the last goes first, so each has room.
-                while let Some(at) = self.next_chosen(*command == Command::MoveDown) {
+                // Outdented, too: each goes just after the parent, so the last goes first to keep their order.
+                let down = matches!(command, Command::MoveDown | Command::MoveDownKeepingLevel | Command::Outdent);
+                while let Some(at) = self.next_chosen(down) {
                     let moved = match command {
                         Command::Indent => {
                             let to = outline::indent(&mut self.body, &at);
@@ -858,16 +914,38 @@ impl Session {
                             }
                             to
                         }
-                        Command::Outdent => {
+                        Command::Outdent => outline::outdent(&mut self.body, &at),
+                        Command::OutdentRowOnly => {
                             // What followed it comes under it — and is not to go out of sight there.
                             let followed = self.body.get(&at[..at.len() - 1]).is_some_and(|over| at[at.len() - 1] + 1 < over.children.len());
-                            let to = outline::outdent(&mut self.body, &at);
+                            let to = outline::outdent_taking_followers(&mut self.body, &at);
                             if let Some(block) = to.as_ref().and_then(|to| self.body.get_mut(to)).filter(|block| followed && block.can_have_children()) {
                                 block.folded = false;
                             }
                             to
                         }
-                        Command::MoveUp => outline::move_up(&mut self.body, &at),
+                        Command::IndentRowOnly => {
+                            // Under the row before, and its own children left at the level they were.
+                            let to = outline::indent(&mut self.body, &at);
+                            if let Some(to) = &to {
+                                if let Some(over) = self.body.get_mut(&to[..to.len() - 1]) {
+                                    over.folded = false;
+                                }
+                                outline::promote_children(&mut self.body, to);
+                            }
+                            to
+                        }
+                        Command::MoveUp => {
+                            let shown = visible(&self.body);
+                            outline::move_up_shown(&mut self.body, &at, &shown)
+                        }
+                        Command::MoveDown => {
+                            let shown = visible(&self.body);
+                            outline::move_down_shown(&mut self.body, &at, &shown)
+                        }
+                        Command::MoveUpKeepingLevel => outline::move_up(&mut self.body, &at),
+                        Command::PromoteChildren => outline::promote_children(&mut self.body, &at),
+                        Command::DemoteSiblings => outline::demote_siblings(&mut self.body, &at),
                         _ => outline::move_down(&mut self.body, &at),
                     };
                     match moved {
@@ -891,6 +969,11 @@ impl Session {
             Command::DeleteRows => {
                 while let Some(at) = self.next_chosen(true) {
                     any |= outline::remove(&mut self.body, &at).is_some();
+                }
+            }
+            Command::DeleteRowOnly => {
+                while let Some(at) = self.next_chosen(true) {
+                    any |= outline::remove_row_only(&mut self.body, &at).is_some();
                 }
             }
             Command::DuplicateRows => {
@@ -956,7 +1039,14 @@ impl Session {
                     any |= self.body.get_mut(&at).is_some_and(|block| sink_done(&mut block.children));
                 }
             }
-            Command::Newline | Command::DeleteBackward | Command::Toggle(_) => {}
+            Command::Newline
+            | Command::DeleteBackward
+            | Command::Toggle(_)
+            | Command::InsertBelow
+            | Command::InsertAbove
+            | Command::InsertChild
+            | Command::JoinRows
+            | Command::Group => {}
         }
         any.then_some(())
     }
@@ -2168,16 +2258,22 @@ mod tests {
     }
 
     #[test]
-    fn return_on_an_empty_row_takes_it_out_a_level_then_makes_it_plain() {
+    fn return_on_an_empty_row_makes_a_new_row_or_a_typed_one_plain() {
+        // A plain empty row, however deep: a new row after it, at its level — as Bike 2, never out a level.
         let (mut session, _) = outline("- one\n\n  - \n");
         assert_eq!(session.text(), "one\n");
         let at = session.text().len();
         session.perform(at..at, Command::Newline).unwrap();
-        // (It keeps the blank line it was written after.)
-        assert_eq!(session.markdown(), "- one\n\n- \n");
-        let at = session.text().len();
-        session.perform(at..at, Command::Newline).unwrap();
-        assert_eq!(session.layout().lines[1].kind, LineKind::Paragraph);
+        assert_eq!(session.text(), "one\n\n");
+        assert_eq!(session.layout().lines[2].depth, 2);
+        // An empty task, numbered row or quote: plain, where it is.
+        let (mut task, _) = outline("- one\n  - [ ] t\n");
+        let at = task.text().len();
+        task.replace(at - 1..at, "");
+        let at = task.text().len();
+        task.perform(at..at, Command::Newline).unwrap();
+        assert_eq!(task.text(), "one\n");
+        assert_eq!(task.layout().lines[1].kind, LineKind::Item { ordered: None, task: None, bullet: '-' });
         // A row with words in it is split, however deep.
         let (mut deep, _) = outline("- one\n  - two\n");
         deep.perform(7..7, Command::Newline).unwrap();
@@ -2649,6 +2745,43 @@ mod tests {
         shown(&mut view, &session.replace(2..5, ""));
         assert_eq!(view, "onwo\nunder two\ndeep\nalso under\nthree");
         assert_eq!(session.markdown(), "- onwo\n  - under two\n    - deep\n  - also under\n- three\n");
+    }
+
+    #[test]
+    fn rows_put_in_joined_grouped_and_moved_as_bike_does() {
+        // ⌘↩ on a parent: a row after its branch, the caret in it, the row not split.
+        let (mut session, view) = outline("- alpha\n  - beta\n- delta\n");
+        let change = session.perform(2..2, Command::InsertBelow).unwrap();
+        assert_eq!(session.markdown(), "- alpha\n  - beta\n- \n- delta\n");
+        assert_eq!(change.selection, 11..11);
+        // ⇧⌘↩ and ⌥⌘↩: above, and a first child.
+        let (mut session, _) = outline("- alpha\n  - beta\n");
+        session.perform(2..2, Command::InsertChild).unwrap();
+        assert_eq!(session.text(), "alpha\n\nbeta");
+        let (mut session, _) = outline("- alpha\n  - beta\n");
+        session.perform(8..8, Command::InsertAbove).unwrap();
+        assert_eq!(session.text(), "alpha\n\nbeta");
+        let _ = view;
+        // ⌃⌘⌫: the next row joined in, with a space; the caret stays.
+        let (mut session, _) = outline("- one\n- two\n  - kid\n");
+        let change = session.perform(1..1, Command::JoinRows).unwrap();
+        assert_eq!(session.markdown(), "- one two\n  - kid\n");
+        assert_eq!(change.selection, 1..1);
+        // ⌥⌘G: the rows under a new row, writing in it.
+        let (mut session, _) = outline("- one\n- two\n- three\n");
+        let change = session.perform(4..9, Command::Group).unwrap();
+        assert_eq!(session.text(), "one\n\ntwo\nthree");
+        assert_eq!(session.layout().lines[2].depth, 2);
+        assert_eq!(change.selection, 4..4);
+        // ⌃⌘↑ on a first child: out of its parent, above it; the caret goes with it.
+        let (mut session, _) = outline("- one\n  - two\n  - three\n- four\n");
+        let change = session.perform(5..5, Command::MoveUp).unwrap();
+        assert_eq!(session.markdown(), "- two\n- one\n  - three\n- four\n");
+        assert_eq!(change.selection, 1..1);
+        // ⇧Tab: after the parent's branch; the siblings after stay under it.
+        let (mut session, _) = outline("- a\n  - b\n  - c\n  - d\n");
+        session.perform(4..4, Command::Outdent).unwrap();
+        assert_eq!(session.markdown(), "- a\n  - b\n  - d\n- c\n");
     }
 
     #[test]

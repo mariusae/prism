@@ -96,43 +96,64 @@ public struct WeftMacApp: App {
                 Button("Show or Hide the Sidebar") { actions.sidebar += 1 }.keyboardShortcut("s", modifiers: [.command, .control])
             }
             // Formatting, and what is done to rows: each with its keys, which are said here so that they are found.
+            // Bike 2's Format and Outline menus, with its keys: the note's while it is written in,
+            // taken by the editor before any card's command on the same keys.
             CommandMenu("Format") {
                 Group {
                     format("Bold", .bold, "b")
                     format("Italic", .italic, "i")
+                    format("Code", .code, "c", [.command, .shift])
                     format("Highlight", .highlight, "h", [.command, .shift])
-                    format("Code", .code, "`", [.command, .shift])
                     format("Strikethrough", .strikethrough, "-", [.command, .shift])
-                    Button("Link…") { NoteTextView.writing?.askLink() }.keyboardShortcut("k", modifiers: [.command, .option])
+                    Button("Add Link…") { NoteTextView.writing?.askLink() }.keyboardShortcut("k", modifiers: [.command, .option])
                 }
                 Divider()
                 Group {
                     format("Bullet", .bullet, "8", [.command, .shift])
-                    format("Checkbox", .cycleChecklist, .return)
-                    format("To-Do", .toggleTask, .return, [.command, .shift])
+                    Button("Checkbox") { _ = NoteTextView.writing?.run(.cycleChecklist) }
+                    Button("To-Do") { _ = NoteTextView.writing?.run(.toggleTask) }
+                }
+                Divider()
+                Button("Switch Outline and Text") { toggleMode() }
+            }
+            CommandMenu("Outline") {
+                Group {
+                    format("New Row Below", .insertBelow, .return)
+                    format("New Row Above", .insertAbove, .return, [.command, .shift])
+                    format("New Child Row", .insertChild, .return, [.command, .option])
                 }
                 Divider()
                 Group {
+                    format("Expand All", .unfoldAll, "0", [.command, .control])
+                    format("Collapse All", .foldAll, "9", [.command, .control])
+                    format("Expand Row", .unfold, "0")
+                    format("Collapse Row", .fold, "9")
+                    format("Expand Row Completely", .unfoldCompletely, "0", [.command, .option])
+                    format("Collapse Row Completely", .foldCompletely, "9", [.command, .option])
+                }
+                Divider()
+                Group {
+                    format("Join Rows", .joinRows, .delete, [.command, .control])
+                    format("Duplicate Rows", .duplicateRows, "d")
+                    format("Delete Row", .deleteRows, "k", [.command, .shift])
+                    format("Delete Row (Rows Only)", .deleteRowOnly, "k", [.control, .option])
                     format("Indent", .indent, .rightArrow, [.command, .control])
+                    format("Indent (Rows Only)", .indentRowOnly, .rightArrow, [.control, .option])
                     format("Outdent", .outdent, .leftArrow, [.command, .control])
+                    format("Outdent (Rows Only)", .outdentRowOnly, .leftArrow, [.control, .option])
+                }
+                Group {
+                    format("Group Rows", .group, "g", [.command, .option])
+                    format("Promote Children", .promoteChildren, .leftArrow, [.control, .option, .shift])
+                    format("Demote Siblings", .demoteSiblings, .rightArrow, [.control, .option, .shift])
+                }
+                Group {
                     format("Move Up", .moveUp, .upArrow, [.command, .control])
+                    format("Move Up (Maintain Level)", .moveUpKeepingLevel, .upArrow, [.command, .control, .option])
                     format("Move Down", .moveDown, .downArrow, [.command, .control])
-                    // ⇧⌘D, as Go to Date's is too: the note's while it is written in.
-                    Button("Duplicate Rows (⇧⌘D)") { NoteTextView.writing?.run(.duplicateRows) }
-                    format("Delete Rows", .deleteRows, "k", [.command, .shift])
+                    format("Move Down (Maintain Level)", .moveDownKeepingLevel, .downArrow, [.command, .control, .option])
                     format("Move Done to Bottom", .moveDoneToBottom, "d", [.command, .control, .shift])
                 }
-                Divider()
-                Group {
-                    format("Fold", .fold, "9")
-                    format("Unfold", .unfold, "0")
-                    format("Fold Completely", .foldCompletely, "9", [.command, .control])
-                    format("Unfold Completely", .unfoldCompletely, "0", [.command, .control])
-                    format("Fold All", .foldAll, "9", [.command, .option])
-                    format("Unfold All", .unfoldAll, "0", [.command, .option])
-                }
-                Divider()
-                Button("Switch Outline and Text") { toggleMode() }.keyboardShortcut(.return, modifiers: [.command, .option])
                 Divider()
                 Button("Focus on Row") { NoteTextView.writing?.focusRow(apart: false) }.keyboardShortcut("]")
                 Button("Open Row as a Card") { NoteTextView.writing?.focusRow(apart: true) }.keyboardShortcut("]", modifiers: [.command, .shift])
@@ -229,7 +250,7 @@ public struct WeftMacApp: App {
 
     /// A Format menu item: a command done to the note being written in, with the keys that do it.
     private func format(_ title: String, _ command: EditCommand, _ key: KeyEquivalent, _ modifiers: EventModifiers = .command) -> some View {
-        Button(title) { NoteTextView.writing?.run(command) }.keyboardShortcut(key, modifiers: modifiers)
+        Button(title) { _ = NoteTextView.writing?.run(command) }.keyboardShortcut(key, modifiers: modifiers)
     }
 
     /// Starts writing down what is said, in the note with the caret — or stops.

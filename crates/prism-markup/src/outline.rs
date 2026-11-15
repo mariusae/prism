@@ -33,11 +33,28 @@ pub fn indent(document: &mut Document, path: &[usize]) -> Option<Path> {
     Some(moved)
 }
 
-/// Moves a block out a level, to just after its parent. The siblings that
-/// followed it stay in their order under it — as the lines of an outline
-/// read when one is pulled left — when it can hold them; else they stay
-/// where they were.
+/// Moves a block out a level, children and all, to just after its
+/// parent's whole branch. The siblings that followed it stay under the
+/// parent — as Bike 2 does; [`demote_siblings`] is the other way.
 pub fn outdent(document: &mut Document, path: &[usize]) -> Option<Path> {
+    let (&index, parent_path) = path.split_last()?;
+    let (&parent_index, _) = parent_path.split_last()?;
+    let parent = document.get_mut(parent_path)?;
+    if index >= parent.children.len() {
+        return None;
+    }
+    let block = parent.children.remove(index);
+    let mut moved = parent_path.to_vec();
+    *moved.last_mut()? = parent_index + 1;
+    document.siblings_mut(parent_path)?.insert(parent_index + 1, block);
+    Some(moved)
+}
+
+/// Moves a block out a level, to just after its parent, the siblings that
+/// followed it coming under it — the row alone pulled left, as the lines
+/// of an outline read then. When it cannot hold them they stay where they
+/// were.
+pub fn outdent_taking_followers(document: &mut Document, path: &[usize]) -> Option<Path> {
     let (&index, parent_path) = path.split_last()?;
     let (&parent_index, _) = parent_path.split_last()?;
     let parent = document.get_mut(parent_path)?;
@@ -144,7 +161,10 @@ pub fn split(document: &mut Document, path: &[usize], offset: usize) -> Option<P
     };
     let mut new = Block::new(kind, tail);
     new.layout.spacing = block.layout.spacing.max(1);
-    if new.text.is_empty() && !block.children.is_empty() && block.is_item() {
+    // Under a parent whose children are shown, the new row is its first
+    // child — what follows the parent's words on the page. Under a folded
+    // one it comes after the whole branch, and the hidden rows stay.
+    if !block.children.is_empty() && block.is_item() && !block.folded {
         block.children.insert(0, new);
         return Some([path, &[0]].concat());
     }
@@ -153,6 +173,183 @@ pub fn split(document: &mut Document, path: &[usize], offset: usize) -> Option<P
     siblings.insert(index + 1, new);
     renumber(siblings);
     Some([parent, &[index + 1]].concat())
+}
+
+/// The sort of row that follows a row of this sort: a bullet after a
+/// bullet, an open task after any task, the next number after a numbered
+/// item, a plain line after a heading.
+pub fn next_kind(kind: &BlockKind) -> BlockKind {
+    match kind {
+        BlockKind::Item(item) => BlockKind::Item(Item {
+            marker: match item.marker {
+                Marker::Ordered { number, delimiter } => Marker::Ordered { number: number + 1, delimiter },
+                bullet => bullet,
+            },
+            task: item.task.map(|_| Task::Open),
+        }),
+        BlockKind::Heading(_) => BlockKind::Paragraph,
+        other => other.clone(),
+    }
+}
+
+/// Where a new, empty row goes, beside a row.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Beside {
+    /// After the row's whole branch.
+    Below,
+    /// Before it.
+    Above,
+    /// Its first child.
+    Child,
+}
+
+/// Puts a new, empty row beside a row — ⌘↩, ⇧⌘↩, ⌥⌘↩ — of the sort that
+/// follows it. A row that cannot hold children gets the new row below
+/// it instead of under it. Answers the new row's path.
+pub fn insert_row(document: &mut Document, path: &[usize], beside: Beside) -> Option<Path> {
+    let block = document.get_mut(path)?;
+    let kind = match &block.kind {
+        BlockKind::Paragraph | BlockKind::Heading(_) | BlockKind::Item(_) | BlockKind::Quote => next_kind(&block.kind),
+        _ => BlockKind::Item(Item { marker: Marker::Bullet('-'), task: None }),
+    };
+    let mut new = Block::new(kind, "");
+    new.layout.spacing = block.layout.spacing.max(1);
+    if beside == Beside::Child && block.can_have_children() {
+        block.folded = false;
+        block.children.insert(0, new);
+        return Some([path, &[0]].concat());
+    }
+    let (&index, parent) = path.split_last()?;
+    let at = if beside == Beside::Above { index } else { index + 1 };
+    let siblings = document.siblings_mut(path)?;
+    siblings.insert(at, new);
+    renumber(siblings);
+    Some([parent, &[at]].concat())
+}
+
+/// Joins the row after a row into it — ⌃⌘⌫ — a space between their words
+/// (none if either is empty or already has one there). Its children come
+/// under the joined row. Answers the row and where the two meet.
+pub fn join_next(document: &mut Document, path: &[usize], next: &[usize]) -> Option<(Path, usize)> {
+    let space = {
+        let (this, that) = (&document.get(path)?.text, &document.get(next)?.text);
+        !this.is_empty() && !that.is_empty() && !this.ends_with(char::is_whitespace) && !that.starts_with(char::is_whitespace)
+    };
+    let (onto, offset) = join_onto(document, next, path)?;
+    let block = document.get_mut(&onto)?;
+    if space {
+        block.text.insert(offset, ' ');
+    }
+    Some((onto, offset))
+}
+
+/// A row's children made the siblings that follow it.
+pub fn promote_children(document: &mut Document, path: &[usize]) -> Option<Path> {
+    let index = *path.last()?;
+    let block = document.get_mut(path)?;
+    if block.children.is_empty() {
+        return None;
+    }
+    block.folded = false;
+    let children = std::mem::take(&mut block.children);
+    let siblings = document.siblings_mut(path)?;
+    siblings.splice(index + 1..index + 1, children);
+    renumber(siblings);
+    Some(path.to_vec())
+}
+
+/// The siblings that follow a row made its last children.
+pub fn demote_siblings(document: &mut Document, path: &[usize]) -> Option<Path> {
+    let index = *path.last()?;
+    if !document.get(path)?.can_have_children() {
+        return None;
+    }
+    let siblings = document.siblings_mut(path)?;
+    if index + 1 >= siblings.len() {
+        return None;
+    }
+    let followers: Vec<Block> = siblings.drain(index + 1..).collect();
+    let block = document.get_mut(path)?;
+    block.folded = false;
+    block.children.extend(followers);
+    Some(path.to_vec())
+}
+
+/// A row taken out, its children taking its place.
+pub fn remove_row_only(document: &mut Document, path: &[usize]) -> Option<Block> {
+    let index = *path.last()?;
+    let siblings = document.siblings_mut(path)?;
+    if index >= siblings.len() {
+        return None;
+    }
+    let mut block = siblings.remove(index);
+    let children = std::mem::take(&mut block.children);
+    siblings.splice(index..index, children);
+    renumber(siblings);
+    Some(block)
+}
+
+/// Rows — siblings, in order — put under a new, empty row put where the
+/// first was. Answers the new row's path.
+pub fn group(document: &mut Document, paths: &[Path]) -> Option<Path> {
+    let first = paths.first()?.clone();
+    let parent = &first[..first.len() - 1];
+    if paths.iter().any(|path| &path[..path.len() - 1] != parent) {
+        return None;
+    }
+    let mut indexes: Vec<usize> = paths.iter().map(|path| path[path.len() - 1]).collect();
+    indexes.sort_unstable();
+    let siblings = document.siblings_mut(&first)?;
+    let mut taken = Vec::new();
+    for index in indexes.iter().rev() {
+        taken.push(siblings.remove(*index));
+    }
+    taken.reverse();
+    let mut new = Block::new(BlockKind::Item(Item { marker: Marker::Bullet('-'), task: None }), "");
+    new.layout.spacing = 1;
+    new.children = taken;
+    siblings.insert(indexes[0], new);
+    renumber(siblings);
+    Some([parent, &[indexes[0]]].concat())
+}
+
+/// Moves a row, with its branch, past the row shown before it — ⌃⌘↑ —
+/// taking that row's level: it goes just before it, as its sibling. A
+/// first child so leaves its parent, above it. `shown` is every row
+/// shown, in order.
+pub fn move_up_shown(document: &mut Document, path: &[usize], shown: &[Path]) -> Option<Path> {
+    let at = shown.iter().position(|row| row == path)?;
+    let before = shown.get(at.checked_sub(1)?)?.clone();
+    let block = remove(document, path)?;
+    // Taking the row out moved nothing before it: `before` still leads there.
+    insert(document, &before, block)?;
+    renumber(document.siblings_mut(&before)?);
+    Some(before)
+}
+
+/// Moves a row, with its branch, past the row shown after its branch —
+/// ⌃⌘↓ — so that that row is shown just before it: after it as its
+/// sibling, or, when its children are shown, as its first child.
+pub fn move_down_shown(document: &mut Document, path: &[usize], shown: &[Path]) -> Option<Path> {
+    let at = shown.iter().position(|row| row == path)?;
+    let next = shown[at + 1..].iter().find(|row| !row.starts_with(path))?.clone();
+    let block = remove(document, path)?;
+    // The row after shifts up a place if it shared the moved row's list, after it.
+    let mut next = next;
+    if next.len() >= path.len() && next[..path.len() - 1] == path[..path.len() - 1] && next[path.len() - 1] > path[path.len() - 1] {
+        next[path.len() - 1] -= 1;
+    }
+    let target = document.get(&next)?;
+    let to = if !target.children.is_empty() && !target.folded && target.can_have_children() {
+        [&next[..], &[0]].concat()
+    } else {
+        let mut after = next.clone();
+        *after.last_mut()? += 1;
+        after
+    };
+    insert(document, &to, block)?;
+    renumber(document.siblings_mut(&to)?);
+    Some(to)
 }
 
 /// Opens an empty block above a block — what Return does at the start of
@@ -302,14 +499,22 @@ mod tests {
     }
 
     #[test]
-    fn outdent_takes_children_and_followers_along() {
+    fn outdent_goes_after_the_parents_branch() {
         let mut d = doc("- a\n  - b\n    - c\n  - d\n  - e\n- f\n");
         assert_eq!(outdent(&mut d, &[0, 0]), Some(vec![1]));
-        assert_eq!(d.to_markdown(), "- a\n- b\n  - c\n  - d\n  - e\n- f\n");
+        assert_eq!(d.to_markdown(), "- a\n  - d\n  - e\n- b\n  - c\n- f\n");
         assert_eq!(outdent(&mut d, &[0]), None);
+    }
+
+    #[test]
+    fn outdent_taking_followers_takes_children_and_followers_along() {
+        let mut d = doc("- a\n  - b\n    - c\n  - d\n  - e\n- f\n");
+        assert_eq!(outdent_taking_followers(&mut d, &[0, 0]), Some(vec![1]));
+        assert_eq!(d.to_markdown(), "- a\n- b\n  - c\n  - d\n  - e\n- f\n");
+        assert_eq!(outdent_taking_followers(&mut d, &[0]), None);
         // A paragraph cannot hold what followed it: they stay.
         let mut d = doc("- a\n\n  para\n  - b\n");
-        assert_eq!(outdent(&mut d, &[0, 0]), Some(vec![1]));
+        assert_eq!(outdent_taking_followers(&mut d, &[0, 0]), Some(vec![1]));
         assert_eq!(d.to_markdown(), "- a\n  - b\n\npara\n");
     }
 
@@ -370,10 +575,76 @@ mod tests {
         assert_eq!(d.to_markdown(), "- parent\n\n  - \n  - child\n");
         d.get_mut(&[0, 0]).unwrap().text = "typed".into();
         assert_eq!(d.to_markdown(), "- parent\n  - typed\n  - child\n");
-        // In the middle, the children stay with the first half.
+        // In the middle, the second half is the first child; the children stay with the first half.
         let mut d = doc("- parent\n  - child\n");
+        assert_eq!(split(&mut d, &[0], 3), Some(vec![0, 0]));
+        assert_eq!(d.to_markdown(), "- par\n  - ent\n  - child\n");
+        // Folded, the second half follows the branch, and the hidden rows stay with the first.
+        let mut d = doc("- parent\n  - child\n");
+        d.blocks[0].folded = true;
         assert_eq!(split(&mut d, &[0], 3), Some(vec![1]));
         assert_eq!(d.to_markdown(), "- par\n  - child\n- ent\n");
+    }
+
+    #[test]
+    fn rows_put_in_beside_a_row() {
+        let mut d = doc("- a\n  - a1\n- b\n");
+        assert_eq!(insert_row(&mut d, &[0], Beside::Below), Some(vec![1]));
+        d.get_mut(&[1]).unwrap().text = "below".into();
+        assert_eq!(insert_row(&mut d, &[0], Beside::Above), Some(vec![0]));
+        d.get_mut(&[0]).unwrap().text = "above".into();
+        assert_eq!(insert_row(&mut d, &[1], Beside::Child), Some(vec![1, 0]));
+        d.get_mut(&[1, 0]).unwrap().text = "child".into();
+        assert_eq!(d.to_markdown(), "- above\n- a\n  - child\n  - a1\n- below\n- b\n");
+        let mut d = doc("+ [x] done\n");
+        insert_row(&mut d, &[0], Beside::Below);
+        assert_eq!(d.blocks[1].kind, BlockKind::Item(Item { marker: Marker::Bullet('+'), task: Some(Task::Open) }));
+    }
+
+    #[test]
+    fn rows_joined_promoted_demoted_grouped() {
+        let mut d = doc("- one\n- two\n  - kid\n- three\n");
+        assert_eq!(join_next(&mut d, &[0], &[1]), Some((vec![0], 3)));
+        assert_eq!(d.to_markdown(), "- one two\n  - kid\n- three\n");
+        assert_eq!(promote_children(&mut d, &[0]), Some(vec![0]));
+        assert_eq!(d.to_markdown(), "- one two\n- kid\n- three\n");
+        assert_eq!(demote_siblings(&mut d, &[0]), Some(vec![0]));
+        assert_eq!(d.to_markdown(), "- one two\n  - kid\n  - three\n");
+        assert!(remove_row_only(&mut d, &[0]).is_some());
+        assert_eq!(d.to_markdown(), "- kid\n- three\n");
+        assert_eq!(group(&mut d, &[vec![0], vec![1]]), Some(vec![0]));
+        d.get_mut(&[0]).unwrap().text = "g".into();
+        assert_eq!(d.to_markdown(), "- g\n  - kid\n  - three\n");
+    }
+
+    #[test]
+    fn moving_past_the_row_shown() {
+        let shown = |d: &Document| d.rows().into_iter().map(|row| row.path).collect::<Vec<_>>();
+        // A first child goes above its parent, at its level.
+        let mut d = doc("- one\n  - two\n  - three\n- four\n");
+        let rows = shown(&d);
+        assert_eq!(move_up_shown(&mut d, &[0, 0], &rows), Some(vec![0]));
+        assert_eq!(d.to_markdown(), "- two\n- one\n  - three\n- four\n");
+        // A last child goes past the next row, at its level.
+        let mut d = doc("- one\n  - two\n  - three\n- four\n");
+        let rows = shown(&d);
+        assert_eq!(move_down_shown(&mut d, &[0, 1], &rows), Some(vec![2]));
+        assert_eq!(d.to_markdown(), "- one\n  - two\n- four\n- three\n");
+        // Up past the deep last row of the sibling before: into its branch.
+        let mut d = doc("- alpha\n  - beta\n  - gamma\n- delta\n");
+        let rows = shown(&d);
+        assert_eq!(move_up_shown(&mut d, &[1], &rows), Some(vec![0, 1]));
+        assert_eq!(d.to_markdown(), "- alpha\n  - beta\n  - delta\n  - gamma\n");
+        // Down past a sibling: after it, with the branch.
+        let mut d = doc("- alpha\n  - beta\n- delta\n- epsilon\n");
+        let rows = shown(&d);
+        assert_eq!(move_down_shown(&mut d, &[0], &rows), Some(vec![1]));
+        assert_eq!(d.to_markdown(), "- delta\n- alpha\n  - beta\n- epsilon\n");
+        // Down past a parent whose children are shown: its first child.
+        let mut d = doc("- a\n- b\n  - b1\n");
+        let rows = shown(&d);
+        assert_eq!(move_down_shown(&mut d, &[0], &rows), Some(vec![0, 0]));
+        assert_eq!(d.to_markdown(), "- b\n  - a\n  - b1\n");
     }
 
     #[test]

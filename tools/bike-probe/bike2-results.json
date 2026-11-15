@@ -1,0 +1,2435 @@
+{
+ "return mid": {
+  "given": "one\n\ttwo\n\tthree\nfour",
+  "caret": [
+   "two",
+   1
+  ],
+  "keys": [
+   "return"
+  ],
+  "outline": "  one\n      t\n*     wo\n      three\n  four",
+  "mode": "caret",
+  "detail": "|wo"
+ },
+ "return start": {
+  "given": "one\n\ttwo\n\tthree\nfour",
+  "caret": [
+   "two",
+   0
+  ],
+  "keys": [
+   "return"
+  ],
+  "outline": "  one\n      ∅\n*     two\n      three\n  four",
+  "mode": "caret",
+  "detail": "|two"
+ },
+ "return end leaf": {
+  "given": "one\n\ttwo\n\tthree\nfour",
+  "caret": [
+   "two",
+   "end"
+  ],
+  "keys": [
+   "return"
+  ],
+  "outline": "  one\n      Two\n*     ∅\n      three\n  four",
+  "mode": "caret",
+  "detail": "|"
+ },
+ "return end expanded parent": {
+  "given": "alpha\n\tbeta\n\tgamma\ndelta\nepsilon",
+  "caret": [
+   "alpha",
+   "end"
+  ],
+  "keys": [
+   "return"
+  ],
+  "outline": "  Alpha\n*     ∅\n      beta\n      gamma\n  delta\n  epsilon",
+  "mode": "caret",
+  "detail": "|"
+ },
+ "return end collapsed parent": {
+  "given": "alpha [c]\n\tbeta\n\tgamma\ndelta",
+  "caret": [
+   "alpha",
+   "end"
+  ],
+  "keys": [
+   "return"
+  ],
+  "outline": "  Alpha (collapsed)\n      beta (hidden)\n      gamma (hidden)\n* ∅\n  delta",
+  "mode": "caret",
+  "detail": "|"
+ },
+ "return mid parent with kids": {
+  "given": "alpha\n\tbeta\n\tgamma\ndelta\nepsilon",
+  "caret": [
+   "alpha",
+   2
+  ],
+  "keys": [
+   "return"
+  ],
+  "outline": "  al\n*     pha\n      beta\n      gamma\n  delta\n  epsilon",
+  "mode": "caret",
+  "detail": "|pha"
+ },
+ "return start parent with kids": {
+  "given": "alpha\n\tbeta\n\tgamma\ndelta\nepsilon",
+  "caret": [
+   "alpha",
+   0
+  ],
+  "keys": [
+   "return"
+  ],
+  "outline": "  ∅\n* alpha\n      beta\n      gamma\n  delta\n  epsilon",
+  "mode": "caret",
+  "detail": "|alpha"
+ },
+ "return on empty child row": {
+  "given": "one\n\ttwo\n\t∅\nfour",
+  "caret": [
+   "two",
+   "end"
+  ],
+  "keys": [
+   "down",
+   "return"
+  ],
+  "outline": "  one\n      two\n      ∅\n*     ∅\n  four",
+  "mode": "caret",
+  "detail": "|"
+ },
+ "return twice at end of child": {
+  "given": "one\n\ttwo\n\tthree\nfour",
+  "caret": [
+   "three",
+   "end"
+  ],
+  "keys": [
+   "return",
+   "return"
+  ],
+  "outline": "  one\n      two\n      Three\n      ∅\n*     ∅\n  four",
+  "mode": "caret",
+  "detail": "|"
+ },
+ "return end of task": {
+  "given": "one\n\tdo it {task}\nfour",
+  "caret": [
+   "do it",
+   "end"
+  ],
+  "keys": [
+   "return"
+  ],
+  "outline": "  one\n      do it [task]\n*     ∅ [task]\n  four",
+  "mode": "caret",
+  "detail": "|"
+ },
+ "return on empty task": {
+  "given": "one\n\tdo it {task}\nfour",
+  "caret": [
+   "do it",
+   "end"
+  ],
+  "keys": [
+   "return",
+   "return"
+  ],
+  "outline": "  one\n      do it [task]\n*     ∅\n  four",
+  "mode": "caret",
+  "detail": "|"
+ },
+ "return end of heading": {
+  "given": "Title {heading}\n\tbody",
+  "caret": [
+   "Title",
+   "end"
+  ],
+  "keys": [
+   "return"
+  ],
+  "outline": "  Title [heading]\n*     ∅\n      body",
+  "mode": "caret",
+  "detail": "|"
+ },
+ "cmd-return mid": {
+  "given": "one\n\ttwo\n\tthree\nfour",
+  "caret": [
+   "two",
+   1
+  ],
+  "keys": [
+   "cmd+return"
+  ],
+  "outline": "  one\n      two\n*     ∅\n      three\n  four",
+  "mode": "caret",
+  "detail": "|"
+ },
+ "shift-return mid": {
+  "given": "one\n\ttwo\n\tthree\nfour",
+  "caret": [
+   "two",
+   1
+  ],
+  "keys": [
+   "shift+return"
+  ],
+  "outline": "  one\n      t\n*     wo\n      three\n  four",
+  "mode": "caret",
+  "detail": "|wo"
+ },
+ "shift-cmd-return mid": {
+  "given": "one\n\ttwo\n\tthree\nfour",
+  "caret": [
+   "two",
+   1
+  ],
+  "keys": [
+   "shift+cmd+return"
+  ],
+  "outline": "  one\n*     ∅\n      two\n      three\n  four",
+  "mode": "caret",
+  "detail": "|"
+ },
+ "opt-return mid": {
+  "given": "one\n\ttwo\n\tthree\nfour",
+  "caret": [
+   "two",
+   1
+  ],
+  "keys": [
+   "opt+return"
+  ],
+  "outline": "  one\n      t\n*     wo\n      three\n  four",
+  "mode": "caret",
+  "detail": "|wo"
+ },
+ "delete start of child (join up)": {
+  "given": "one\n\ttwo\n\tthree\nfour",
+  "caret": [
+   "three",
+   0
+  ],
+  "keys": [
+   "delete"
+  ],
+  "outline": "  one\n*     twothree\n  four",
+  "mode": "caret",
+  "detail": "two|three"
+ },
+ "delete start of first child (join parent)": {
+  "given": "one\n\ttwo\n\tthree\nfour",
+  "caret": [
+   "two",
+   0
+  ],
+  "keys": [
+   "delete"
+  ],
+  "outline": "* onetwo\n      three\n  four",
+  "mode": "caret",
+  "detail": "one|two"
+ },
+ "delete start of row with kids": {
+  "given": "alpha\n\tbeta\n\tgamma\ndelta\nepsilon",
+  "caret": [
+   "delta",
+   0
+  ],
+  "keys": [
+   "delete"
+  ],
+  "outline": "  alpha\n      beta\n*     gammadelta\n  epsilon",
+  "mode": "caret",
+  "detail": "gamma|delta"
+ },
+ "delete start of parent with kids": {
+  "given": "zero\nalpha\n\tbeta\n\tgamma",
+  "caret": [
+   "alpha",
+   0
+  ],
+  "keys": [
+   "delete"
+  ],
+  "outline": "* zeroalpha\n      beta\n      gamma",
+  "mode": "caret",
+  "detail": "zero|alpha"
+ },
+ "delete start after collapsed row": {
+  "given": "alpha [c]\n\tbeta\n\tgamma\ndelta",
+  "caret": [
+   "delta",
+   0
+  ],
+  "keys": [
+   "delete"
+  ],
+  "outline": "* alphadelta (collapsed)\n      beta (hidden)\n      gamma (hidden)",
+  "mode": "caret",
+  "detail": "alpha|delta"
+ },
+ "delete empty row": {
+  "given": "one\n\ttwo\n\t∅\nfour",
+  "caret": [
+   "two",
+   "end"
+  ],
+  "keys": [
+   "down",
+   "delete"
+  ],
+  "outline": "  one\n*     two\n  four",
+  "mode": "caret",
+  "detail": "two|"
+ },
+ "delete start of first row": {
+  "given": "one\n\ttwo\n\tthree\nfour",
+  "caret": [
+   "one",
+   0
+  ],
+  "keys": [
+   "delete"
+  ],
+  "outline": "* one\n      two\n      three\n  four",
+  "mode": "caret",
+  "detail": "|one"
+ },
+ "delete start of task": {
+  "given": "one\n\tdo it {task}",
+  "caret": [
+   "do it",
+   0
+  ],
+  "keys": [
+   "delete"
+  ],
+  "outline": "  one\n*     do it",
+  "mode": "caret",
+  "detail": "|do it"
+ },
+ "delete start of task twice": {
+  "given": "one\n\tdo it {task}",
+  "caret": [
+   "do it",
+   0
+  ],
+  "keys": [
+   "delete",
+   "delete"
+  ],
+  "outline": "* onedo it",
+  "mode": "caret",
+  "detail": "one|do it"
+ },
+ "fdelete end of row": {
+  "given": "one\n\ttwo\n\tthree\nfour",
+  "caret": [
+   "two",
+   "end"
+  ],
+  "keys": [
+   "fdelete"
+  ],
+  "outline": "  one\n*     twothree\n  four",
+  "mode": "caret",
+  "detail": "two|three"
+ },
+ "fdelete end of parent": {
+  "given": "alpha\n\tbeta\n\tgamma\ndelta\nepsilon",
+  "caret": [
+   "alpha",
+   "end"
+  ],
+  "keys": [
+   "fdelete"
+  ],
+  "outline": "* alphabeta\n      gamma\n  delta\n  epsilon",
+  "mode": "caret",
+  "detail": "alpha|beta"
+ },
+ "fdelete end before collapsed": {
+  "given": "zero\nalpha [c]\n\tbeta",
+  "caret": [
+   "zero",
+   "end"
+  ],
+  "keys": [
+   "fdelete"
+  ],
+  "outline": "* zeroalpha\n      beta",
+  "mode": "caret",
+  "detail": "zero|alpha"
+ },
+ "tab mid": {
+  "given": "one\n\ttwo\n\tthree\nfour",
+  "caret": [
+   "three",
+   2
+  ],
+  "keys": [
+   "tab"
+  ],
+  "outline": "  one\n      two\n*         three\n  four",
+  "mode": "caret",
+  "detail": "th|ree"
+ },
+ "tab first child": {
+  "given": "one\n\ttwo\n\tthree\nfour",
+  "caret": [
+   "two",
+   1
+  ],
+  "keys": [
+   "tab"
+  ],
+  "outline": "  one\n*     two\n      three\n  four",
+  "mode": "caret",
+  "detail": "t|wo"
+ },
+ "tab parent (text mode)": {
+  "given": "alpha\n\tbeta\n\tgamma\ndelta\nepsilon",
+  "caret": [
+   "delta",
+   1
+  ],
+  "keys": [
+   "tab"
+  ],
+  "outline": "  alpha\n      beta\n      gamma\n*     delta\n  epsilon",
+  "mode": "caret",
+  "detail": "d|elta"
+ },
+ "tab parent with kids (text)": {
+  "given": "zero\nalpha\n\tbeta\n\tgamma",
+  "caret": [
+   "alpha",
+   1
+  ],
+  "keys": [
+   "tab"
+  ],
+  "outline": "  zero\n*     alpha\n          beta\n          gamma",
+  "mode": "caret",
+  "detail": "a|lpha"
+ },
+ "shift-tab middle child": {
+  "given": "a\n\tb\n\tc\n\td",
+  "caret": [
+   "c",
+   1
+  ],
+  "keys": [
+   "shift+tab"
+  ],
+  "outline": "  a\n      b\n      d\n* c",
+  "mode": "caret",
+  "detail": "c|"
+ },
+ "shift-tab top level": {
+  "given": "one\n\ttwo\n\tthree\nfour",
+  "caret": [
+   "four",
+   1
+  ],
+  "keys": [
+   "shift+tab"
+  ],
+  "outline": "  one\n      two\n      three\n* four",
+  "mode": "caret",
+  "detail": "f|our"
+ },
+ "shift-tab parent with kids (text)": {
+  "given": "a1\n\tb1\n\t\tc1\n\tb2\n\tb3\na2",
+  "caret": [
+   "b1",
+   1
+  ],
+  "keys": [
+   "shift+tab"
+  ],
+  "outline": "  a1\n      b2\n      b3\n* b1\n      c1\n  a2",
+  "mode": "caret",
+  "detail": "b|1"
+ },
+ "tab into collapsed sibling": {
+  "given": "alpha [c]\n\tbeta\ndelta",
+  "caret": [
+   "delta",
+   1
+  ],
+  "keys": [
+   "tab"
+  ],
+  "outline": "  alpha\n      beta\n*     delta",
+  "mode": "caret",
+  "detail": "d|elta"
+ },
+ "tab with text across rows": {
+  "given": "a\nb\nc\nd",
+  "caret": [
+   "b",
+   0
+  ],
+  "keys": [
+   "shift+down",
+   "tab"
+  ],
+  "outline": "  a\n*     b\n  c\n  d",
+  "mode": "text",
+  "detail": "b"
+ },
+ "ctrl-cmd-right": {
+  "given": "one\n\ttwo\n\tthree\nfour",
+  "caret": [
+   "three",
+   1
+  ],
+  "keys": [
+   "ctrl+cmd+right"
+  ],
+  "outline": "  one\n      two\n*         three\n  four",
+  "mode": "caret",
+  "detail": "t|hree"
+ },
+ "cmd-] ": {
+  "given": "one\n\ttwo\n\tthree\nfour",
+  "caret": [
+   "three",
+   1
+  ],
+  "keys": [
+   "cmd+]"
+  ],
+  "outline": "  one\n      two\n*     three\n  four",
+  "mode": "caret",
+  "detail": "t|hree"
+ },
+ "ctrl-cmd-up child": {
+  "given": "one\n\ttwo\n\tthree\nfour",
+  "caret": [
+   "three",
+   1
+  ],
+  "keys": [
+   "ctrl+cmd+up"
+  ],
+  "outline": "  one\n*     three\n      two\n  four",
+  "mode": "caret",
+  "detail": "t|hree"
+ },
+ "ctrl-cmd-up first child": {
+  "given": "one\n\ttwo\n\tthree\nfour",
+  "caret": [
+   "two",
+   1
+  ],
+  "keys": [
+   "ctrl+cmd+up"
+  ],
+  "outline": "* two\n  one\n      three\n  four",
+  "mode": "caret",
+  "detail": "t|wo"
+ },
+ "ctrl-cmd-down last child": {
+  "given": "one\n\ttwo\n\tthree\nfour",
+  "caret": [
+   "three",
+   1
+  ],
+  "keys": [
+   "ctrl+cmd+down"
+  ],
+  "outline": "  one\n      two\n  four\n* three",
+  "mode": "caret",
+  "detail": "t|hree"
+ },
+ "ctrl-cmd-up parent with kids (text)": {
+  "given": "alpha\n\tbeta\n\tgamma\ndelta\nepsilon",
+  "caret": [
+   "delta",
+   1
+  ],
+  "keys": [
+   "ctrl+cmd+up"
+  ],
+  "outline": "  alpha\n      beta\n*     delta\n      gamma\n  epsilon",
+  "mode": "caret",
+  "detail": "d|elta"
+ },
+ "ctrl-cmd-down parent with kids (text)": {
+  "given": "alpha\n\tbeta\n\tgamma\ndelta\nepsilon",
+  "caret": [
+   "alpha",
+   1
+  ],
+  "keys": [
+   "ctrl+cmd+down"
+  ],
+  "outline": "  delta\n* alpha\n      beta\n      gamma\n  epsilon",
+  "mode": "caret",
+  "detail": "a|lpha"
+ },
+ "ctrl-cmd-down parent (block)": {
+  "given": "alpha\n\tbeta\n\tgamma\ndelta\nepsilon",
+  "caret": [
+   "alpha",
+   1
+  ],
+  "keys": [
+   "escape",
+   "ctrl+cmd+down"
+  ],
+  "outline": "  delta\n* alpha\n      beta\n      gamma\n  epsilon",
+  "mode": "block",
+  "detail": [
+   "alpha"
+  ]
+ },
+ "ctrl-cmd-up past collapsed": {
+  "given": "alpha [c]\n\tbeta\ndelta",
+  "caret": [
+   "delta",
+   1
+  ],
+  "keys": [
+   "ctrl+cmd+up"
+  ],
+  "outline": "* delta\n  alpha (collapsed)\n      beta (hidden)",
+  "mode": "caret",
+  "detail": "d|elta"
+ },
+ "down from mid": {
+  "given": "one\n\ttwo\n\tthree\nfour",
+  "caret": [
+   "two",
+   2
+  ],
+  "keys": [
+   "down"
+  ],
+  "outline": "  one\n      two\n*     three\n  four",
+  "mode": "caret",
+  "detail": "th|ree"
+ },
+ "down over collapsed": {
+  "given": "alpha [c]\n\tbeta\n\tgamma\ndelta",
+  "caret": [
+   "alpha",
+   2
+  ],
+  "keys": [
+   "down"
+  ],
+  "outline": "  alpha (collapsed)\n      beta (hidden)\n      gamma (hidden)\n* delta",
+  "mode": "caret",
+  "detail": "d|elta"
+ },
+ "up at first row": {
+  "given": "one\n\ttwo\n\tthree\nfour",
+  "caret": [
+   "one",
+   2
+  ],
+  "keys": [
+   "up"
+  ],
+  "outline": "* one\n      two\n      three\n  four",
+  "mode": "caret",
+  "detail": "|one"
+ },
+ "down at last row": {
+  "given": "one\n\ttwo\n\tthree\nfour",
+  "caret": [
+   "four",
+   2
+  ],
+  "keys": [
+   "down"
+  ],
+  "outline": "  one\n      two\n      three\n* four",
+  "mode": "caret",
+  "detail": "four|"
+ },
+ "right at row end": {
+  "given": "one\n\ttwo\n\tthree\nfour",
+  "caret": [
+   "two",
+   "end"
+  ],
+  "keys": [
+   "right"
+  ],
+  "outline": "  one\n      two\n*     three\n  four",
+  "mode": "caret",
+  "detail": "|three"
+ },
+ "left at row start": {
+  "given": "one\n\ttwo\n\tthree\nfour",
+  "caret": [
+   "three",
+   0
+  ],
+  "keys": [
+   "left"
+  ],
+  "outline": "  one\n*     two\n      three\n  four",
+  "mode": "caret",
+  "detail": "two|"
+ },
+ "cmd-up": {
+  "given": "one\n\ttwo\n\tthree\nfour",
+  "caret": [
+   "three",
+   2
+  ],
+  "keys": [
+   "cmd+up"
+  ],
+  "outline": "* one\n      two\n      three\n  four",
+  "mode": "caret",
+  "detail": "|one"
+ },
+ "cmd-down": {
+  "given": "one\n\ttwo\n\tthree\nfour",
+  "caret": [
+   "two",
+   2
+  ],
+  "keys": [
+   "cmd+down"
+  ],
+  "outline": "  one\n      two\n      three\n* four",
+  "mode": "caret",
+  "detail": "four|"
+ },
+ "opt-down": {
+  "given": "one\n\ttwo\n\tthree\nfour",
+  "caret": [
+   "two",
+   1
+  ],
+  "keys": [
+   "opt+down"
+  ],
+  "outline": "  one\n*     two\n      three\n  four",
+  "mode": "caret",
+  "detail": "two|"
+ },
+ "opt-up mid": {
+  "given": "one\n\ttwo\n\tthree\nfour",
+  "caret": [
+   "three",
+   2
+  ],
+  "keys": [
+   "opt+up"
+  ],
+  "outline": "  one\n      two\n*     three\n  four",
+  "mode": "caret",
+  "detail": "|three"
+ },
+ "shift-down": {
+  "given": "one\n\ttwo\n\tthree\nfour",
+  "caret": [
+   "two",
+   1
+  ],
+  "keys": [
+   "shift+down"
+  ],
+  "outline": "  one\n*     two\n      three\n  four",
+  "mode": "text",
+  "detail": "wo"
+ },
+ "shift-down twice": {
+  "given": "one\n\ttwo\n\tthree\nfour",
+  "caret": [
+   "two",
+   1
+  ],
+  "keys": [
+   "shift+down",
+   "shift+down"
+  ],
+  "outline": "  one\n*     two\n      three\n  four",
+  "mode": "block",
+  "detail": [
+   "two"
+  ]
+ },
+ "shift-right at row end": {
+  "given": "one\n\ttwo\n\tthree\nfour",
+  "caret": [
+   "two",
+   "end"
+  ],
+  "keys": [
+   "shift+right"
+  ],
+  "outline": "  one\n*     two\n      three\n  four",
+  "mode": "caret",
+  "detail": null
+ },
+ "shift-up from start": {
+  "given": "one\n\ttwo\n\tthree\nfour",
+  "caret": [
+   "three",
+   0
+  ],
+  "keys": [
+   "shift+up"
+  ],
+  "outline": "  one\n*     two\n      three\n  four",
+  "mode": "block",
+  "detail": [
+   "two"
+  ]
+ },
+ "cmd-a once": {
+  "given": "one\n\ttwo\n\tthree\nfour",
+  "caret": [
+   "two",
+   1
+  ],
+  "keys": [
+   "cmd+a"
+  ],
+  "outline": "* one\n*     two\n*     three\n* four",
+  "mode": "block",
+  "detail": [
+   "one",
+   "two",
+   "three",
+   "four"
+  ]
+ },
+ "cmd-a twice": {
+  "given": "one\n\ttwo\n\tthree\nfour",
+  "caret": [
+   "two",
+   1
+  ],
+  "keys": [
+   "cmd+a",
+   "cmd+a"
+  ],
+  "outline": "* one\n*     two\n*     three\n* four",
+  "mode": "block",
+  "detail": [
+   "one",
+   "two",
+   "three",
+   "four"
+  ]
+ },
+ "cmd-a thrice": {
+  "given": "one\n\ttwo\n\tthree\nfour",
+  "caret": [
+   "two",
+   1
+  ],
+  "keys": [
+   "cmd+a",
+   "cmd+a",
+   "cmd+a"
+  ],
+  "outline": "* one\n*     two\n*     three\n* four",
+  "mode": "block",
+  "detail": [
+   "one",
+   "two",
+   "three",
+   "four"
+  ]
+ },
+ "select branch": {
+  "given": "alpha\n\tbeta\n\tgamma\ndelta\nepsilon",
+  "caret": [
+   "alpha",
+   1
+  ],
+  "keys": [
+   "shift+cmd+b"
+  ],
+  "outline": "* alpha\n      beta\n      gamma\n  delta\n  epsilon",
+  "mode": "caret",
+  "detail": "a|lpha"
+ },
+ "expand selection x1": {
+  "given": "one\n\ttwo words here. Next one.\nfour",
+  "caret": [
+   "two words here. Next one.",
+   5
+  ],
+  "keys": [
+   "opt+cmd+up"
+  ],
+  "outline": "  one\n*     two words here. Next one.\n  four",
+  "mode": "caret",
+  "detail": "two w|ords here. Next one."
+ },
+ "expand selection x2": {
+  "given": "one\n\ttwo words here. Next one.\nfour",
+  "caret": [
+   "two words here. Next one.",
+   5
+  ],
+  "keys": [
+   "opt+cmd+up",
+   "opt+cmd+up"
+  ],
+  "outline": "  one\n*     two words here. Next one.\n  four",
+  "mode": "caret",
+  "detail": "two w|ords here. Next one."
+ },
+ "expand selection x3": {
+  "given": "one\n\ttwo words here. Next one.\nfour",
+  "caret": [
+   "two words here. Next one.",
+   5
+  ],
+  "keys": [
+   "opt+cmd+up",
+   "opt+cmd+up",
+   "opt+cmd+up"
+  ],
+  "outline": "  one\n*     two words here. Next one.\n  four",
+  "mode": "caret",
+  "detail": "two w|ords here. Next one."
+ },
+ "expand selection x4": {
+  "given": "one\n\ttwo words here. Next one.\nfour",
+  "caret": [
+   "two words here. Next one.",
+   5
+  ],
+  "keys": [
+   "opt+cmd+up",
+   "opt+cmd+up",
+   "opt+cmd+up",
+   "opt+cmd+up"
+  ],
+  "outline": "  one\n*     two words here. Next one.\n  four",
+  "mode": "caret",
+  "detail": "two w|ords here. Next one."
+ },
+ "expand selection x5": {
+  "given": "one\n\ttwo words here. Next one.\n\t\tkid\nfour",
+  "caret": [
+   "two words here. Next one.",
+   5
+  ],
+  "keys": [
+   "opt+cmd+up",
+   "opt+cmd+up",
+   "opt+cmd+up",
+   "opt+cmd+up",
+   "opt+cmd+up"
+  ],
+  "outline": "  one\n*     two words here. Next one.\n          kid\n  four",
+  "mode": "caret",
+  "detail": "two w|ords here. Next one."
+ },
+ "expand then contract": {
+  "given": "one\n\ttwo words here. Next one.\nfour",
+  "caret": [
+   "two words here. Next one.",
+   5
+  ],
+  "keys": [
+   "opt+cmd+up",
+   "opt+cmd+up",
+   "opt+cmd+up",
+   "opt+cmd+down"
+  ],
+  "outline": "  one\n*     two words here. Next one.\n  four",
+  "mode": "caret",
+  "detail": "two w|ords here. Next one."
+ },
+ "esc from caret": {
+  "given": "one\n\ttwo\n\tthree\nfour",
+  "caret": [
+   "two",
+   1
+  ],
+  "keys": [
+   "escape"
+  ],
+  "outline": "  one\n*     two\n      three\n  four",
+  "mode": "block",
+  "detail": [
+   "two"
+  ]
+ },
+ "esc from range across rows": {
+  "given": "one\n\ttwo\n\tthree\nfour",
+  "caret": [
+   "two",
+   1
+  ],
+  "keys": [
+   "shift+down",
+   "escape"
+  ],
+  "outline": "  one\n*     two\n      three\n  four",
+  "mode": "block",
+  "detail": [
+   "two"
+  ]
+ },
+ "esc esc": {
+  "given": "one\n\ttwo\n\tthree\nfour",
+  "caret": [
+   "two",
+   1
+  ],
+  "keys": [
+   "escape",
+   "escape"
+  ],
+  "outline": "  one\n*     two\n      three\n  four",
+  "mode": "caret",
+  "detail": "t|wo"
+ },
+ "esc then down": {
+  "given": "one\n\ttwo\n\tthree\nfour",
+  "caret": [
+   "two",
+   1
+  ],
+  "keys": [
+   "escape",
+   "down"
+  ],
+  "outline": "  one\n      two\n*     three\n  four",
+  "mode": "block",
+  "detail": [
+   "three"
+  ]
+ },
+ "esc then up at first": {
+  "given": "one\n\ttwo\n\tthree\nfour",
+  "caret": [
+   "one",
+   1
+  ],
+  "keys": [
+   "escape",
+   "up"
+  ],
+  "outline": "* one\n      two\n      three\n  four",
+  "mode": "block",
+  "detail": [
+   "one"
+  ]
+ },
+ "esc then shift-down": {
+  "given": "one\n\ttwo\n\tthree\nfour",
+  "caret": [
+   "two",
+   1
+  ],
+  "keys": [
+   "escape",
+   "shift+down"
+  ],
+  "outline": "  one\n*     two\n*     three\n  four",
+  "mode": "block",
+  "detail": [
+   "two",
+   "three"
+  ]
+ },
+ "esc shift-down shift-up": {
+  "given": "one\n\ttwo\n\tthree\nfour",
+  "caret": [
+   "two",
+   1
+  ],
+  "keys": [
+   "escape",
+   "shift+down",
+   "shift+up"
+  ],
+  "outline": "  one\n*     two\n      three\n  four",
+  "mode": "block",
+  "detail": [
+   "two"
+  ]
+ },
+ "esc then left on parent": {
+  "given": "alpha\n\tbeta\n\tgamma\ndelta\nepsilon",
+  "caret": [
+   "alpha",
+   1
+  ],
+  "keys": [
+   "escape",
+   "left"
+  ],
+  "outline": "* alpha\n      beta\n      gamma\n  delta\n  epsilon",
+  "mode": "caret",
+  "detail": "|alpha"
+ },
+ "esc then left on leaf": {
+  "given": "alpha\n\tbeta\n\tgamma\ndelta\nepsilon",
+  "caret": [
+   "beta",
+   1
+  ],
+  "keys": [
+   "escape",
+   "left"
+  ],
+  "outline": "  alpha\n*     beta\n      gamma\n  delta\n  epsilon",
+  "mode": "caret",
+  "detail": "|beta"
+ },
+ "esc then left twice on leaf": {
+  "given": "a1\n\tb1\n\t\tc1\n\tb2\n\tb3\na2",
+  "caret": [
+   "c1",
+   1
+  ],
+  "keys": [
+   "escape",
+   "left",
+   "left"
+  ],
+  "outline": "  a1\n*     b1\n          c1\n      b2\n      b3\n  a2",
+  "mode": "caret",
+  "detail": "b1|"
+ },
+ "esc then right on collapsed": {
+  "given": "alpha [c]\n\tbeta\n\tgamma\ndelta",
+  "caret": [
+   "alpha",
+   1
+  ],
+  "keys": [
+   "escape",
+   "right"
+  ],
+  "outline": "* alpha (collapsed)\n      beta (hidden)\n      gamma (hidden)\n  delta",
+  "mode": "caret",
+  "detail": "alpha|"
+ },
+ "esc then right on expanded": {
+  "given": "alpha\n\tbeta\n\tgamma\ndelta\nepsilon",
+  "caret": [
+   "alpha",
+   1
+  ],
+  "keys": [
+   "escape",
+   "right"
+  ],
+  "outline": "* alpha\n      beta\n      gamma\n  delta\n  epsilon",
+  "mode": "caret",
+  "detail": "alpha|"
+ },
+ "esc then return": {
+  "given": "one\n\ttwo\n\tthree\nfour",
+  "caret": [
+   "two",
+   1
+  ],
+  "keys": [
+   "escape",
+   "return"
+  ],
+  "outline": "  one\n      two\n*     ∅\n      three\n  four",
+  "mode": "caret",
+  "detail": "|"
+ },
+ "esc then return on parent": {
+  "given": "alpha\n\tbeta\n\tgamma\ndelta\nepsilon",
+  "caret": [
+   "alpha",
+   1
+  ],
+  "keys": [
+   "escape",
+   "return"
+  ],
+  "outline": "  alpha\n*     ∅\n      beta\n      gamma\n  delta\n  epsilon",
+  "mode": "caret",
+  "detail": "|"
+ },
+ "esc then delete": {
+  "given": "alpha\n\tbeta\n\tgamma\ndelta\nepsilon",
+  "caret": [
+   "alpha",
+   1
+  ],
+  "keys": [
+   "escape",
+   "delete"
+  ],
+  "outline": "* delta\n  epsilon",
+  "mode": "block",
+  "detail": [
+   "delta"
+  ]
+ },
+ "esc then tab": {
+  "given": "one\n\ttwo\n\tthree\nfour",
+  "caret": [
+   "three",
+   1
+  ],
+  "keys": [
+   "escape",
+   "tab"
+  ],
+  "outline": "  one\n      two\n*         three\n  four",
+  "mode": "block",
+  "detail": [
+   "three"
+  ]
+ },
+ "esc then tab parent": {
+  "given": "alpha\n\tbeta\n\tgamma\ndelta\nepsilon",
+  "caret": [
+   "delta",
+   1
+  ],
+  "keys": [
+   "escape",
+   "tab"
+  ],
+  "outline": "  alpha\n      beta\n      gamma\n*     delta\n  epsilon",
+  "mode": "block",
+  "detail": [
+   "delta"
+  ]
+ },
+ "esc then space on task": {
+  "given": "one\n\tdo it {task}",
+  "caret": [
+   "do it",
+   1
+  ],
+  "keys": [
+   "escape",
+   "space"
+  ],
+  "outline": "  one\n*     do it [task]",
+  "mode": "block",
+  "detail": [
+   "do it"
+  ]
+ },
+ "esc then space on body": {
+  "given": "one\n\ttwo\n\tthree\nfour",
+  "caret": [
+   "two",
+   1
+  ],
+  "keys": [
+   "escape",
+   "space"
+  ],
+  "outline": "  one\n*     two\n      three\n  four",
+  "mode": "block",
+  "detail": [
+   "two"
+  ]
+ },
+ "esc then type x": {
+  "given": "one\n\ttwo\n\tthree\nfour",
+  "caret": [
+   "two",
+   1
+  ],
+  "keys": [
+   "escape",
+   "type:x"
+  ],
+  "outline": "  one\n*     two\n      three\n  four",
+  "mode": "block",
+  "detail": [
+   "two"
+  ]
+ },
+ "esc then opt-right": {
+  "given": "one\n\ttwo\n\tthree\nfour",
+  "caret": [
+   "two",
+   1
+  ],
+  "keys": [
+   "escape",
+   "opt+right"
+  ],
+  "outline": "  one\n*     two\n      three\n  four",
+  "mode": "caret",
+  "detail": "two|"
+ },
+ "esc then opt-left": {
+  "given": "one\n\ttwo\n\tthree\nfour",
+  "caret": [
+   "two",
+   1
+  ],
+  "keys": [
+   "escape",
+   "opt+left"
+  ],
+  "outline": "  one\n*     two\n      three\n  four",
+  "mode": "caret",
+  "detail": "|two"
+ },
+ "esc then cmd-a": {
+  "given": "one\n\ttwo\n\tthree\nfour",
+  "caret": [
+   "two",
+   1
+  ],
+  "keys": [
+   "escape",
+   "cmd+a"
+  ],
+  "outline": "* one\n*     two\n*     three\n* four",
+  "mode": "block",
+  "detail": [
+   "one",
+   "two",
+   "three",
+   "four"
+  ]
+ },
+ "esc then right on leaf": {
+  "given": "one\n\ttwo\n\tthree\nfour",
+  "caret": [
+   "two",
+   1
+  ],
+  "keys": [
+   "escape",
+   "right"
+  ],
+  "outline": "  one\n*     two\n      three\n  four",
+  "mode": "caret",
+  "detail": "two|"
+ },
+ "esc then cmd-down": {
+  "given": "one\n\ttwo\n\tthree\nfour",
+  "caret": [
+   "two",
+   1
+  ],
+  "keys": [
+   "escape",
+   "cmd+down"
+  ],
+  "outline": "  one\n      two\n      three\n* four",
+  "mode": "block",
+  "detail": [
+   "four"
+  ]
+ },
+ "esc down past collapsed": {
+  "given": "alpha [c]\n\tbeta\n\tgamma\ndelta",
+  "caret": [
+   "alpha",
+   1
+  ],
+  "keys": [
+   "escape",
+   "down"
+  ],
+  "outline": "  alpha (collapsed)\n      beta (hidden)\n      gamma (hidden)\n* delta",
+  "mode": "block",
+  "detail": [
+   "delta"
+  ]
+ },
+ "cmd-9 on parent": {
+  "given": "alpha\n\tbeta\n\tgamma\ndelta\nepsilon",
+  "caret": [
+   "alpha",
+   1
+  ],
+  "keys": [
+   "cmd+9"
+  ],
+  "outline": "* alpha (collapsed)\n      beta (hidden)\n      gamma (hidden)\n  delta\n  epsilon",
+  "mode": "caret",
+  "detail": "a|lpha"
+ },
+ "cmd-9 on child": {
+  "given": "alpha\n\tbeta\n\tgamma\ndelta\nepsilon",
+  "caret": [
+   "beta",
+   1
+  ],
+  "keys": [
+   "cmd+9"
+  ],
+  "outline": "  alpha\n*     beta\n      gamma\n  delta\n  epsilon",
+  "mode": "caret",
+  "detail": "b|eta"
+ },
+ "cmd-9 on leaf top": {
+  "given": "alpha\n\tbeta\n\tgamma\ndelta\nepsilon",
+  "caret": [
+   "delta",
+   1
+  ],
+  "keys": [
+   "cmd+9"
+  ],
+  "outline": "  alpha\n      beta\n      gamma\n* delta\n  epsilon",
+  "mode": "caret",
+  "detail": "d|elta"
+ },
+ "cmd-0 on collapsed": {
+  "given": "alpha [c]\n\tbeta\n\tgamma\ndelta",
+  "caret": [
+   "alpha",
+   1
+  ],
+  "keys": [
+   "cmd+0"
+  ],
+  "outline": "* alpha\n      beta\n      gamma\n  delta",
+  "mode": "caret",
+  "detail": "a|lpha"
+ },
+ "shift-cmd-9 all by level": {
+  "given": "a1\n\tb1\n\t\tc1\n\tb2\n\tb3\na2",
+  "caret": [
+   "a2",
+   1
+  ],
+  "keys": [
+   "shift+cmd+9"
+  ],
+  "outline": "  a1\n      b1\n          c1\n      b2\n      b3\n* a2",
+  "mode": "caret",
+  "detail": "a|2"
+ },
+ "ctrl-cmd-9 all": {
+  "given": "a1\n\tb1\n\t\tc1\n\tb2\n\tb3\na2",
+  "caret": [
+   "a2",
+   1
+  ],
+  "keys": [
+   "ctrl+cmd+9"
+  ],
+  "outline": "  a1 (collapsed)\n      b1 (collapsed) (hidden)\n          c1 (hidden)\n      b2 (hidden)\n      b3 (hidden)\n* a2",
+  "mode": "caret",
+  "detail": "a|2"
+ },
+ "delete rows text": {
+  "given": "alpha\n\tbeta\n\tgamma\ndelta\nepsilon",
+  "caret": [
+   "alpha",
+   1
+  ],
+  "keys": [
+   "shift+cmd+k"
+  ],
+  "outline": "* delta\n  epsilon",
+  "mode": "block",
+  "detail": [
+   "delta"
+  ]
+ },
+ "delete rows block": {
+  "given": "alpha\n\tbeta\n\tgamma\ndelta\nepsilon",
+  "caret": [
+   "alpha",
+   1
+  ],
+  "keys": [
+   "escape",
+   "shift+cmd+k"
+  ],
+  "outline": "* delta\n  epsilon",
+  "mode": "block",
+  "detail": [
+   "delta"
+  ]
+ },
+ "duplicate text": {
+  "given": "alpha\n\tbeta\n\tgamma\ndelta\nepsilon",
+  "caret": [
+   "alpha",
+   1
+  ],
+  "keys": [
+   "shift+cmd+d"
+  ],
+  "outline": "* alpha\n      beta\n      gamma\n  delta\n  epsilon",
+  "mode": "caret",
+  "detail": "a|lpha"
+ },
+ "duplicate block": {
+  "given": "alpha\n\tbeta\n\tgamma\ndelta\nepsilon",
+  "caret": [
+   "alpha",
+   1
+  ],
+  "keys": [
+   "escape",
+   "shift+cmd+d"
+  ],
+  "outline": "* alpha\n      beta\n      gamma\n  delta\n  epsilon",
+  "mode": "block",
+  "detail": [
+   "alpha"
+  ]
+ },
+ "group": {
+  "given": "one\n\ttwo\n\tthree\nfour",
+  "caret": [
+   "two",
+   1
+  ],
+  "keys": [
+   "shift+down",
+   "opt+cmd+g"
+  ],
+  "outline": "  one\n*     ∅\n          two\n      three\n  four",
+  "mode": "caret",
+  "detail": "|"
+ },
+ "type '- ' in empty row": {
+  "given": "one\n\t∅\nfour",
+  "caret": [
+   "one",
+   "end"
+  ],
+  "keys": [
+   "down",
+   "type:- x"
+  ],
+  "outline": "  one\n*     x [unordered]\n  four",
+  "mode": "caret",
+  "detail": "x|"
+ },
+ "type '# ' in empty row": {
+  "given": "one\n\t∅\nfour",
+  "caret": [
+   "one",
+   "end"
+  ],
+  "keys": [
+   "down",
+   "type:# x"
+  ],
+  "outline": "  one\n*     x [heading]\n  four",
+  "mode": "caret",
+  "detail": "x|"
+ },
+ "type '[] ' in empty row": {
+  "given": "one\n\t∅\nfour",
+  "caret": [
+   "one",
+   "end"
+  ],
+  "keys": [
+   "down",
+   "type:[] x"
+  ],
+  "outline": "  one\n*     x [task]\n  four",
+  "mode": "caret",
+  "detail": "x|"
+ },
+ "type '> ' in empty row": {
+  "given": "one\n\t∅\nfour",
+  "caret": [
+   "one",
+   "end"
+  ],
+  "keys": [
+   "down",
+   "type:> x"
+  ],
+  "outline": "  one\n*     x [quote]\n  four",
+  "mode": "caret",
+  "detail": "x|"
+ },
+ "type '1. ' in empty row": {
+  "given": "one\n\t∅\nfour",
+  "caret": [
+   "one",
+   "end"
+  ],
+  "keys": [
+   "down",
+   "type:1. x"
+  ],
+  "outline": "  one\n*     x [ordered]\n  four",
+  "mode": "caret",
+  "detail": "x|"
+ },
+ "type ': ' in empty row": {
+  "given": "one\n\t∅\nfour",
+  "caret": [
+   "one",
+   "end"
+  ],
+  "keys": [
+   "down",
+   "type:: x"
+  ],
+  "outline": "  one\n*     x [note]\n  four",
+  "mode": "caret",
+  "detail": "x|"
+ },
+ "type '# ' at start of text": {
+  "given": "one\n\ttwo\n\tthree\nfour",
+  "caret": [
+   "two",
+   0
+  ],
+  "keys": [
+   "type:# "
+  ],
+  "outline": "  one\n*     two [heading]\n      three\n  four",
+  "mode": "caret",
+  "detail": "|two"
+ },
+ "type '- ' then delete": {
+  "given": "one\n\t∅\nfour",
+  "caret": [
+   "one",
+   "end"
+  ],
+  "keys": [
+   "down",
+   "type:- ",
+   "delete"
+  ],
+  "outline": "  one\n*     - \n  four",
+  "mode": "caret",
+  "detail": "- |"
+ },
+ "type '- ' then undo": {
+  "given": "one\n\t∅\nfour",
+  "caret": [
+   "one",
+   "end"
+  ],
+  "keys": [
+   "down",
+   "type:- ",
+   "cmd+z"
+  ],
+  "outline": "  one\n*     - \n  four",
+  "mode": "caret",
+  "detail": "- |"
+ },
+ "b2 cmd-return": {
+  "given": "one\n\ttwo\n\tthree\nfour",
+  "caret": [
+   "two",
+   1
+  ],
+  "keys": [
+   "cmd+return"
+  ],
+  "outline": "  one\n      two\n*     ∅\n      three\n  four",
+  "mode": "caret",
+  "detail": "|"
+ },
+ "b2 cmd-shift-return": {
+  "given": "one\n\ttwo\n\tthree\nfour",
+  "caret": [
+   "two",
+   1
+  ],
+  "keys": [
+   "cmd+shift+return"
+  ],
+  "outline": "  one\n*     ∅\n      two\n      three\n  four",
+  "mode": "caret",
+  "detail": "|"
+ },
+ "b2 cmd-opt-return": {
+  "given": "one\n\ttwo\n\tthree\nfour",
+  "caret": [
+   "two",
+   1
+  ],
+  "keys": [
+   "cmd+opt+return"
+  ],
+  "outline": "  one\n      two\n*         ∅\n      three\n  four",
+  "mode": "caret",
+  "detail": "|"
+ },
+ "b2 duplicate cmd-d": {
+  "given": "alpha\n\tbeta\n\tgamma\ndelta\nepsilon",
+  "caret": [
+   "alpha",
+   1
+  ],
+  "keys": [
+   "cmd+d"
+  ],
+  "outline": "  alpha\n      beta\n      gamma\n* alpha\n      beta\n      gamma\n  delta\n  epsilon",
+  "mode": "block",
+  "detail": [
+   "alpha"
+  ]
+ },
+ "b2 join rows": {
+  "given": "one\n\ttwo\n\tthree\nfour",
+  "caret": [
+   "two",
+   1
+  ],
+  "keys": [
+   "ctrl+cmd+delete"
+  ],
+  "outline": "  one\n*     two three\n  four",
+  "mode": "caret",
+  "detail": "t|wo three"
+ },
+ "b2 join rows on parent": {
+  "given": "alpha\n\tbeta\n\tgamma\ndelta\nepsilon",
+  "caret": [
+   "alpha",
+   1
+  ],
+  "keys": [
+   "ctrl+cmd+delete"
+  ],
+  "outline": "* alpha beta\n      gamma\n  delta\n  epsilon",
+  "mode": "caret",
+  "detail": "a|lpha beta"
+ },
+ "b2 indent rows only": {
+  "given": "zero\nalpha\n\tbeta\n\tgamma",
+  "caret": [
+   "alpha",
+   1
+  ],
+  "keys": [
+   "ctrl+opt+right"
+  ],
+  "outline": "  zero\n*     alpha\n      beta\n      gamma",
+  "mode": "caret",
+  "detail": "a|lpha"
+ },
+ "b2 outdent rows only": {
+  "given": "a1\n\tb1\n\t\tc1\n\tb2\n\tb3\na2",
+  "caret": [
+   "b1",
+   1
+  ],
+  "keys": [
+   "ctrl+opt+left"
+  ],
+  "outline": "  a1\n* b1\n      c1\n      b2\n      b3\n  a2",
+  "mode": "caret",
+  "detail": "b|1"
+ },
+ "b2 delete row rows only": {
+  "given": "alpha\n\tbeta\n\tgamma\ndelta\nepsilon",
+  "caret": [
+   "alpha",
+   1
+  ],
+  "keys": [
+   "ctrl+opt+k"
+  ],
+  "outline": "* beta\n  gamma\n  delta\n  epsilon",
+  "mode": "caret",
+  "detail": "|beta"
+ },
+ "b2 move up rows only": {
+  "given": "alpha\n\tbeta\n\tgamma\ndelta\nepsilon",
+  "caret": [
+   "delta",
+   1
+  ],
+  "keys": [
+   "ctrl+opt+up"
+  ],
+  "outline": "  alpha\n      beta\n* delta\n      gamma\n  epsilon",
+  "mode": "caret",
+  "detail": "d|elta"
+ },
+ "b2 move up maintain level": {
+  "given": "one\n\ttwo\n\tthree\nfour",
+  "caret": [
+   "two",
+   1
+  ],
+  "keys": [
+   "ctrl+opt+cmd+up"
+  ],
+  "outline": "  one\n*     two\n      three\n  four",
+  "mode": "caret",
+  "detail": "t|wo"
+ },
+ "b2 move down maintain level": {
+  "given": "one\n\ttwo\n\tthree\nfour",
+  "caret": [
+   "three",
+   1
+  ],
+  "keys": [
+   "ctrl+opt+cmd+down"
+  ],
+  "outline": "  one\n      two\n  four\n*     three",
+  "mode": "caret",
+  "detail": "t|hree"
+ },
+ "b2 promote children": {
+  "given": "alpha\n\tbeta\n\tgamma\ndelta\nepsilon",
+  "caret": [
+   "alpha",
+   1
+  ],
+  "keys": [
+   "ctrl+opt+shift+left"
+  ],
+  "outline": "* alpha\n  beta\n  gamma\n  delta\n  epsilon",
+  "mode": "caret",
+  "detail": "a|lpha"
+ },
+ "b2 demote siblings": {
+  "given": "a\n\tb\n\tc\n\td",
+  "caret": [
+   "b",
+   1
+  ],
+  "keys": [
+   "ctrl+opt+shift+right"
+  ],
+  "outline": "  a\n*     b\n          c\n          d",
+  "mode": "caret",
+  "detail": "b|"
+ },
+ "b2 expand row by level": {
+  "given": "a1 [c]\n\tb1 [c]\n\t\tc1\n\tb2\na2",
+  "caret": [
+   "a1",
+   1
+  ],
+  "keys": [
+   "opt+cmd+0"
+  ],
+  "outline": "* a1\n      b1 (collapsed)\n          c1 (hidden)\n      b2\n  a2",
+  "mode": "caret",
+  "detail": "a|1"
+ },
+ "b2 collapse row by level": {
+  "given": "a1\n\tb1\n\t\tc1\n\tb2\n\tb3\na2",
+  "caret": [
+   "a1",
+   1
+  ],
+  "keys": [
+   "opt+cmd+9"
+  ],
+  "outline": "* a1\n      b1 (collapsed)\n          c1 (hidden)\n      b2\n      b3\n  a2",
+  "mode": "caret",
+  "detail": "a|1"
+ },
+ "b2 collapse all by level": {
+  "given": "a1\n\tb1\n\t\tc1\n\tb2\n\tb3\na2",
+  "caret": [
+   "a2",
+   1
+  ],
+  "keys": [
+   "ctrl+opt+cmd+9"
+  ],
+  "outline": "  a1\n      b1 (collapsed)\n          c1 (hidden)\n      b2\n      b3\n* a2",
+  "mode": "caret",
+  "detail": "a|2"
+ },
+ "b2 expand all by level": {
+  "given": "a1 [c]\n\tb1 [c]\n\t\tc1\n\tb2\na2",
+  "caret": [
+   "a2",
+   1
+  ],
+  "keys": [
+   "ctrl+opt+cmd+0"
+  ],
+  "outline": "  a1\n      b1 (collapsed)\n          c1 (hidden)\n      b2\n* a2",
+  "mode": "caret",
+  "detail": "a|2"
+ },
+ "b2 expand selection x1": {
+  "given": "one\n\ttwo words here. Next one.\n\t\tkid\nfour",
+  "caret": [
+   "two words here. Next one.",
+   5
+  ],
+  "keys": [
+   "ctrl+shift+cmd+right"
+  ],
+  "outline": "  one\n*     two words here. Next one.\n          kid\n  four",
+  "mode": "text",
+  "detail": "words"
+ },
+ "b2 expand selection x2": {
+  "given": "one\n\ttwo words here. Next one.\n\t\tkid\nfour",
+  "caret": [
+   "two words here. Next one.",
+   5
+  ],
+  "keys": [
+   "ctrl+shift+cmd+right",
+   "ctrl+shift+cmd+right"
+  ],
+  "outline": "  one\n*     two words here. Next one.\n          kid\n  four",
+  "mode": "text",
+  "detail": "two words here. "
+ },
+ "b2 expand selection x3": {
+  "given": "one\n\ttwo words here. Next one.\n\t\tkid\nfour",
+  "caret": [
+   "two words here. Next one.",
+   5
+  ],
+  "keys": [
+   "ctrl+shift+cmd+right",
+   "ctrl+shift+cmd+right",
+   "ctrl+shift+cmd+right"
+  ],
+  "outline": "  one\n*     two words here. Next one.\n          kid\n  four",
+  "mode": "text",
+  "detail": "two words here. Next one."
+ },
+ "b2 expand selection x4": {
+  "given": "one\n\ttwo words here. Next one.\n\t\tkid\nfour",
+  "caret": [
+   "two words here. Next one.",
+   5
+  ],
+  "keys": [
+   "ctrl+shift+cmd+right",
+   "ctrl+shift+cmd+right",
+   "ctrl+shift+cmd+right",
+   "ctrl+shift+cmd+right"
+  ],
+  "outline": "  one\n*     two words here. Next one.\n          kid\n  four",
+  "mode": "block",
+  "detail": [
+   "two words here. Next one."
+  ]
+ },
+ "b2 expand selection x5": {
+  "given": "one\n\ttwo words here. Next one.\n\t\tkid\nfour",
+  "caret": [
+   "two words here. Next one.",
+   5
+  ],
+  "keys": [
+   "ctrl+shift+cmd+right",
+   "ctrl+shift+cmd+right",
+   "ctrl+shift+cmd+right",
+   "ctrl+shift+cmd+right",
+   "ctrl+shift+cmd+right"
+  ],
+  "outline": "  one\n*     two words here. Next one.\n*         kid\n  four",
+  "mode": "block",
+  "detail": [
+   "two words here. Next one.",
+   "kid"
+  ]
+ },
+ "b2 expand selection x6": {
+  "given": "one\n\ttwo words here. Next one.\n\t\tkid\nfour",
+  "caret": [
+   "two words here. Next one.",
+   5
+  ],
+  "keys": [
+   "ctrl+shift+cmd+right",
+   "ctrl+shift+cmd+right",
+   "ctrl+shift+cmd+right",
+   "ctrl+shift+cmd+right",
+   "ctrl+shift+cmd+right",
+   "ctrl+shift+cmd+right"
+  ],
+  "outline": "* one\n*     two words here. Next one.\n*         kid\n  four",
+  "mode": "block",
+  "detail": [
+   "one",
+   "two words here. Next one.",
+   "kid"
+  ]
+ },
+ "b2 contract after x3": {
+  "given": "one\n\ttwo words here. Next one.\n\t\tkid\nfour",
+  "caret": [
+   "two words here. Next one.",
+   5
+  ],
+  "keys": [
+   "ctrl+shift+cmd+right",
+   "ctrl+shift+cmd+right",
+   "ctrl+shift+cmd+right",
+   "ctrl+shift+cmd+left"
+  ],
+  "outline": "  one\n*     two words here. Next one.\n          kid\n  four",
+  "mode": "text",
+  "detail": "two words here. "
+ },
+ "b2 select all x1": {
+  "given": "one\n\ttwo\n\tthree\nfour",
+  "caret": [
+   "two",
+   1
+  ],
+  "keys": [
+   "cmd+a"
+  ],
+  "outline": "* one\n*     two\n*     three\n* four",
+  "mode": "block",
+  "detail": [
+   "one",
+   "two",
+   "three",
+   "four"
+  ]
+ },
+ "b2 select all x2": {
+  "given": "one\n\ttwo\n\tthree\nfour",
+  "caret": [
+   "two",
+   1
+  ],
+  "keys": [
+   "cmd+a",
+   "cmd+a"
+  ],
+  "outline": "* one\n*     two\n*     three\n* four",
+  "mode": "block",
+  "detail": [
+   "one",
+   "two",
+   "three",
+   "four"
+  ]
+ },
+ "b2 select all x3": {
+  "given": "one\n\ttwo\n\tthree\nfour",
+  "caret": [
+   "two",
+   1
+  ],
+  "keys": [
+   "cmd+a",
+   "cmd+a",
+   "cmd+a"
+  ],
+  "outline": "* one\n*     two\n*     three\n* four",
+  "mode": "block",
+  "detail": [
+   "one",
+   "two",
+   "three",
+   "four"
+  ]
+ },
+ "b2 select all x4": {
+  "given": "one\n\ttwo\n\tthree\nfour",
+  "caret": [
+   "two",
+   1
+  ],
+  "keys": [
+   "cmd+a",
+   "cmd+a",
+   "cmd+a",
+   "cmd+a"
+  ],
+  "outline": "* one\n*     two\n*     three\n* four",
+  "mode": "block",
+  "detail": [
+   "one",
+   "two",
+   "three",
+   "four"
+  ]
+ },
+ "b2 shift-down x2": {
+  "given": "one\n\ttwo\n\tthree\nfour",
+  "caret": [
+   "two",
+   1
+  ],
+  "keys": [
+   "shift+down",
+   "shift+down"
+  ],
+  "outline": "  one\n*     two\n      three\n  four",
+  "mode": "block",
+  "detail": [
+   "two"
+  ]
+ },
+ "b2 shift-down x3": {
+  "given": "one\n\ttwo\n\tthree\nfour",
+  "caret": [
+   "two",
+   1
+  ],
+  "keys": [
+   "shift+down",
+   "shift+down",
+   "shift+down"
+  ],
+  "outline": "  one\n*     two\n*     three\n  four",
+  "mode": "block",
+  "detail": [
+   "two",
+   "three"
+  ]
+ },
+ "b2 shift-up from mid": {
+  "given": "one\n\ttwo\n\tthree\nfour",
+  "caret": [
+   "three",
+   2
+  ],
+  "keys": [
+   "shift+up"
+  ],
+  "outline": "  one\n      two\n*     three\n  four",
+  "mode": "text",
+  "detail": "th"
+ },
+ "b2 shift-up x2 from mid": {
+  "given": "one\n\ttwo\n\tthree\nfour",
+  "caret": [
+   "three",
+   2
+  ],
+  "keys": [
+   "shift+up",
+   "shift+up"
+  ],
+  "outline": "  one\n      two\n*     three\n  four",
+  "mode": "block",
+  "detail": [
+   "three"
+  ]
+ },
+ "b2 shift-left at start": {
+  "given": "one\n\ttwo\n\tthree\nfour",
+  "caret": [
+   "three",
+   0
+  ],
+  "keys": [
+   "shift+left"
+  ],
+  "outline": "  one\n      two\n*     three\n  four",
+  "mode": "caret",
+  "detail": null
+ },
+ "b2 block shift-down then esc": {
+  "given": "one\n\ttwo\n\tthree\nfour",
+  "caret": [
+   "two",
+   1
+  ],
+  "keys": [
+   "escape",
+   "shift+down",
+   "escape"
+  ],
+  "outline": "  one\n*     two\n      three\n  four",
+  "mode": "caret",
+  "detail": "t|wo"
+ },
+ "b2 cmd-right at end (attributes)": {
+  "given": "one\n\ttwo\n\tthree\nfour",
+  "caret": [
+   "two",
+   "end"
+  ],
+  "keys": [
+   "cmd+right"
+  ],
+  "outline": "  one\n*     two\n      three\n  four",
+  "mode": "caret",
+  "detail": null
+ },
+ "b2 wrap quote": {
+  "given": "one\n\ttwo\n\tthree\nfour",
+  "caret": [
+   "two",
+   1
+  ],
+  "keys": [
+   "opt+shift+right",
+   "type:'"
+  ],
+  "outline": "  one\n*     t'wo'\n      three\n  four",
+  "mode": "text",
+  "detail": "wo"
+ },
+ "b2 wrap bracket": {
+  "given": "one\n\ttwo\n\tthree\nfour",
+  "caret": [
+   "two",
+   1
+  ],
+  "keys": [
+   "opt+shift+right",
+   "type:["
+  ],
+  "outline": "  one\n*     t[wo]\n      three\n  four",
+  "mode": "text",
+  "detail": "wo"
+ },
+ "b2 type quote no selection": {
+  "given": "one\n\ttwo\n\tthree\nfour",
+  "caret": [
+   "two",
+   "end"
+  ],
+  "keys": [
+   "type:'"
+  ],
+  "outline": "  one\n*     two’\n      three\n  four",
+  "mode": "caret",
+  "detail": "two’|"
+ },
+ "b2 type bracket no selection": {
+  "given": "one\n\ttwo\n\tthree\nfour",
+  "caret": [
+   "two",
+   "end"
+  ],
+  "keys": [
+   "type:["
+  ],
+  "outline": "  one\n*     two[\n      three\n  four",
+  "mode": "caret",
+  "detail": "two[|"
+ },
+ "b2 tab first child": {
+  "given": "one\n\ttwo\n\tthree\nfour",
+  "caret": [
+   "two",
+   1
+  ],
+  "keys": [
+   "tab"
+  ],
+  "outline": "  one\n*     two\n      three\n  four",
+  "mode": "caret",
+  "detail": "t|wo"
+ },
+ "b2 move up first child": {
+  "given": "one\n\ttwo\n\tthree\nfour",
+  "caret": [
+   "two",
+   1
+  ],
+  "keys": [
+   "ctrl+cmd+up"
+  ],
+  "outline": "* two\n  one\n      three\n  four",
+  "mode": "caret",
+  "detail": "t|wo"
+ },
+ "b2 block left on collapsed": {
+  "given": "alpha [c]\n\tbeta\n\tgamma\ndelta",
+  "caret": [
+   "alpha",
+   1
+  ],
+  "keys": [
+   "escape",
+   "left"
+  ],
+  "outline": "* alpha (collapsed)\n      beta (hidden)\n      gamma (hidden)\n  delta",
+  "mode": "caret",
+  "detail": "|alpha"
+ },
+ "b2 block return on collapsed": {
+  "given": "alpha [c]\n\tbeta\n\tgamma\ndelta",
+  "caret": [
+   "alpha",
+   1
+  ],
+  "keys": [
+   "escape",
+   "return"
+  ],
+  "outline": "  alpha (collapsed)\n      beta (hidden)\n      gamma (hidden)\n* ∅\n  delta",
+  "mode": "caret",
+  "detail": "|"
+ },
+ "b2 block cmd-return": {
+  "given": "one\n\ttwo\n\tthree\nfour",
+  "caret": [
+   "two",
+   1
+  ],
+  "keys": [
+   "escape",
+   "cmd+return"
+  ],
+  "outline": "  one\n      two\n*     ∅\n      three\n  four",
+  "mode": "caret",
+  "detail": "|"
+ },
+ "b2 block opt-down": {
+  "given": "one\n\ttwo\n\tthree\nfour",
+  "caret": [
+   "two",
+   1
+  ],
+  "keys": [
+   "escape",
+   "opt+down"
+  ],
+  "outline": "  one\n*     two\n      three\n  four",
+  "mode": "caret",
+  "detail": "two|"
+ },
+ "b2 block cmd-up": {
+  "given": "one\n\ttwo\n\tthree\nfour",
+  "caret": [
+   "three",
+   1
+  ],
+  "keys": [
+   "escape",
+   "cmd+up"
+  ],
+  "outline": "* one\n      two\n      three\n  four",
+  "mode": "block",
+  "detail": [
+   "one"
+  ]
+ },
+ "b2 block shift-cmd-down": {
+  "given": "one\n\ttwo\n\tthree\nfour",
+  "caret": [
+   "two",
+   1
+  ],
+  "keys": [
+   "escape",
+   "shift+cmd+down"
+  ],
+  "outline": "  one\n*     two\n*     three\n* four",
+  "mode": "block",
+  "detail": [
+   "two",
+   "three",
+   "four"
+  ]
+ },
+ "b2 code cmd-shift-c": {
+  "given": "one\n\ttwo\n\tthree\nfour",
+  "caret": [
+   "two",
+   1
+  ],
+  "keys": [
+   "opt+shift+right",
+   "cmd+shift+c"
+  ],
+  "outline": "  one\n*     two\n      three\n  four",
+  "mode": "text",
+  "detail": "wo"
+ },
+ "b2 cmd-return on parent": {
+  "given": "alpha\n\tbeta\n\tgamma\ndelta\nepsilon",
+  "caret": [
+   "alpha",
+   1
+  ],
+  "keys": [
+   "cmd+return"
+  ],
+  "outline": "  alpha\n      beta\n      gamma\n* ∅\n  delta\n  epsilon",
+  "mode": "caret",
+  "detail": "|"
+ },
+ "b2 cmd-opt-return on parent": {
+  "given": "alpha\n\tbeta\n\tgamma\ndelta\nepsilon",
+  "caret": [
+   "alpha",
+   1
+  ],
+  "keys": [
+   "cmd+opt+return"
+  ],
+  "outline": "  alpha\n*     ∅\n      beta\n      gamma\n  delta\n  epsilon",
+  "mode": "caret",
+  "detail": "|"
+ },
+ "b2 cmd-shift-return on child": {
+  "given": "alpha\n\tbeta\n\tgamma\ndelta\nepsilon",
+  "caret": [
+   "gamma",
+   1
+  ],
+  "keys": [
+   "cmd+shift+return"
+  ],
+  "outline": "  alpha\n      beta\n*     ∅\n      gamma\n  delta\n  epsilon",
+  "mode": "caret",
+  "detail": "|"
+ },
+ "b2 return mid collapsed parent": {
+  "given": "alpha [c]\n\tbeta\n\tgamma\ndelta",
+  "caret": [
+   "alpha",
+   2
+  ],
+  "keys": [
+   "return"
+  ],
+  "outline": "  al (collapsed)\n      beta (hidden)\n      gamma (hidden)\n* pha\n  delta",
+  "mode": "caret",
+  "detail": "|pha"
+ },
+ "b2 return on empty heading": {
+  "given": "one\n\t∅ {heading}\nfour",
+  "caret": [
+   "one",
+   "end"
+  ],
+  "keys": [
+   "down",
+   "return"
+  ],
+  "outline": "",
+  "mode": "error",
+  "detail": "200:255: execution error: Bike got an error: Can’t get row 1 of document 1 whose id = \"mHJo8IEVyOG1V8t9j3pUc\" whose name = \"∅\". Invalid index. (-1719)"
+ },
+ "b2 return on empty top-level row": {
+  "given": "one\n∅\nfour",
+  "caret": [
+   "one",
+   "end"
+  ],
+  "keys": [
+   "down",
+   "return"
+  ],
+  "outline": "  one\n  ∅\n* ∅\n  four",
+  "mode": "caret",
+  "detail": "|"
+ }
+}

@@ -73,6 +73,9 @@ public struct ContentView: View {
     }
 
     public var body: some View {
+        #if DEBUG
+        let _ = EditorProbe.listen(store: store)
+        #endif
         NavigationSplitView(columnVisibility: $columns) {
             Sidebar(store: store, searchFocus: $searchFocus)
                 .navigationSplitViewColumnWidth(min: 220, ideal: 260, max: 400)

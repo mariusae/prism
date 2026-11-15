@@ -441,6 +441,29 @@ pub enum Command {
     MoveDoneToBottom,
     /// Made a row of this kind, whatever it was.
     Turn(RowKind),
+    /// ⌘↩: a new, empty row after the row's branch, not splitting it.
+    InsertBelow,
+    /// ⇧⌘↩: a new, empty row before the row.
+    InsertAbove,
+    /// ⌥⌘↩: a new, empty first child of the row.
+    InsertChild,
+    /// ⌃⌥⌘↑: the rows above the sibling before them, at their level.
+    MoveUpKeepingLevel,
+    MoveDownKeepingLevel,
+    /// ⌃⌘⌫: the row after joined into the row, a space between.
+    JoinRows,
+    /// ⌃⌥⇧←: the row's children made the siblings after it.
+    PromoteChildren,
+    /// ⌃⌥⇧→: the siblings after the row made its children.
+    DemoteSiblings,
+    /// ⌥⌘G: the rows put under a new, empty row.
+    Group,
+    /// ⌃⌥K: the row taken out, its children taking its place.
+    DeleteRowOnly,
+    /// ⌃⌥→: the row a level deeper, its children staying where they are.
+    IndentRowOnly,
+    /// ⌃⌥←: the row a level out, the siblings after it coming under it.
+    OutdentRowOnly,
 }
 
 /// A kind a row can be turned into.
@@ -754,7 +777,19 @@ pub fn perform(body: &str, selection: Range<usize>, command: Command) -> Option<
         | Command::UnfoldAll
         | Command::MarkDone
         | Command::MoveDoneToBottom
-        | Command::Turn(_) => None,
+        | Command::Turn(_)
+        | Command::InsertBelow
+        | Command::InsertAbove
+        | Command::InsertChild
+        | Command::MoveUpKeepingLevel
+        | Command::MoveDownKeepingLevel
+        | Command::JoinRows
+        | Command::PromoteChildren
+        | Command::DemoteSiblings
+        | Command::Group
+        | Command::DeleteRowOnly
+        | Command::IndentRowOnly
+        | Command::OutdentRowOnly => None,
     }
 }
 

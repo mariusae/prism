@@ -281,6 +281,24 @@ pub enum EditCommand {
     TurnHeading2,
     TurnHeading3,
     TurnQuote,
+    /// ⌘↩, ⇧⌘↩, ⌥⌘↩: a new, empty row below the row's branch, above it, or its first child.
+    InsertBelow,
+    InsertAbove,
+    InsertChild,
+    /// ⌃⌥⌘↑ ⌃⌥⌘↓: moved among siblings, at their level.
+    MoveUpKeepingLevel,
+    MoveDownKeepingLevel,
+    /// ⌃⌘⌫: the next row joined in, a space between.
+    JoinRows,
+    /// ⌃⌥⇧← / ⌃⌥⇧→.
+    PromoteChildren,
+    DemoteSiblings,
+    /// ⌥⌘G: under a new row.
+    Group,
+    /// ⌃⌥K, ⌃⌥→, ⌃⌥←: the row alone, its children staying.
+    DeleteRowOnly,
+    IndentRowOnly,
+    OutdentRowOnly,
 }
 
 /// What a command comes to: text to replace, and where the selection
@@ -340,6 +358,18 @@ fn command(command: EditCommand) -> Command {
         EditCommand::TurnHeading2 => Command::Turn(RowKind::Heading(2)),
         EditCommand::TurnHeading3 => Command::Turn(RowKind::Heading(3)),
         EditCommand::TurnQuote => Command::Turn(RowKind::Quote),
+        EditCommand::InsertBelow => Command::InsertBelow,
+        EditCommand::InsertAbove => Command::InsertAbove,
+        EditCommand::InsertChild => Command::InsertChild,
+        EditCommand::MoveUpKeepingLevel => Command::MoveUpKeepingLevel,
+        EditCommand::MoveDownKeepingLevel => Command::MoveDownKeepingLevel,
+        EditCommand::JoinRows => Command::JoinRows,
+        EditCommand::PromoteChildren => Command::PromoteChildren,
+        EditCommand::DemoteSiblings => Command::DemoteSiblings,
+        EditCommand::Group => Command::Group,
+        EditCommand::DeleteRowOnly => Command::DeleteRowOnly,
+        EditCommand::IndentRowOnly => Command::IndentRowOnly,
+        EditCommand::OutdentRowOnly => Command::OutdentRowOnly,
     }
 }
 
