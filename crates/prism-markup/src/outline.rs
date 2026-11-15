@@ -568,9 +568,10 @@ mod tests {
         // A first child has nothing before it to go under.
         assert_eq!(indent(&mut d, &[0]), None);
         assert_eq!(indent(&mut d, &[0, 0]), None);
-        // Only a list item takes children.
+        // A paragraph takes children too, as any body row: written as `- ` while it has them.
         let mut d = doc("para\n- item\n");
-        assert_eq!(indent(&mut d, &[1]), None);
+        assert_eq!(indent(&mut d, &[1]), Some(vec![0, 0]));
+        assert_eq!(d.to_markdown(), "- para\n  - item\n");
         assert_eq!(indent(&mut d, &[7]), None);
     }
 
@@ -588,10 +589,10 @@ mod tests {
         assert_eq!(outdent_taking_followers(&mut d, &[0, 0]), Some(vec![1]));
         assert_eq!(d.to_markdown(), "- a\n- b\n  - c\n  - d\n  - e\n- f\n");
         assert_eq!(outdent_taking_followers(&mut d, &[0]), None);
-        // A paragraph cannot hold what followed it: they stay.
+        // A paragraph holds what followed it, as any body row: written as `- ` while it does.
         let mut d = doc("- a\n\n  para\n  - b\n");
         assert_eq!(outdent_taking_followers(&mut d, &[0, 0]), Some(vec![1]));
-        assert_eq!(d.to_markdown(), "- a\n  - b\n\npara\n");
+        assert_eq!(d.to_markdown(), "- a\n\n- para\n  - b\n");
     }
 
     #[test]
@@ -638,7 +639,8 @@ mod tests {
         assert_eq!(split(&mut d, &[0], 4), Some(vec![1]));
         split(&mut d, &[2], 3);
         split(&mut d, &[5], 5);
-        assert_eq!(d.to_markdown(), "+ [x] done\n+ [ ]\n1. one\n2. \n3. two\n# Title\n\n");
+        // The empty paragraph after the heading is written as an empty body row: a blank line would be none.
+        assert_eq!(d.to_markdown(), "+ [x] done\n+ [ ]\n1. one\n2. \n3. two\n# Title\n- \n");
         assert_eq!(d.blocks[6].kind, BlockKind::Paragraph);
     }
 

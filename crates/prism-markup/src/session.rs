@@ -83,6 +83,10 @@ pub struct Session {
     /// Styles put on — or off — with nothing chosen: what is typed next at
     /// that place takes them, as Bike's typing attributes.
     pending: Option<(usize, Vec<Mark>)>,
+    /// Whether the note is shown as prose. Only what is written changes:
+    /// a body row made, or put, at the top level is written as a
+    /// paragraph rather than as `- ` — the same row either way.
+    prose: bool,
 }
 
 /// What a focused session is not showing: the whole body — but for the
@@ -111,6 +115,7 @@ impl Session {
             outer: None,
             typed_kind: None,
             pending: None,
+            prose: false,
         };
         session.project();
         session
@@ -402,7 +407,75 @@ impl Session {
     }
 
     fn perform_now(&mut self, selection: Range<usize>, rows: Option<&[usize]>, command: Command) -> Option<Change> {
-        self.perform_rows(selection, rows, command)
+        // A paragraph put under another row is written as one of a list, `- `; shown
+        // as prose, a body row a command makes or puts at the top level is a paragraph.
+        let nests = matches!(command, Command::Indent | Command::IndentRowOnly | Command::Group);
+        let places = matches!(
+            command,
+            Command::Newline
+                | Command::DeleteBackward
+                | Command::Outdent
+                | Command::OutdentRowOnly
+                | Command::PromoteChildren
+                | Command::InsertBelow
+                | Command::InsertAbove
+                | Command::Turn(_)
+                | Command::Bullet
+                | Command::Numbered
+                | Command::CycleChecklist
+                | Command::ToggleTask
+                | Command::ToggleCheckbox
+                | Command::Heading(_)
+        );
+        let change = self.perform_rows(selection, rows, command)?;
+        if nests || (self.prose && places) {
+            let (first, last) = (self.row_at(change.selection.start), self.row_at(change.selection.end));
+            let paths: Vec<Path> = self.rows.get(first..=last).unwrap_or_default().iter().map(|row| row.path.clone()).collect();
+            for path in paths {
+                if nests {
+                    self.as_item(&path);
+                } else {
+                    self.as_paragraph(&path);
+                }
+            }
+        }
+        Some(change)
+    }
+
+    /// Shows the note as prose, or not. The note is not changed; what is
+    /// made from now on at the top level is written as paragraphs.
+    pub fn set_prose(&mut self, prose: bool) {
+        self.prose = prose;
+    }
+
+    /// Whether the note is written as prose: its top level more paragraphs
+    /// than list items. How a note is first shown, when no one has said.
+    pub fn reads_as_prose(&self) -> bool {
+        let top = &self.whole().blocks;
+        let paragraphs = top.iter().filter(|block| block.kind == BlockKind::Paragraph).count();
+        let items = top.iter().filter(|block| block.is_item()).count();
+        paragraphs > 0 && paragraphs >= items
+    }
+
+    /// A paragraph under another row made a `- ` row — the same row,
+    /// written as a list's.
+    fn as_item(&mut self, path: &[usize]) {
+        let under = path.len() > 1 || self.outer.is_some();
+        if let Some(block) = self.body.get_mut(path).filter(|block| under && block.kind == BlockKind::Paragraph) {
+            block.kind = BlockKind::Item(Item { marker: Marker::Bullet('-'), task: None });
+            block.layout.spacing = 1;
+            // A list's rows follow one another: the blank line a paragraph had before it goes.
+            block.layout.gap.clear();
+        }
+    }
+
+    /// A body row at the top level, written `- `, made a paragraph — the
+    /// same row, written the other way. Nothing else is changed.
+    fn as_paragraph(&mut self, path: &[usize]) {
+        let top = path.len() == 1 && self.outer.is_none();
+        if let Some(block) = self.body.get_mut(path).filter(|block| top && block.is_body_row() && block.is_item()) {
+            block.kind = BlockKind::Paragraph;
+        }
     }
 
     /// Links the words selected to an address — `[words](address)` — or,
@@ -482,7 +555,7 @@ impl Session {
         let before = self.text.clone();
         if self.rows.is_empty() {
             // Nothing written yet: the first words make the first row.
-            self.body.blocks.push(Block::bullet(""));
+            self.body.blocks.push(if self.prose { Block::new(BlockKind::Paragraph, String::new()) } else { Block::bullet("") });
             self.project();
         }
         let (first, last) = (self.row_at(range.start), self.row_at(range.end));
@@ -2302,10 +2375,10 @@ mod tests {
         assert_eq!((session.text(), session.markdown()), ("", marked.clone()));
         session.replace(0..0, "child");
         assert_eq!(session.markdown(), marked.replace("-->\n", "-->\n  - child\n"));
-        // Folded and named both, a row is marked as both; a copy of a named row has no name; only a list's row has one.
-        let (mut session, mut view) = outline(&format!("- a <!-- ^x1 --> {FOLDED}\n  - b\n\nprose <!-- ^no -->\n"));
-        assert_eq!((session.text(), session.folded_rows().len()), ("a\nprose \u{FFFC}", 1));
-        assert_eq!(session.anchor_row(1), None);
+        // Folded and named both, a row is marked as both; a copy of a named row has no name; a paragraph's row is named as any.
+        let (mut session, mut view) = outline(&format!("- a <!-- ^x1 --> {FOLDED}\n  - b\n\nprose <!-- ^p1 -->\n"));
+        assert_eq!((session.text(), session.folded_rows().len()), ("a\nprose", 1));
+        assert_eq!(session.anchor_row(1).as_deref(), Some("p1"));
         on(&mut session, &mut view, &["a"], 0, Command::DuplicateRows).unwrap();
         assert_eq!(session.markdown().matches("^x1").count(), 1);
     }
@@ -3156,5 +3229,103 @@ mod tests {
         assert_eq!(session.link(3..3, "https://example.com"), None);
         session.undo().unwrap();
         assert!(session.markdown().starts_with("- [see](https://example.com/a%28b%29)"));
+    }
+
+    /// A row as the outline has it, the body row's two forms one.
+    fn shape(session: &Session) -> Vec<(usize, String, String)> {
+        let class = |block: &Block| match &block.kind {
+            _ if block.is_body_row() => "body".to_owned(),
+            BlockKind::Item(item) => format!("item {:?} {}", std::mem::discriminant(&item.marker), item.task.is_some()),
+            other => format!("{other:?}"),
+        };
+        // Markdown keeps no space before a row's words, in either form.
+        session.body().rows().iter().map(|row| (row.depth, class(row.block), words_of(row.block).text.trim_start().to_owned())).collect()
+    }
+
+    #[test]
+    fn a_paragraph_and_a_dash_are_one_row_written_two_ways() {
+        // Read back from what is written, any note edited any way is the rows it was —
+        // shown as prose or not, whichever way each body row is written.
+        let sources = [
+            "",
+            "Para one\n\nPara two\n",
+            "# H\n\nPara\n\n- a\n  - b\n- c\n\nEnd.\n",
+            "- one\n\n  more of one\n- two\n",
+            "Para\n\n1. x\n2. y\n",
+            "- [ ] task\n  + [x] done\n\nPara\n\n## Sub\n\nLast words.\n",
+        ];
+        let commands = [
+            Command::Newline,
+            Command::Indent,
+            Command::Outdent,
+            Command::InsertBelow,
+            Command::InsertAbove,
+            Command::InsertChild,
+            Command::DeleteBackward,
+            Command::MoveUp,
+            Command::MoveDown,
+            Command::JoinRows,
+            Command::PromoteChildren,
+        ];
+        let mut seed: u64 = 7;
+        let mut next = |below: usize| {
+            seed = seed.wrapping_mul(6_364_136_223_846_793_005).wrapping_add(1_442_695_040_888_963_407);
+            (seed >> 33) as usize % below.max(1)
+        };
+        for source in sources {
+            for prose in [false, true] {
+                for _ in 0..150 {
+                    let mut session = Session::new(source);
+                    session.set_prose(prose);
+                    for _ in 0..20 {
+                        let at = next(session.text().len() + 1);
+                        let at = (0..=at).rev().find(|at| session.text().is_char_boundary(*at)).unwrap_or(0);
+                        if next(3) == 0 {
+                            session.replace(at..at, "w");
+                        } else {
+                            session.perform(at..at, commands[next(commands.len())].clone());
+                        }
+                    }
+                    let written = session.markdown();
+                    let again = Session::new(&written);
+                    assert_eq!(shape(&again), shape(&session), "{source:?} prose {prose}, written:\n{written}");
+                    assert_eq!(again.markdown(), written);
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn prose_is_how_a_note_is_shown_and_what_rows_are_written_as() {
+        // Written as paragraphs, a note reads as prose; as a list, not.
+        assert!(Session::new("# Essay\n\nOne thought.\n\nAnother.\n\n- a point\n").reads_as_prose());
+        assert!(!Session::new("- one\n- two\n\nA line.\n").reads_as_prose());
+        assert!(!Session::new("").reads_as_prose());
+
+        // Shown as prose, Return at the top level makes a paragraph — even after a `- ` row.
+        let mut session = Session::new("First.\n\n- listed\n");
+        session.set_prose(true);
+        session.perform(6..6, Command::Newline).unwrap();
+        session.replace(7..7, "Second.");
+        let end = session.text().len();
+        session.perform(end..end, Command::Newline).unwrap();
+        session.replace(end + 1..end + 1, "Third.");
+        assert_eq!(session.markdown(), "First.\n\nSecond.\n\n- listed\n\nThird.\n");
+        // Shown as an outline, the same Return after a `- ` row makes a `- ` row.
+        session.set_prose(false);
+        let end = session.text().len();
+        session.perform(end..end, Command::Newline).unwrap();
+        session.replace(end + 1..end + 1, "Fourth.");
+        assert!(session.markdown().ends_with("Third.\n\nFourth.\n"));
+
+        // A paragraph takes rows under it, as any row: it is written as `- ` while it has
+        // them, and the row put under it is written as a list's. Out again, as prose: paragraphs.
+        let mut session = Session::new("Para\n\nNext\n");
+        session.set_prose(true);
+        session.perform(5..5, Command::Indent).unwrap();
+        assert_eq!(session.markdown(), "- Para\n  - Next\n");
+        assert_eq!(Session::new(&session.markdown()).text(), session.text());
+        session.perform(5..5, Command::Outdent).unwrap();
+        assert_eq!(session.markdown(), "Para\n\nNext\n");
     }
 }

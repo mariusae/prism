@@ -39,6 +39,8 @@ public struct NoteEditorView: UIViewRepresentable {
     /// Not shown here: there is no pointer to rest on a link.
     var linkPreview: (EditorLink) -> AnyView?
     var lead: EditorLead?
+    /// Whether the note is shown as prose: see the Mac's.
+    var prose = false
     var onLead: () -> Void
     /// The pages the app offers for a link being typed: after `[[`, and
     /// after `@`. Listed over the keys; a tap takes one, Return the first.
@@ -84,7 +86,7 @@ public struct NoteEditorView: UIViewRepresentable {
         linkIcon: @escaping (String) -> String? = { _ in nil },
         blockView: @escaping (EditorBlock) -> AnyView? = { _ in nil },
         linkPreview: @escaping (EditorLink) -> AnyView? = { _ in nil },
-        lead: EditorLead? = nil, onLead: @escaping () -> Void = {},
+        lead: EditorLead? = nil, onLead: @escaping () -> Void = {}, prose: Bool = false,
         offers: @escaping (BodyCompletion) -> [EditorOffer] = { _ in [] },
         offersTitle: Bool = false, onTitle: @escaping () -> Void = {},
         foldedRows: [EditorFoldedRow]? = nil, onFolds: @escaping ([EditorFoldedRow]) -> Void = { _ in },
@@ -106,6 +108,7 @@ public struct NoteEditorView: UIViewRepresentable {
         self.blockView = blockView
         self.linkPreview = linkPreview
         self.lead = lead
+        self.prose = prose
         self.onLead = onLead
         self.offers = offers
         self.offersTitle = offersTitle
@@ -267,9 +270,9 @@ extension NoteEditorView.Coordinator: UITextViewDelegate {
     /// and so nothing to say where its caret goes. A note with nothing in
     /// it yet is such a row: where its first words will be.
     func emptyRowIndent(at caret: Int) -> CGFloat? {
-        if layout.lines.isEmpty { return parent.theme.step }
+        if layout.lines.isEmpty { return parent.prose ? 0 : parent.theme.step }
         guard let line = layout.lines.last(where: { Int($0.start) <= caret && caret <= Int($0.end) }), line.start == line.end else { return nil }
-        return CGFloat(line.depth) * parent.theme.step
+        return CGFloat(Int(line.depth) - (parent.prose ? 1 : 0)) * parent.theme.step
     }
 
     /// Sets the row at a place in or out, wherever the caret is. Says

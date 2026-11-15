@@ -1736,6 +1736,10 @@ public final class PageDraft {
     /// something of it — its summary, whether it is blank — redraws on.
     public private(set) var revision = 0
     public private(set) var isConflicted = false
+    /// Whether the note is shown as prose — its top-level rows as
+    /// paragraphs. As it is written unless said otherwise, on this device:
+    /// a look, kept apart from the note.
+    public private(set) var isProse = false
 
     /// The note as cards that show one row of it have it: each a note
     /// of its own, read from this one and focused there, good for as
@@ -1780,6 +1784,7 @@ public final class PageDraft {
     public func changed(from card: Card.ID) {
         guard let view = views[card] else { return changed() }
         editor = NoteEditor.open(source: view.editor.markdown())
+        editor.setProse(prose: isProse)
         revision += 1
         views[card] = (view.editor, revision, view.key)
         touch()
@@ -1812,8 +1817,29 @@ public final class PageDraft {
     /// Takes a file's text as what the page says.
     private func take(_ file: String) {
         editor = NoteEditor.open(source: file)
+        isProse = chosenProse()
+        editor.setProse(prose: isProse)
         title = editor.title() ?? ((try? store?.engine.page(path: path)) ?? nil)?.title ?? fallbackTitle
         isConflicted = conflictCount(source: file) > 0
+        revision += 1
+    }
+
+    /// Prose or an outline, as said on this device — or, unsaid, as the note is written.
+    private func chosenProse() -> Bool {
+        switch (try? store?.engine.localValue(name: "weft/prose/\(path)")) ?? nil {
+        case "prose": true
+        case "outline": false
+        default: editor.readsAsProse()
+        }
+    }
+
+    /// Shows the note as prose, or as an outline; said for it on this
+    /// device from now on. The note is not changed.
+    public func setProse(_ prose: Bool) {
+        guard prose != isProse else { return }
+        isProse = prose
+        editor.setProse(prose: prose)
+        try? store?.engine.setLocalValue(name: "weft/prose/\(path)", value: prose ? "prose" : "outline")
         revision += 1
     }
 

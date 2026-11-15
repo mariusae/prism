@@ -278,7 +278,40 @@ Weft's own commands on these keys move: ⌃⌘↑ ⌃⌘↓ (Fold Card), ⌘Retu
 (checklist), ⇧⌘Return (task), ⌥⌘9 / ⌥⌘0 (fold all), ⌘P, ⌘D, ⌘L, ⌘Y,
 ⇧⌘A, ⇧⌘C, ⌘E.
 
+## Prose
+
+Prose is a way of showing a note, not a kind of note. The rows, their keys and
+the file are the same either way; shown as prose, every row stands a step
+further out, so the top-level rows are paragraphs — at the margin, apart, with
+no handle or guide — and headings are headings. What is under a paragraph is
+an outline still, handles and all. A folded paragraph shows a pill.
+
+- **Which**: a note whose top level has at least as many paragraphs as list
+  items opens as prose (123 of the test graph's 2,207 notes). Show as Prose /
+  Show as Outline — the card's menu, and ⌃⌘P on the Mac — overrides it for
+  the note, on this device (`weft/prose/<path>`); nothing is written in it.
+- **A paragraph and a `- ` row are one row, written two ways.** Every body row
+  can have rows under it, a paragraph too. The writer writes a paragraph as a
+  paragraph whenever Markdown can read it back as the same row, and as `- `
+  when it cannot: while it has rows under it, or no words. A paragraph put
+  under another row (Tab, group) becomes a `- ` row; shown as prose, a body row
+  made or put at the top level (Return, ⌘↩, outdent, turning plain) becomes a
+  paragraph. Nothing else is rewritten, and a note opened and saved untouched
+  keeps every byte (all 2,207 notes checked).
+- **Checked**: a test edits notes at random — Return, Tab, ⇧Tab, moves, joins,
+  promotes, Delete, typing — in both views and reads each result back; about
+  216,000 runs showed the same rows, at the same depths, of the same kinds.
+
 ## Found along the way
+
+- Fixed: Tab after a paragraph did nothing — Markdown has no way to nest under
+  one; the paragraph is now written as `- ` while it has rows under it.
+- Fixed: an empty row with rows under it lost them on reading back (a blank
+  line between `- ` and its first child ends the item); and a row whose words
+  start with a space took its children's place in the list.
+- Open: typing into a code row's fence line breaks the fence, and Return in a
+  quote leaves a bare `> ` line that reads back as raw text (both found by the
+  random test; not yet fixed). A row's leading spaces are not kept.
 
 - An empty indented row written `  - ` reads back as part of the row
   above (`one - `): the row is lost.

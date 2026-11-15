@@ -49,6 +49,11 @@ public struct NoteEditorView: NSViewRepresentable {
     /// bullet, and what clicking it does. Drawn only when the note opens
     /// with a plain bulleted line: see `takesLead`.
     var lead: EditorLead?
+    /// Whether the note is shown as prose: its top-level rows as
+    /// paragraphs — flush, apart, with no handle — and its headings as
+    /// headings; what is under them as an outline still. Only the look:
+    /// the rows, their keys and the note are the same.
+    var prose = false
     var onLead: () -> Void
     /// The pages the app offers for a link being typed: after `[[`, and
     /// after `@`. Listed under the caret; ↑ ↓ choose, Return or Tab takes
@@ -107,7 +112,7 @@ public struct NoteEditorView: NSViewRepresentable {
         blockView: @escaping (EditorBlock) -> AnyView? = { _ in nil },
         linkPreview: @escaping (EditorLink) -> AnyView? = { _ in nil },
         webTitle: ((String) -> String?)? = nil,
-        lead: EditorLead? = nil, onLead: @escaping () -> Void = {},
+        lead: EditorLead? = nil, onLead: @escaping () -> Void = {}, prose: Bool = false,
         offers: @escaping (BodyCompletion) -> [EditorOffer] = { _ in [] },
         offersTitle: Bool = false, onTitle: @escaping () -> Void = {},
         foldedRows: [EditorFoldedRow]? = nil, onFolds: @escaping ([EditorFoldedRow]) -> Void = { _ in },
@@ -130,6 +135,7 @@ public struct NoteEditorView: NSViewRepresentable {
         self.linkPreview = linkPreview
         self.webTitle = webTitle
         self.lead = lead
+        self.prose = prose
         self.onLead = onLead
         self.offers = offers
         self.offersTitle = offersTitle

@@ -401,7 +401,7 @@ struct PhoneCard: View {
                     })
                 },
                 linkPreview: { link in LinkCard.shows(link, in: store) ? AnyView(LinkCard(store: store, link: link, draft: draft)) : nil },
-                lead: isFocus ? nil : editorLead, onLead: { leadTapped() },
+                lead: isFocus ? nil : editorLead, onLead: { leadTapped() }, prose: !isFocus && draft.isProse,
                 offers: { found in store.linkOffers(found.typed, this: card.path) },
                 offersTitle: !isFocus && isUntitled, onTitle: { withAnimation(.snappy(duration: 0.22)) { _ = draft.titleByFirstLine() } },
                     // Which rows are folded is the note's own to remember. What a river
@@ -430,7 +430,7 @@ struct PhoneCard: View {
                 onFollow: { follow($0) }
             )
             .fixedSize(horizontal: false, vertical: true)
-            .id(isFocus ? "focus" : "note")
+            .id(isFocus ? "focus" : draft.isProse ? "prose" : "outline")
             .opacity(draft.task == .done ? 0.5 : 1)
         }
     }
@@ -653,6 +653,7 @@ struct PhoneCard: View {
             if isUntitled, !draft.isBlank { Button("Make First Line the Title", systemImage: "arrow.up") { withAnimation(.snappy(duration: 0.22)) { _ = draft.titleByFirstLine() } } }
             if draft.exists { Button("Icon and Colour…", systemImage: "paintpalette") { choosesLook = true } }
             if draft.exists { Button("Add Tag…", systemImage: "number") { addsTag = true } }
+            Button(draft.isProse ? "Show as Outline" : "Show as Prose", systemImage: draft.isProse ? "list.bullet.indent" : "text.alignleft") { draft.setProse(!draft.isProse) }
             // Linked to today in its frontmatter: today's page lists it.
             if !isDay {
                 let today = Days.name(Date())

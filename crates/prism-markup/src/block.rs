@@ -264,9 +264,33 @@ impl Block {
         self.item().and_then(|i| i.task)
     }
 
-    /// Whether Markdown can nest blocks under this one: only a list item.
+    /// Whether rows can go under this one: a list item's, or a
+    /// paragraph's — every body row can have children, as Bike's. A
+    /// paragraph with rows under it is written as a `- ` item: Markdown has
+    /// no other way to nest under one ([`Block::written_kind`]).
     pub fn can_have_children(&self) -> bool {
-        self.is_item()
+        matches!(self.kind, BlockKind::Item(_) | BlockKind::Paragraph)
+    }
+
+    /// Whether this is a plain body row: a paragraph, or a `- ` item with
+    /// no box. The two are one kind of row, written two ways.
+    pub fn is_body_row(&self) -> bool {
+        match &self.kind {
+            BlockKind::Paragraph => true,
+            BlockKind::Item(item) => item.marker == Marker::Bullet('-') && item.task.is_none(),
+            _ => false,
+        }
+    }
+
+    /// The kind the block is written as. A paragraph Markdown could not
+    /// read back as the same row — one with rows under it, or with no
+    /// words — is written as the body row's other form, a `- ` item.
+    pub fn written_kind(&self) -> std::borrow::Cow<'_, BlockKind> {
+        if self.kind == BlockKind::Paragraph && (!self.children.is_empty() || self.text.trim().is_empty()) {
+            std::borrow::Cow::Owned(BlockKind::Item(Item { marker: Marker::Bullet('-'), task: None }))
+        } else {
+            std::borrow::Cow::Borrowed(&self.kind)
+        }
     }
 
     /// Whether Return in the block's words makes two blocks of it: a
@@ -699,7 +723,7 @@ impl<'a> Parser<'a> {
 
 /// Whether a line straight after this block can go on with its text.
 fn continues(block: &Block) -> bool {
-    match &block.kind {
+    match &*block.written_kind() {
         BlockKind::Paragraph | BlockKind::Quote | BlockKind::Table => true,
         BlockKind::Item(item) => !(block.text.is_empty() && item.task.is_none()),
         BlockKind::Heading(_) | BlockKind::Code | BlockKind::Rule | BlockKind::Raw => false,
@@ -715,6 +739,9 @@ fn write(rows: &[(usize, &Block)], trailing: &[String], final_newline: bool, end
     // When a line straight after the row before would go on with its text:
     // the column that text is measured from.
     let mut continuing: Option<usize> = None;
+    // The depth of an empty item just written: Markdown reads its first
+    // child as its own only with no blank line between them.
+    let mut empty_item: Option<usize> = None;
     for &(row_depth, block) in rows {
         if block.kind == BlockKind::Raw {
             lines.extend(block.text.split('\n').map(str::to_owned));
@@ -722,7 +749,10 @@ fn write(rows: &[(usize, &Block)], trailing: &[String], final_newline: bool, end
             continuing = None;
             continue;
         }
-        lines.extend(block.layout.gap.iter().cloned());
+        let opens_empty = empty_item.is_some_and(|over| row_depth > over);
+        if !opens_empty {
+            lines.extend(block.layout.gap.iter().cloned());
+        }
         let depth = row_depth.min(columns.len());
         columns.truncate(depth);
         let base = columns.last().copied().unwrap_or(0);
@@ -731,7 +761,11 @@ fn write(rows: &[(usize, &Block)], trailing: &[String], final_newline: bool, end
         let first_line = block.text.split('\n').next().unwrap_or("");
         let spaces = " ".repeat(block.layout.spacing);
         let mut continuation = indent;
-        let first = match &block.kind {
+        let kind = block.written_kind();
+        // A paragraph written as an item has the item's one space after its marker.
+        let spacing = if block.kind == BlockKind::Paragraph { 1 } else { block.layout.spacing };
+        let spaces = if matches!(&*kind, BlockKind::Item(_)) { " ".repeat(spacing) } else { spaces };
+        let first = match &*kind {
             BlockKind::Item(item) => {
                 let marker = match item.marker {
                     Marker::Bullet(c) => c.to_string(),
@@ -750,7 +784,11 @@ fn write(rows: &[(usize, &Block)], trailing: &[String], final_newline: bool, end
                 if item.task.is_some() && !block.text.is_empty() {
                     head.push(' ');
                 }
-                continuation = indent + marker.len() + block.layout.spacing.max(1);
+                // The words' column as Markdown reads it: spaces at the start of the words
+                // count with those after the marker — up to four; past that, one does.
+                let lead = if item.task.is_none() { first_line.len() - first_line.trim_start_matches(' ').len() } else { 0 };
+                let after = spacing.max(1) + lead;
+                continuation = indent + marker.len() + if after <= 4 { after } else { 1 };
                 columns.push(continuation);
                 head + first_line
             }
@@ -758,9 +796,10 @@ fn write(rows: &[(usize, &Block)], trailing: &[String], final_newline: bool, end
             BlockKind::Quote => format!("{pad}>{spaces}{first_line}"),
             _ => format!("{pad}{first_line}"),
         };
+        empty_item = (matches!(&*kind, BlockKind::Item(item) if item.task.is_none()) && block.text.trim().is_empty()).then_some(row_depth);
         // A block made in an editor can sit straight after text it would be
         // read back as part of; a blank line keeps it a block.
-        if block.layout.gap.is_empty() {
+        if block.layout.gap.is_empty() && !opens_empty {
             if let Some(column) = continuing {
                 if !starts_block(first.trim_start_matches(' '), indentation(&first) >= column) {
                     lines.push(String::new());

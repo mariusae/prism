@@ -117,11 +117,13 @@ extension NoteEditorView {
             let writing = view.isWriting
             revealed = writing ? BodyStyler.revealed(layout, selection: view.caret) : []
             isApplying = true
+            styler.prose = parent.prose
+            manager.prose = parent.prose
             manager.theme = parent.theme
             manager.lines = layout.lines
             manager.isWriting = writing
             manager.lead = parent.lead
-            if let first = layout.lines.first, case .item(let number, let done, _) = first.kind, number == nil, done == nil, first.depth <= 1 {
+            if !parent.prose, let first = layout.lines.first, case .item(let number, let done, _) = first.kind, number == nil, done == nil, first.depth <= 1 {
                 manager.leadStart = Int(first.start)
             } else {
                 manager.leadStart = nil
@@ -335,7 +337,7 @@ extension NoteEditorView {
                     // An empty row has no character to carry its indentation.
                     let paragraph = NSMutableParagraphStyle()
                     paragraph.lineSpacing = 3
-                    paragraph.firstLineHeadIndent = CGFloat(line.depth) * parent.theme.step
+                    paragraph.firstLineHeadIndent = CGFloat(Int(line.depth) - (parent.prose ? 1 : 0)) * parent.theme.step
                     paragraph.headIndent = paragraph.firstLineHeadIndent
                     attributes[.paragraphStyle] = paragraph
                 }

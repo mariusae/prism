@@ -196,6 +196,8 @@ public struct WeftMacApp: App {
                 Button("Next Card") { store?.river.select(step: 1) }.keyboardShortcut(.downArrow, modifiers: [.command, .option])
                 Button("Write in Selected Card") { write() }.keyboardShortcut(.return, modifiers: [.command, .option])
                 Button("Make First Line the Title") { titleByFirstLine() }.keyboardShortcut("t", modifiers: [.control, .shift])
+                // Prose or an outline: the same rows, the top level drawn as paragraphs.
+                Button("Show as Prose or Outline") { toggleProse() }.keyboardShortcut("p", modifiers: [.command, .control])
                 Button("Delete Note") { deleteCard() }.keyboardShortcut(.delete, modifiers: .command)
             }
             CommandGroup(before: .windowList) {
@@ -334,6 +336,12 @@ public struct WeftMacApp: App {
     }
 
     /// The first line of the card chosen — the one being written in, if one is — made its title.
+    private func toggleProse() {
+        guard let store, let id = store.river.writing ?? store.river.selected, let card = store.river.card(id) else { return NSSound.beep() }
+        let draft = store.draft(path: card.path, title: card.title)
+        draft.setProse(!draft.isProse)
+    }
+
     private func titleByFirstLine() {
         guard let store, let chosen = store.river.writing ?? store.river.selected, let card = store.river.card(chosen) else { return }
         withAnimation(.snappy(duration: 0.22)) { _ = store.draft(path: card.path, title: card.title).titleByFirstLine() }

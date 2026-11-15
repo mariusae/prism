@@ -104,7 +104,7 @@ struct CardView: View {
         .overlay(alignment: .topLeading) {
             // Only for a note that opens with no bullet for it to stand in
             // place of: then small, in the margin beside its first line.
-            if !card.folded, !showsHeader, editorLead != nil, !NoteEditorView.takesLead(draft.editor) {
+            if !card.folded, !showsHeader, editorLead != nil, draft.isProse || !NoteEditorView.takesLead(draft.editor) {
                 lead(size: TextSettings.size).opacity(0.85).frame(width: Measures.margin).padding(.top, 17)
             }
         }
@@ -495,7 +495,7 @@ struct CardView: View {
                         WebCards.shared.look(address)
                         return WebCards.shared.found[address]?.title
                     },
-                    lead: isFocus ? nil : editorLead, onLead: { leadClicked() },
+                    lead: isFocus ? nil : editorLead, onLead: { leadClicked() }, prose: !isFocus && draft.isProse,
                     offers: { found in store.linkOffers(found.typed, this: card.path) },
                     offersTitle: !isFocus && isUntitled, onTitle: { withAnimation(.snappy(duration: 0.22)) { _ = draft.titleByFirstLine() } },
                     // Which rows are folded is the note's own to remember. What a river
@@ -527,7 +527,7 @@ struct CardView: View {
                 // out — not a number that arrives a frame later and moves
                 // everything under it.
                 .fixedSize(horizontal: false, vertical: true)
-                .id(isFocus ? "focus" : "note")
+                .id(isFocus ? "focus" : draft.isProse ? "prose" : "outline")
                 // A to-do done is set back: there, and no longer asking.
                 .opacity(draft.task == .done ? 0.5 : 1)
             }
@@ -645,6 +645,7 @@ struct CardView: View {
         if isUntitled, !draft.isBlank { Button("Make First Line the Title", systemImage: "arrow.up") { withAnimation(.snappy(duration: 0.22)) { _ = draft.titleByFirstLine() } } }
         if draft.exists { Button("Icon and Colour…", systemImage: "paintpalette") { choosesLook = true } }
         if draft.exists { Button("Add Tag…", systemImage: "number") { addsTag = true } }
+        Button(draft.isProse ? "Show as Outline" : "Show as Prose", systemImage: draft.isProse ? "list.bullet.indent" : "text.alignleft") { draft.setProse(!draft.isProse) }
         if river.query == nil || !river.isFound(card.id) { MoveToRiverMenu(store: store, river: river, ids: [card.id]) }
         if !isDay {
             let today = Days.name(Date())

@@ -462,6 +462,18 @@ impl NoteEditor {
         self.session().markdown()
     }
 
+    /// Whether the note is written as prose — its top level more
+    /// paragraphs than list items: how it is shown when no one has said.
+    pub fn reads_as_prose(&self) -> bool {
+        self.session().reads_as_prose()
+    }
+
+    /// Shows the note as prose, or not: rows made at the top level are
+    /// written as paragraphs from then on. Nothing is changed by it.
+    pub fn set_prose(&self, prose: bool) {
+        self.session().set_prose(prose);
+    }
+
     /// What the view shows.
     pub fn text(&self) -> String {
         self.session().text().to_owned()

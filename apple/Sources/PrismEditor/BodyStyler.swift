@@ -80,6 +80,9 @@ struct BodyStyler {
     /// when that is not the name a link to it is written with: `nil`
     /// where the link already says it, or leads nowhere.
     var linkLabel: (String) -> String? = { _ in nil }
+    /// Whether the note is shown as prose: every row a step further out,
+    /// so its top-level rows stand at the margin, as paragraphs, apart.
+    var prose = false
     /// A row's own Markdown, by its place among the lines: the view shows
     /// its words only.
     var rowMarkdown: (Int) -> String? = { _ in nil }
@@ -130,10 +133,11 @@ struct BodyStyler {
             let paragraph = NSMutableParagraphStyle()
             paragraph.lineSpacing = 3
             // A row stands in from the margin by its depth; what it is, is drawn in the step before it.
-            let indent = CGFloat(line.depth) * theme.step
+            // As prose, a step less: a top-level row is a paragraph, at the margin, set apart.
+            let indent = CGFloat(Int(line.depth) - (prose ? 1 : 0)) * theme.step
             paragraph.firstLineHeadIndent = indent
             paragraph.headIndent = indent
-            paragraph.paragraphSpacing = (size * 0.2).rounded()
+            paragraph.paragraphSpacing = (size * (prose && line.depth <= 1 ? 0.7 : 0.2)).rounded()
             switch line.kind {
             case .heading(let level):
                 let scale = Self.headingScales[min(max(Int(level), 1), 6) - 1]
@@ -421,6 +425,14 @@ final class BodyLayoutManager: NSLayoutManager {
     /// Where rows being carried would be put down: a line across the
     /// note at a height, from how far in they would lie.
     var dropLine: (y: CGFloat, x: CGFloat)?
+    /// Whether the note is shown as prose: rows a step further out, and
+    /// the top-level ones — paragraphs — with no handle and no guide.
+    var prose = false
+
+    /// Whether a row is drawn with its handle: as prose, a paragraph is not.
+    private func hasHandle(_ row: BodyLine) -> Bool {
+        !(prose && row.depth <= 1)
+    }
 
     /// The row whose mark — a bullet, a number, a ring — is at a point:
     /// its place among the lines. Not a task's box, which is ticked.
@@ -490,6 +502,7 @@ final class BodyLayoutManager: NSLayoutManager {
     /// stands beside it — so the bullet would come only with the first word.
     func drawEmptyRow(at origin: CGPoint) {
         guard textStorage?.length == 0 else { return }
+        if prose { return }
         if !rows.isEmpty { return drawBackground(forGlyphRange: NSRange(location: 0, length: 0), at: origin) }
         // No row at all yet — a note just made: the bullet its first row will have, where the caret waits.
         guard isWriting else { return }
@@ -540,7 +553,7 @@ final class BodyLayoutManager: NSLayoutManager {
     /// The box a row's mark is drawn in: the step before its words.
     private func markBox(of row: BodyLine, on line: (rect: CGRect, baseline: CGFloat)) -> CGRect {
         let step = theme.step
-        return CGRect(x: CGFloat(max(Int(row.depth) - 1, 0)) * step, y: line.rect.minY, width: step, height: line.rect.height)
+        return CGRect(x: CGFloat(Int(row.depth) - 1 - (prose ? 1 : 0)) * step, y: line.rect.minY, width: step, height: line.rect.height)
     }
 
     override func drawBackground(forGlyphRange glyphsToShow: NSRange, at origin: CGPoint) {
@@ -557,7 +570,7 @@ final class BodyLayoutManager: NSLayoutManager {
                 let glyphs = glyphRange(forCharacterRange: NSRange(location: Int(row.start), length: max(Int(row.end) - Int(row.start), 0)), actualCharacterRange: nil)
                 var rect = glyphs.length > 0 ? boundingRect(forGlyphRange: glyphs, in: container) : (firstLine(of: row)?.rect ?? .null)
                 guard !rect.isNull else { continue }
-                let left = CGFloat(row.depth) * theme.step - 3
+                let left = max(CGFloat(Int(row.depth) - (prose ? 1 : 0)) * theme.step - 3, 0)
                 rect.origin.x = left
                 rect.size.width = container.size.width - left
                 Self.roundedPath(rect.offsetBy(dx: origin.x, dy: origin.y), radius: 3).fill()
@@ -598,7 +611,7 @@ final class BodyLayoutManager: NSLayoutManager {
             }
             // A plain row with nothing in it and nothing under it has no handle, as Bike's.
             let bare = row.end <= row.start && !row.hasChildren && done == nil && number == nil && bullet == "-"
-            if !bare { drawHandle(midX: box.midX, midY: baseline - font.xHeight / 2, expanded: row.hasChildren && !row.isFolded, dark: row.hasChildren && row.isFolded) }
+            if !bare, hasHandle(row) { drawHandle(midX: box.midX, midY: baseline - font.xHeight / 2, expanded: row.hasChildren && !row.isFolded, dark: row.hasChildren && row.isFolded) }
             let mark = box.offsetBy(dx: theme.step, dy: 0)
             if let done {
                 let side = (size * 0.95).rounded()
@@ -616,7 +629,7 @@ final class BodyLayoutManager: NSLayoutManager {
             }
         }
         // Guide lines, as Bike's: down from an expanded row's handle, the height of what it shows.
-        for (index, row) in rows.enumerated() where row.hasChildren && !row.isFolded {
+        for (index, row) in rows.enumerated() where row.hasChildren && !row.isFolded && hasHandle(row) {
             guard let first = firstLine(of: row) else { continue }
             var last = index
             while last + 1 < rows.count, rows[last + 1].depth > row.depth { last += 1 }
@@ -794,9 +807,9 @@ final class BodyLayoutManager: NSLayoutManager {
     // MARK: An outline's rows, where a touch finds them
 
     /// How many rows a row is under: what its mark is set in by.
-    static func level(of row: BodyLine) -> Int {
-        // Every row as a row: a top-level row of any kind is at depth 1.
-        max(Int(row.depth) - 1, 0)
+    func level(of row: BodyLine) -> Int {
+        // Every row as a row: a top-level row of any kind is at depth 1 — as prose, a step further out.
+        Int(row.depth) - 1 - (prose ? 1 : 0)
     }
 
     /// The row of an outline at a point of the container: its place
@@ -833,7 +846,7 @@ final class BodyLayoutManager: NSLayoutManager {
         guard lines.indices.contains(rows.lowerBound), lines.indices.contains(rows.upperBound) else { return .zero }
         var rect = rows.reduce(CGRect.null) { $0.union(self.rect(ofRow: $1)) }
         guard !rect.isNull else { return .zero }
-        let left = theme.step * CGFloat(Self.level(of: lines[rows.lowerBound]))
+        let left = max(theme.step * CGFloat(level(of: lines[rows.lowerBound])), 0)
         rect.size.width = max(rect.maxX - left, 0)
         rect.origin.x = left
         return rect.integral
@@ -843,15 +856,16 @@ final class BodyLayoutManager: NSLayoutManager {
     /// point, if one is: the step before its words, on any of its lines.
     func marker(at point: CGPoint, in container: NSTextContainer) -> Int? {
         guard let index = row(at: point, in: container) else { return nil }
-        let left = theme.step * CGFloat(Self.level(of: lines[index]))
+        guard hasHandle(lines[index]) else { return nil }
+        let left = theme.step * CGFloat(level(of: lines[index]))
         return point.x > left - 6 && point.x < left + theme.step - 2 ? index : nil
     }
 
     /// Where a folded row's pill is, in the container: after the words of
     /// its last line, on the middle of their capitals.
     func foldPill(ofRow index: Int) -> CGRect? {
-        // Bike shows a folded row by its dark handle, and no pill.
-        guard Self.drawsFoldPills, lines.indices.contains(index), lines[index].isFolded, let storage = textStorage else { return nil }
+        // Bike shows a folded row by its dark handle, and no pill — but a paragraph, as prose, has no handle.
+        guard lines.indices.contains(index), Self.drawsFoldPills || !hasHandle(lines[index]), lines[index].isFolded, let storage = textStorage else { return nil }
         let line = lines[index]
         let font = theme.body
         let height = (font.capHeight + 9).rounded()
@@ -859,7 +873,7 @@ final class BodyLayoutManager: NSLayoutManager {
         guard line.end > line.start, Int(line.end) <= storage.length else {
             // No words: where they would begin.
             guard let first = firstLine(of: line) else { return nil }
-            return CGRect(origin: CGPoint(x: CGFloat(line.depth) * theme.step, y: (first.baseline - font.capHeight / 2 - height / 2).rounded()), size: size)
+            return CGRect(origin: CGPoint(x: CGFloat(Int(line.depth) - (prose ? 1 : 0)) * theme.step, y: (first.baseline - font.capHeight / 2 - height / 2).rounded()), size: size)
         }
         let last = glyphIndexForCharacter(at: Int(line.end) - 1)
         let fragment = lineFragmentRect(forGlyphAt: last, effectiveRange: nil)

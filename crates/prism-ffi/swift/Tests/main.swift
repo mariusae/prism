@@ -49,6 +49,13 @@ expect(indented != nil && open.markdown() == "# Atlas\n\n- one!\n  - two\n", "ty
 _ = open.undo()
 expect(open.markdown() == "# Atlas\n\n- one!\n- two\n" && open.canRedo(), "undo puts structure back")
 
+let essay = NoteEditor.open(source: "# Essay\n\nOne thought.\n\nAnother.\n")
+essay.setProse(prose: true)
+let essayEnd = UInt32((essay.text() as NSString).length)
+_ = essay.perform(selectionStart: essayEnd, selectionEnd: essayEnd, command: .newline)
+_ = essay.replace(start: essayEnd + 1, end: essayEnd + 1, replacement: "A third.")
+expect(essay.readsAsProse() && essay.markdown() == "# Essay\n\nOne thought.\n\nAnother.\n\nA third.\n", "a note written as prose reads as prose, and its new rows are paragraphs")
+
 // Rows fold, are carried, and tell the time: an outline's own, wherever the caret is.
 let outline = NoteEditor.open(source: "- one\n  - 9:00–9:30 two\n  - 10:00 three\n- last\n")
 let foldedRow = outline.performOn(rows: [0], selectionStart: 0, selectionEnd: 0, command: .fold)
