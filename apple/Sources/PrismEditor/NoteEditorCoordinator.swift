@@ -333,11 +333,11 @@ extension NoteEditorView {
             if let line = layout.lines.first(where: { Int($0.start) <= caret && caret <= Int($0.end) }) {
                 let at = min(Int(line.start), max(storage.length - 1, 0))
                 if storage.length > 0, let style = storage.attribute(.paragraphStyle, at: at, effectiveRange: nil) { attributes[.paragraphStyle] = style }
-                if case .item = line.kind, storage.length == Int(line.start) || line.start == line.end {
-                    // An empty row has no character to carry its indentation.
+                if storage.length == Int(line.start) || line.start == line.end {
+                    // An empty row has no character to carry its indentation: the caret after its mark.
                     let paragraph = NSMutableParagraphStyle()
                     paragraph.lineSpacing = 3
-                    paragraph.firstLineHeadIndent = CGFloat(Int(line.depth) - (parent.prose ? 1 : 0)) * parent.theme.step
+                    paragraph.firstLineHeadIndent = BodyStyler.wordsIndent(of: line, step: parent.theme.step, prose: parent.prose)
                     paragraph.headIndent = paragraph.firstLineHeadIndent
                     attributes[.paragraphStyle] = paragraph
                 }

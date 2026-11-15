@@ -284,14 +284,16 @@ struct CardsOverview: View {
                 ScrollView {
                     // Columns, each packed close: a card goes under the one before it in its
                     // column, however tall — cards dealt across them in order, left to right.
+                    // Each column as wide as its share and no wider: what a card holds never
+                    // widens it, so nothing here can ask the window for more room.
                     HStack(alignment: .top, spacing: 14) {
                         ForEach(0..<columns, id: \.self) { column in
                             LazyVStack(spacing: 14) {
                                 ForEach(Self.column(column, of: columns, in: cards)) { card in
-                                    tile(card)
+                                    tile(card).frame(minWidth: 0, maxWidth: .infinity)
                                 }
                             }
-                            .frame(maxWidth: .infinity, alignment: .top)
+                            .frame(minWidth: 0, maxWidth: .infinity, alignment: .top)
                         }
                     }
                     .padding(22)
@@ -300,12 +302,17 @@ struct CardsOverview: View {
                         Text(typed.isEmpty ? "Nothing in this river yet" : "No card says that").font(.callout).foregroundStyle(Color.inkFaint).padding(40)
                     }
                 }
-                .onGeometryChange(for: Int.self) { max(Int(($0.size.width - 44 + 14) / (188 + 14)), 1) } action: { columns = $0 }
                 .onChange(of: cursor) { _, at in if let at { proxy.scrollTo(at) } }
             }
             if chosen.count > 1 { bar }
         }
         .background(Color.inkPage)
+        // The overview takes the room it is given, and asks for none: laid over the river,
+        // a size of its own would be the window's least size — and the window, made to fit it,
+        // would give the columns more room, and them more cards across, without end.
+        .frame(minWidth: 0, maxWidth: .infinity, minHeight: 0, maxHeight: .infinity)
+        // How many across, from that room alone — never from what the columns hold.
+        .onGeometryChange(for: Int.self) { max(Int(($0.size.width - 44 + 14) / (188 + 14)), 1) } action: { if columns != $0 { columns = $0 } }
         .onAppear {
             focused = true
             cursor = river.selected ?? river.all.first?.id

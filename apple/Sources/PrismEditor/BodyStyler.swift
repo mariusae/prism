@@ -12,7 +12,12 @@ import UIKit
 /// the link is written with the page's file's name.
 final class LinkLabel: NSObject {
     let text: NSAttributedString
-    init(_ text: NSAttributedString) { self.text = text }
+    /// How far in from its character the title is drawn: the room its page's icon takes first.
+    let lead: CGFloat
+    init(_ text: NSAttributedString, lead: CGFloat = 0) {
+        self.text = text
+        self.lead = lead
+    }
 }
 
 final class Pill: NSObject {
@@ -25,12 +30,16 @@ final class Pill: NSObject {
     /// Whether the room for the ↗ is on the link's own last character — an
     /// address written bare — and so inside what its words take.
     let roomInside: Bool
-    init(symbol: String?, tint: EditorColor, isMissing: Bool, leaves: Bool = false, roomInside: Bool = false) {
+    /// Whether the icon's room is the link's own — a link to a page, one character
+    /// drawn as its title, the icon first in it — rather than before it.
+    let iconInside: Bool
+    init(symbol: String?, tint: EditorColor, isMissing: Bool, leaves: Bool = false, roomInside: Bool = false, iconInside: Bool = false) {
         self.symbol = symbol
         self.tint = tint
         self.isMissing = isMissing
         self.leaves = leaves
         self.roomInside = roomInside
+        self.iconInside = iconInside
     }
 }
 
@@ -88,6 +97,22 @@ struct BodyStyler {
     var linkIcon: (String) -> String? = { _ in nil }
 
     static let hiddenFont = EditorFont.systemFont(ofSize: 0.1)
+
+    /// How far in a row's words begin. A row stands in from the margin by its
+    /// depth, what it is drawn in the step before it; a typed row — a task, a
+    /// number, a bulleted row — and a quote have their mark a step further in,
+    /// after the handle, as Bike's list marks are. As prose, a step less: a
+    /// top-level row is a paragraph, at the margin. An empty row's caret
+    /// stands here too, with no character to carry it.
+    static func wordsIndent(of line: BodyLine, step: CGFloat, prose: Bool) -> CGFloat {
+        var steps = Int(line.depth) - (prose ? 1 : 0)
+        switch line.kind {
+        case .item(let number, let done, let bullet) where done != nil || number != nil || bullet != "-": steps += 1
+        case .quote: steps += 1
+        default: break
+        }
+        return CGFloat(steps) * step
+    }
     /// A note's first heading is its own; those under it are structure, and read
     /// as a section's name — at the body's size, set apart by weight and room.
     static let headingScales: [CGFloat] = [1.3, 1.02, 1, 1, 0.95, 0.95]
@@ -130,9 +155,7 @@ struct BodyStyler {
             guard NSMaxRange(range) <= storage.length else { continue }
             let paragraph = NSMutableParagraphStyle()
             paragraph.lineSpacing = 3
-            // A row stands in from the margin by its depth; what it is, is drawn in the step before it.
-            // As prose, a step less: a top-level row is a paragraph, at the margin, set apart.
-            let indent = CGFloat(Int(line.depth) - (prose ? 1 : 0)) * theme.step
+            let indent = Self.wordsIndent(of: line, step: theme.step, prose: prose)
             paragraph.firstLineHeadIndent = indent
             paragraph.headIndent = indent
             paragraph.paragraphSpacing = (size * (prose && line.depth <= 1 ? 0.7 : 0.2)).rounded()
@@ -141,22 +164,14 @@ struct BodyStyler {
                 let scale = Self.headingScales[min(max(Int(level), 1), 6) - 1]
                 storage.addAttribute(.font, value: theme.font(size * scale, weight: .semibold), range: range)
                 paragraph.paragraphSpacingBefore += index == 0 ? 0 : (size * 0.5).rounded()
-            case .item(let number, let done, let bullet):
-                // A typed row — a task, a number, a bulleted row — has its mark in a step of
-                // room before its words, after its handle, as Bike's list marks are.
-                if done != nil || number != nil || bullet != "-" {
-                    paragraph.firstLineHeadIndent += theme.step
-                    paragraph.headIndent += theme.step
-                }
+            case .item(_, let done, _):
                 if done == true {
                     // Done, as Bike's: struck through, thick.
                     let words = NSRange(location: Int(line.content), length: max(Int(line.end) - Int(line.content), 0))
                     storage.addAttributes([.foregroundColor: theme.secondary, .strikethroughStyle: NSUnderlineStyle.thick.rawValue, .strikethroughColor: theme.secondary], range: words)
                 }
             case .quote:
-                // As Bike's: its words a step in, the bar in that step.
-                paragraph.firstLineHeadIndent += theme.step
-                paragraph.headIndent += theme.step
+                // As Bike's: its words a step in (see `wordsIndent`), the bar in that step.
                 storage.addAttribute(.prismQuote, value: true, range: range)
                 storage.addAttribute(.foregroundColor, value: theme.secondary, range: range)
             case .code:
@@ -170,6 +185,9 @@ struct BodyStyler {
             default:
                 break
             }
+            // The last row has nothing after it to be set apart from: no room after it,
+            // which would only stand empty under the note.
+            if index == layout.lines.count - 1 { paragraph.paragraphSpacing = 0 }
             // The paragraph's style covers its line break too.
             let paragraphRange = NSRange(location: range.location, length: min(range.length + 1, storage.length - range.location))
             if paragraphRange.length > 0 { storage.addAttribute(.paragraphStyle, value: paragraph, range: paragraphRange) }
@@ -217,7 +235,8 @@ struct BodyStyler {
                 let words = (storage.string as NSString).substring(with: range)
                 if words == "\u{FFFC}" {
                     // A link to a page is one character: drawn as its page's title, or its own name.
-                    relabel(storage, range, as: isRiver ? target : (linkLabel(target) ?? target))
+                    // Its icon in its own room, first: never out over what stands before the row's words.
+                    relabel(storage, range, as: isRiver ? target : (linkLabel(target) ?? target), lead: symbol == nil ? 0 : leadWidth)
                 } else if !isRiver, words == target, let label = linkLabel(target) {
                     relabel(storage, range, as: label)
                 }
@@ -282,9 +301,11 @@ struct BodyStyler {
         // In a heading, a link is only coloured.
         if case .heading = line.kind { return }
         let closes = markupEnd[NSMaxRange(range)].map { $0 > NSMaxRange(range) } ?? false
-        storage.addAttribute(.prismPill, value: Pill(symbol: symbol, tint: tint, isMissing: missing, leaves: leaves, roomInside: leaves && !closes), range: range)
+        // A link to a page shown as its title — one character — has its icon's room in it.
+        let atom = (storage.string as NSString).substring(with: range) == "\u{FFFC}"
+        storage.addAttribute(.prismPill, value: Pill(symbol: symbol, tint: tint, isMissing: missing, leaves: leaves, roomInside: leaves && !closes, iconInside: atom), range: range)
         // Room for the icon, on the last character of the markup before the words…
-        if symbol != nil, range.location > Int(line.start) {
+        if symbol != nil, !atom, range.location > Int(line.start) {
             storage.addAttribute(.kern, value: leadWidth, range: NSRange(location: range.location - 1, length: 1))
         }
         // …and after them, for the ↗ of a link that leaves: on the last of the
@@ -300,7 +321,7 @@ struct BodyStyler {
     /// Shows other words in a link's place: what is written is hidden,
     /// and room for the words is left after it, where they are drawn
     /// ([`BodyLayoutManager`]). What is written is not touched.
-    private func relabel(_ storage: NSTextStorage, _ range: NSRange, as label: String) {
+    private func relabel(_ storage: NSTextStorage, _ range: NSRange, as label: String, lead: CGFloat = 0) {
         guard range.length > 0 else { return }
         let font = (storage.attribute(.font, at: range.location, effectiveRange: nil) as? EditorFont) ?? theme.body
         let color = (storage.attribute(.foregroundColor, at: range.location, effectiveRange: nil) as? EditorColor) ?? theme.accent
@@ -312,8 +333,12 @@ struct BodyStyler {
         // the room left after it. The rest takes no room: a line may
         // break in it, at a hyphen, and nothing shows that it did.
         let first = NSRange(location: range.location, length: 1)
-        let own = width(of: storage, from: first.location, to: first.location + 1)
-        storage.addAttributes([.foregroundColor: EditorColor.clear, .kern: max(text.size().width.rounded(.up) - own, 0), .prismLabel: LinkLabel(text)], range: first)
+        // What the first character takes, as it is laid out: in its own font — and a link
+        // to a page, one object-replacement character (U+FFFC) with nothing attached, none,
+        // though a font may measure it a letter wide.
+        let character = (storage.string as NSString).character(at: first.location)
+        let own = character == 0xFFFC ? 0 : (storage.string as NSString).substring(with: first).size(withAttributes: [.font: font]).width
+        storage.addAttributes([.foregroundColor: EditorColor.clear, .kern: max(lead + text.size().width.rounded(.up) - own, 0), .prismLabel: LinkLabel(text, lead: lead)], range: first)
         if range.length > 1 {
             storage.addAttributes([.font: Self.hiddenFont, .foregroundColor: EditorColor.clear, .prismMarkup: true], range: NSRange(location: range.location + 1, length: range.length - 1))
         }
@@ -638,12 +663,10 @@ final class BodyLayoutManager: NSLayoutManager {
                 rect.origin.x = left
                 rect.size.width = right - left
                 let baseline = fragment.minY + self.location(forGlyphAt: glyphs.location).y
-                // The icon's room is before the link — but for one that opens its line, whose room is
-                // its own first, hidden characters': there the pill begins where the line does.
-                let opens = range.location == 0 || (storage.string as NSString).character(at: range.location - 1) == 10
+                // The icon's room is before the link's words — in a link to a page, its own first.
                 // Nothing behind a link: its colour says it is one. Its page's icon before it…
                 if first, let symbol = pill.symbol {
-                    let x = opens ? rect.minX - side - 5 : rect.minX - side - 5
+                    let x = pill.iconInside ? rect.minX : rect.minX - side - 5
                     let icon = CGRect(x: x, y: baseline - font.xHeight / 2 - side / 2, width: side, height: side).offsetBy(dx: origin.x, dy: origin.y)
                     Self.draw(symbol: symbol, in: icon, pointSize: side * 0.9, weight: .regular, colors: [pill.tint.withAlphaComponent(0.85)])
                 }
@@ -668,7 +691,7 @@ final class BodyLayoutManager: NSLayoutManager {
             let fragment = lineFragmentRect(forGlyphAt: glyph.location, effectiveRange: nil)
             let at = location(forGlyphAt: glyph.location)
             let font = (label.text.attribute(.font, at: 0, effectiveRange: nil) as? EditorFont) ?? font
-            label.text.draw(at: CGPoint(x: fragment.minX + at.x + origin.x, y: fragment.minY + at.y - font.ascender + origin.y))
+            label.text.draw(at: CGPoint(x: fragment.minX + at.x + label.lead + origin.x, y: fragment.minY + at.y - font.ascender + origin.y))
         }
 
         storage.enumerateAttribute(.prismBullet, in: characters) { value, range, _ in

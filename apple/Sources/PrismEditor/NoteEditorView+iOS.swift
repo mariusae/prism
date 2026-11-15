@@ -272,7 +272,7 @@ extension NoteEditorView.Coordinator: UITextViewDelegate {
     func emptyRowIndent(at caret: Int) -> CGFloat? {
         if layout.lines.isEmpty { return parent.prose ? 0 : parent.theme.step }
         guard let line = layout.lines.last(where: { Int($0.start) <= caret && caret <= Int($0.end) }), line.start == line.end else { return nil }
-        return CGFloat(Int(line.depth) - (parent.prose ? 1 : 0)) * parent.theme.step
+        return BodyStyler.wordsIndent(of: line, step: parent.theme.step, prose: parent.prose)
     }
 
     /// Sets the row at a place in or out, wherever the caret is. Says
@@ -528,8 +528,13 @@ public final class NoteTextView: UITextView {
     }
 
     /// The caret on an empty last row stands where that row's words will.
+    /// Any caret is as tall as its words, as the Mac's is: never the room
+    /// after a paragraph, which the text system counts in its last line.
     private func standingCaret(for position: UITextPosition) -> CGRect {
         var rect = super.caretRect(for: position)
+        let font = (typingAttributes[.font] as? UIFont) ?? coordinator?.parent.theme.body ?? .systemFont(ofSize: UIFont.systemFontSize)
+        let tall = (font.ascender - font.descender).rounded(.up) + 2
+        if rect.height > tall { rect.size.height = tall }
         let at = offset(from: beginningOfDocument, to: position)
         let text = textStorage.string as NSString
         guard at == text.length, at == 0 || text.character(at: at - 1) == 10, let indent = coordinator?.emptyRowIndent(at: at) else { return rect }
