@@ -92,13 +92,23 @@ extension GraphStore {
     }
 
     /// Archives a note, or brings it back; for a moment, undone as easily.
-    public func toggleArchived(path: String, title: String) {
+    /// Archives a note, or brings it back. Archived from its card in a river,
+    /// the card is closed there too: put away is out of the way. Undo brings
+    /// the note back, and its card.
+    public func toggleArchived(path: String, title: String, closing card: Card.ID? = nil, in river: River? = nil) {
         guard !path.hasPrefix("daily/"), !path.hasPrefix("weekly/") else { return }
         let draft = draft(path: path, title: title)
         let now = !draft.isMarked("archived")
         draft.setField("archived", values: now ? ["true"] : [])
         draft.saveNow()
         if now { archived.insert(path) } else { archived.remove(path) }
+        // The card it was archived from, closed — and where it stood, to come back to.
+        var closed: (river: River, after: Card.ID?)?
+        if now, let card, let river, let place = river.all.firstIndex(where: { $0.id == card }) {
+            closed = (river, place > 0 ? river.all[place - 1].id : nil)
+            river.close(card)
+            rememberRivers()
+        }
         touchCollections()
         undoable(now ? "Archived “\(draft.label)”" : "Unarchived “\(draft.label)”") { [weak self] in
             guard let self else { return }
@@ -106,6 +116,7 @@ extension GraphStore {
             draft.setField("archived", values: now ? [] : ["true"])
             draft.saveNow()
             if now { self.archived.remove(path) } else { self.archived.insert(path) }
+            if let closed { self.show(path: path, title: title, after: closed.after, in: closed.river) }
             self.touchCollections()
         }
     }

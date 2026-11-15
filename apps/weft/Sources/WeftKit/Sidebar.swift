@@ -11,6 +11,8 @@ struct Sidebar: View {
     @State private var hits: [SearchHit] = []
     @AppStorage("WeftSidebarLens") private var lens = Lens.recent.rawValue
     @State private var pages: [PageInfo] = []
+    /// The Inbox lens's pinned notes, apart from the inbox's: a note may be both.
+    @State private var pinned: [PageInfo] = []
     @State private var tasks: [TaskInfo] = []
     @State private var tags: [TagCount] = []
     @FocusState private var searching: Bool
@@ -62,7 +64,9 @@ struct Sidebar: View {
     private func load() {
         switch chosen {
         case .recent: pages = query("sort: -modified\nlimit: 60")
-        case .inbox: pages = query("in: Pinned") + query("in: Inbox")
+        case .inbox:
+            pinned = query("in: \(GraphStore.pinnedRiver)")
+            pages = query("in: \(GraphStore.inboxRiver)")
         case .tasks: tasks = (try? store.engine.openTasks()) ?? []
         case .tags: tags = (try? store.engine.tags()) ?? []
         case .rivers: break
@@ -114,7 +118,14 @@ struct Sidebar: View {
 
     @ViewBuilder private var lensRows: some View {
         switch chosen {
-        case .recent, .inbox:
+        case .recent:
+            ForEach(pages, id: \.path) { page in titleRow(page.label, store.emblem(page)) { open(path: page.path, title: page.title) } }
+        case .inbox:
+            // Each river under its own name — a note pinned and in the inbox is in both —
+            // and its name opens it, a tab of its own.
+            riverHeading(GraphStore.pinnedRiver)
+            ForEach(pinned, id: \.path) { page in titleRow(page.label, store.emblem(page)) { open(path: page.path, title: page.title) } }
+            riverHeading(GraphStore.inboxRiver)
             ForEach(pages, id: \.path) { page in titleRow(page.label, store.emblem(page)) { open(path: page.path, title: page.title) } }
         case .rivers:
             ForEach(store.savedRivers) { saved in
@@ -166,6 +177,22 @@ struct Sidebar: View {
             .buttonStyle(.plain)
         }
         if hits.isEmpty { Text("Nothing found").foregroundStyle(Color.inkSecondary) }
+    }
+
+    /// A saved river's name over its notes: clicked, the river itself, as a tab.
+    private func riverHeading(_ name: String) -> some View {
+        Button { withAnimation(.snappy(duration: 0.2)) { store.openSaved(name) } } label: {
+            HStack(spacing: 4) {
+                Text(name).font(.caption.weight(.semibold)).foregroundStyle(Color.inkSecondary)
+                Image(systemName: "arrow.up.forward").font(.caption2.weight(.semibold)).foregroundStyle(Color.inkFaint)
+                Spacer(minLength: 0)
+            }
+            .padding(.top, 8)
+            .padding(.horizontal, 10)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .help("Open \(name) as a River")
     }
 
     private func titleRow(_ title: String, _ emblem: Emblem, detail: String? = nil, action: @escaping () -> Void) -> some View {

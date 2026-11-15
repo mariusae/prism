@@ -268,7 +268,10 @@ extension NoteEditorView {
                     let row = found.lines.lowerBound
                     block.showAsLink = { [weak self] in self?.toggleCard(row: row) }
                 }
-                guard !found.lines.contains(where: revealed.contains), let content = parent.blockView(block) else { continue }
+                // Written in, a query shows the words it asks with, and a link's card its words: a
+                // picture has none to show — it stays the picture, the caret beside it.
+                let reveals = found.block.info != EditorBlock.picture
+                guard !(reveals && found.lines.contains(where: revealed.contains)), let content = parent.blockView(block) else { continue }
                 let key = "\(index)|\(found.block.info)|\(found.block.info == EditorBlock.picture || found.block.info == EditorBlock.card ? found.block.source : "")"
                 used.insert(key)
                 let host = hosts[key] ?? {

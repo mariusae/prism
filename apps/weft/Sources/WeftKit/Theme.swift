@@ -106,21 +106,50 @@ public enum TextSettings {
     final class Chosen {
         static let shared = Chosen()
         var size: CGFloat {
-            didSet { UserDefaults.standard.set(Double(size), forKey: "WeftTextSize") }
+            didSet { Self.kept.set(Double(size), forKey: "WeftTextSize") }
         }
         var face: EditorFace {
-            didSet { UserDefaults.standard.set(TextSettings.name(of: face), forKey: "Typeface") }
+            didSet { Self.kept.set(TextSettings.name(of: face), forKey: "Typeface") }
         }
 
-        private init() {
-            let kept = UserDefaults.standard.double(forKey: "WeftTextSize")
-            size = kept == 0 ? TextSettings.defaultSize : min(max(CGFloat(kept), TextSettings.range.lowerBound), TextSettings.range.upperBound)
-            switch UserDefaults.standard.string(forKey: "Typeface") {
-            case "apple", "serif": face = .serif
-            case "rounded": face = .rounded
-            case "mono": face = .mono
-            default: face = .sans
+        /// Where the choice is kept. On the phone, in the app group: Weft and
+        /// Weft Reader read the same — the Reader follows what is chosen in Weft.
+        private static let kept: UserDefaults = {
+            #if os(iOS)
+            guard let group = UserDefaults(suiteName: Setup.appGroup) else { return .standard }
+            // Chosen before it was shared: carried over, once.
+            for key in ["WeftTextSize", "Typeface"] where group.object(forKey: key) == nil {
+                if let mine = UserDefaults.standard.object(forKey: key) { group.set(mine, forKey: key) }
             }
+            return group
+            #else
+            return .standard
+            #endif
+        }()
+
+        private init() {
+            (size, face) = Self.read()
+            #if os(iOS)
+            // Changed in the other app while this one was away: taken up on coming back.
+            NotificationCenter.default.addObserver(forName: UIApplication.didBecomeActiveNotification, object: nil, queue: .main) { _ in
+                MainActor.assumeIsolated {
+                    let (size, face) = Chosen.read()
+                    if size != Chosen.shared.size { Chosen.shared.size = size }
+                    if face != Chosen.shared.face { Chosen.shared.face = face }
+                }
+            }
+            #endif
+        }
+
+        private static func read() -> (CGFloat, EditorFace) {
+            let size = kept.double(forKey: "WeftTextSize")
+            let face: EditorFace = switch kept.string(forKey: "Typeface") {
+            case "apple", "serif": .serif
+            case "rounded": .rounded
+            case "mono": .mono
+            default: .sans
+            }
+            return (size == 0 ? TextSettings.defaultSize : min(max(CGFloat(size), TextSettings.range.lowerBound), TextSettings.range.upperBound), face)
         }
     }
 

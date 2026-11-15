@@ -780,8 +780,15 @@ public final class GraphStore {
         let format = DateFormatter()
         format.locale = Locale(identifier: "en_US_POSIX")
         format.dateFormat = "yyyy-MM-dd-HHmmss"
-        let tail = String((0..<4).map { _ in "abcdefghijklmnopqrstuvwxyz0123456789".randomElement() ?? "x" })
-        let name = "untitled-\(format.string(from: Date()))-\(tail)"
+        // Named for when it was made — a name that says nothing, so its first words title it —
+        // and, made twice in a second, `-2` on.
+        let stamp = format.string(from: Date())
+        var name = stamp
+        var again = 2
+        while ((try? engine.read(path: "notes/\(name).md")) ?? nil) != nil {
+            name = "\(stamp)-\(again)"
+            again += 1
+        }
         let path = "notes/\(name).md"
         // Words given it — dictated — are its first row, and it is not opened to be written in.
         let said = words.map { $0.replacingOccurrences(of: "\n", with: " ").trimmingCharacters(in: .whitespaces) }
@@ -1445,6 +1452,9 @@ public final class River: Identifiable {
     public var selected: Card.ID?
     /// The card with the caret in it.
     public var writing: Card.ID?
+    /// A card asked to be written in from its end — "Edit", for a note whose
+    /// every touch is a picture's: the caret after all of it.
+    public var writingAtEnd: Card.ID?
     /// The card whose title has gone up under the window's bar while the
     /// card itself is still in sight: its title is then shown in the bar.
     public var stuck: Card.ID?

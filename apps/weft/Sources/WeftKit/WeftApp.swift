@@ -176,7 +176,7 @@ public struct WeftMacApp: App {
                 Divider()
                 Button("Archive") {
                     guard let store, let id = store.river.writing ?? store.river.selected, let card = store.river.card(id) else { return NSSound.beep() }
-                    withAnimation(.snappy(duration: 0.2)) { store.toggleArchived(path: card.path, title: card.title) }
+                    withAnimation(.snappy(duration: 0.2)) { store.toggleArchived(path: card.path, title: card.title, closing: card.id, in: store.river) }
                 }
                 .keyboardShortcut("a", modifiers: [.command, .control])
                 Button("Move to River…") {

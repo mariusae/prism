@@ -57,15 +57,21 @@ impl NoteKind {
     }
 
     /// Whether a file's name is one a note is given when it is given no
-    /// name: only an id, or `untitled`, or `untitled-` and a stamp. Such
-    /// a name titles nothing: see [`Note::is_untitled`].
+    /// name: only an id, or a stamp of when it was made
+    /// (`2026-11-15-114230`, and `-2` if that was taken), or `untitled`, or
+    /// `untitled-` and a stamp. Such a name titles nothing: see
+    /// [`Note::is_untitled`].
     pub fn is_unnamed(path: &str) -> bool {
         if NoteKind::of(path) != Some(NoteKind::Note) {
             return false;
         }
         let name = path.rsplit('/').next().unwrap_or(path);
         let stem = name.strip_suffix(".md").unwrap_or(name).to_lowercase();
-        is_ulid(name.strip_suffix(".md").unwrap_or(name)) || stem == "untitled" || stem.starts_with("untitled-") || stem.starts_with("untitled ")
+        is_ulid(name.strip_suffix(".md").unwrap_or(name))
+            || is_stamp(&stem)
+            || stem == "untitled"
+            || stem.starts_with("untitled-")
+            || stem.starts_with("untitled ")
     }
 
     /// The path a day's page is kept at.
@@ -596,6 +602,23 @@ fn tag_writable(name: &str) -> bool {
     matches!(inline::parse(&written).as_slice(), [span] if span.range == (0..written.len()) && matches!(&span.kind, SpanKind::Tag(tag) if tag == name))
 }
 
+/// Whether a name is a stamp of when a note was made: `2026-11-15-114230`
+/// — a day and a time to the second — with `-2` and on if that one was taken.
+fn is_stamp(stem: &str) -> bool {
+    let (stamp, again) = match stem.get(17..) {
+        Some(rest) if !rest.is_empty() => (&stem[..17], rest.strip_prefix('-').filter(|n| !n.is_empty() && n.bytes().all(|b| b.is_ascii_digit()))),
+        _ => (stem, Some("")),
+    };
+    let digits = |range: std::ops::Range<usize>| stamp.get(range).is_some_and(|part| part.bytes().all(|b| b.is_ascii_digit()));
+    again.is_some()
+        && stamp.len() == 17
+        && digits(0..4)
+        && digits(5..7)
+        && digits(8..10)
+        && digits(11..17)
+        && [4, 7, 10].iter().all(|&at| stamp.as_bytes()[at] == b'-')
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -625,6 +648,13 @@ mod tests {
 
     #[test]
     fn an_untitled_note_is_called_by_its_first_words() {
+        // A note made with no name is named for when it was made: that names nothing.
+        for unnamed in ["notes/2026-11-15-114230.md", "notes/2026-11-15-114230-2.md"] {
+            assert!(NoteKind::is_unnamed(unnamed), "{unnamed}");
+        }
+        for named in ["notes/2026-11-15.md", "notes/2026-11-15-plans.md", "notes/2026-11-15-1142.md", "daily/2026-11-15.md"] {
+            assert!(!NoteKind::is_unnamed(named), "{named}");
+        }
         let path = "notes/untitled-2026-11-10-135831-jmgs.md";
         let note = Note::parse("---\npinned: true\n---\n- ![](assets/pasted.png)\n- [ ] And *also*: [[semantic search]]\n");
         assert!(note.is_untitled(path));

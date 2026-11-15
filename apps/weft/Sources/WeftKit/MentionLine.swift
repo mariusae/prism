@@ -13,6 +13,8 @@ struct MentionLine: View {
     let titles: [String]
     var open: (Int) -> Void
     var openAll: () -> Void
+    /// What a name held shows, on the phone: its note's card, as a link held does.
+    var preview: ((Int) -> AnyView)?
     @State private var width: CGFloat = 320
 
     private static let size: CGFloat = {
@@ -52,11 +54,21 @@ struct MentionLine: View {
                 .buttonStyle(.plain)
                 .help("Every Mention, as a River")
             ForEach(Array(titles.prefix(shown).enumerated()), id: \.offset) { index, title in
-                Button { open(index) } label: { Text(title).foregroundStyle(Color.inkSecondary).lineLimit(1) }
+                let name = Button { open(index) } label: { Text(title).foregroundStyle(Color.inkSecondary).lineLimit(1) }
                     .buttonStyle(.plain)
-                    #if os(macOS)
-                    .pointerStyle(.link)
-                    #endif
+                #if os(macOS)
+                name.pointerStyle(.link)
+                #else
+                if let preview {
+                    name.contextMenu {
+                        Button("Open", systemImage: "arrow.up.forward") { open(index) }
+                    } preview: {
+                        preview(index).frame(width: 300)
+                    }
+                } else {
+                    name
+                }
+                #endif
                 if index < shown - 1 || shown < titles.count {
                     Text(index < shown - 1 ? ", " : " ").foregroundStyle(Color.inkFaint)
                 }

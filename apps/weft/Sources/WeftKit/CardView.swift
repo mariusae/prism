@@ -638,7 +638,7 @@ struct CardView: View {
             if draft.task != .none { Button("No Longer a To-Do", systemImage: "circle.slash") { draft.setTask(.none) } }
             Button(store.isPinned(card.path) ? "Unpin" : "Pin", systemImage: store.isPinned(card.path) ? "pin.slash" : "pin") { store.togglePinned(path: card.path, title: draft.title) }
             Button(store.isInInbox(card.path) ? "Out of the Inbox" : "Add to Inbox", systemImage: store.isInInbox(card.path) ? "tray.and.arrow.up" : "tray.and.arrow.down") { store.toggleInbox(path: card.path, title: draft.title) }
-            Button(store.isArchived(card.path) ? "Unarchive" : "Archive", systemImage: store.isArchived(card.path) ? "archivebox.fill" : "archivebox") { withAnimation(.snappy(duration: 0.2)) { store.toggleArchived(path: card.path, title: draft.title) } }
+            Button(store.isArchived(card.path) ? "Unarchive" : "Archive", systemImage: store.isArchived(card.path) ? "archivebox.fill" : "archivebox") { withAnimation(.snappy(duration: 0.2)) { store.toggleArchived(path: card.path, title: draft.title, closing: card.id, in: river) } }
         }
         Divider()
         if !isDay { Button("Rename…", systemImage: "character.cursor.ibeam") { startRenaming() } }

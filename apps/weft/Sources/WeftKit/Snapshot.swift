@@ -123,6 +123,11 @@ enum Snapshot {
             }
             done.wait()
         }
+        // WEFT_SIDEBAR=inbox: the sidebar shown, on that lens.
+        if let lens = environment["WEFT_SIDEBAR"] {
+            UserDefaults.standard.set(lens, forKey: "WeftSidebarLens")
+            DispatchQueue.main.async { actions.sidebar += 1 }
+        }
         // WEFT_OVERVIEW: the river shown whole, its cards as tiles.
         if environment["WEFT_OVERVIEW"] != nil { DispatchQueue.main.async { actions.overview += 1 } }
         // WEFT_STAMP: the note chosen stamped with today, as ⌃⌘T does.

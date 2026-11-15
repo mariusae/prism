@@ -380,7 +380,7 @@ struct PhoneCard: View {
                     .allowsHitTesting(false)
             }
             NoteEditorView(
-                editor: shown, theme: Ink.editorTheme, isWriting: isWriting, height: $bodyHeight,
+                editor: shown, theme: Ink.editorTheme, isWriting: isWriting, startsAtEnd: river.writingAtEnd == card.id, height: $bodyHeight,
                 refresh: store.indexRevision,
                 pageExists: { name in store.leadsSomewhere(name) },
                     pageArchived: { name in store.resolve(name).map { store.isArchived($0.path) } ?? false },
@@ -431,6 +431,8 @@ struct PhoneCard: View {
             )
             .fixedSize(horizontal: false, vertical: true)
             .id(isFocus ? "focus" : draft.isProse ? "prose" : "outline")
+            // Edit's caret at the end is for that once: written in no more, it is let go of.
+            .onChange(of: isWriting) { _, writing in if !writing, river.writingAtEnd == card.id { river.writingAtEnd = nil } }
             .opacity(draft.task == .done ? 0.5 : 1)
         }
     }
@@ -493,6 +495,9 @@ struct PhoneCard: View {
             withAnimation(.snappy(duration: 0.28)) { store.openMention(in: source.path, title: source.name, of: card.path, after: card.id, in: river) }
         }, openAll: {
             withAnimation(.snappy(duration: 0.24)) { store.openMentions(of: card.path) }
+        }, preview: { index in
+            let source = backlinks[index]
+            return AnyView(LinkCard(store: store, link: .page(Prism.linkName(path: source.path) ?? source.title)).background(Color.inkCard))
         })
         .padding(.top, tags.isEmpty && draft.related.isEmpty ? 4 : 0)
     }
@@ -613,7 +618,7 @@ struct PhoneCard: View {
         if draft.exists, !isDay {
             let archived = store.isArchived(card.path)
             actions.append(SwipeAction(name: archived ? "Unarchive" : "Archive", symbol: archived ? "archivebox.fill" : "archivebox", tint: .indigo) {
-                withAnimation(.snappy(duration: 0.2)) { store.toggleArchived(path: card.path, title: draft.title) }
+                withAnimation(.snappy(duration: 0.2)) { store.toggleArchived(path: card.path, title: draft.title, closing: card.id, in: river) }
             })
         }
         actions.append(SwipeAction(name: river.isFound(card.id) ? "Remove" : "Close", symbol: "xmark", tint: .gray) { withAnimation(.snappy(duration: 0.28)) { store.close(card.id, in: river) } })
@@ -637,7 +642,7 @@ struct PhoneCard: View {
         if draft.exists, !isDay {
             Button(store.isPinned(card.path) ? "Unpin" : "Pin", systemImage: store.isPinned(card.path) ? "pin.slash" : "pin") { store.togglePinned(path: card.path, title: draft.title) }
             Button(store.isInInbox(card.path) ? "Out of the Inbox" : "Add to Inbox", systemImage: store.isInInbox(card.path) ? "tray.and.arrow.up" : "tray.and.arrow.down") { store.toggleInbox(path: card.path, title: draft.title) }
-            Button(store.isArchived(card.path) ? "Unarchive" : "Archive", systemImage: store.isArchived(card.path) ? "archivebox.fill" : "archivebox") { withAnimation(.snappy(duration: 0.2)) { store.toggleArchived(path: card.path, title: draft.title) } }
+            Button(store.isArchived(card.path) ? "Unarchive" : "Archive", systemImage: store.isArchived(card.path) ? "archivebox.fill" : "archivebox") { withAnimation(.snappy(duration: 0.2)) { store.toggleArchived(path: card.path, title: draft.title, closing: card.id, in: river) } }
         }
         if canRead { Button("Read", systemImage: "doc.richtext") { read() } }
         Button("Copy Link", systemImage: "link") { UIPasteboard.general.string = "[[\(store.linkName(path: card.path, title: draft.title))]]" }
@@ -648,6 +653,13 @@ struct PhoneCard: View {
     /// Everything that can be done with a card.
     @ViewBuilder private var menuItems: some View {
         if river.query == nil || !river.isFound(card.id) { MoveToRiverMenu(store: store, river: river, ids: [card.id]) }
+        // Writing in it, however it is filled: a note that is all pictures, or cards, has no words to touch.
+        if !isWriting {
+            Button("Edit", systemImage: "pencil") {
+                river.writingAtEnd = card.id
+                river.writing = card.id
+            }
+        }
         Section {
             if !isDay { Button(isUntitled ? "Add Title…" : "Rename…", systemImage: "character.cursor.ibeam") { startRenaming() } }
             if isUntitled, !draft.isBlank { Button("Make First Line the Title", systemImage: "arrow.up") { withAnimation(.snappy(duration: 0.22)) { _ = draft.titleByFirstLine() } } }
@@ -671,7 +683,7 @@ struct PhoneCard: View {
                 if draft.task != .none { Button("No Longer a To-Do", systemImage: "circle.slash") { draft.setTask(.none) } }
                 Button(store.isPinned(card.path) ? "Unpin" : "Pin", systemImage: store.isPinned(card.path) ? "pin.slash" : "pin") { store.togglePinned(path: card.path, title: draft.title) }
                 Button(store.isInInbox(card.path) ? "Out of the Inbox" : "Add to Inbox", systemImage: store.isInInbox(card.path) ? "tray.and.arrow.up" : "tray.and.arrow.down") { store.toggleInbox(path: card.path, title: draft.title) }
-            Button(store.isArchived(card.path) ? "Unarchive" : "Archive", systemImage: store.isArchived(card.path) ? "archivebox.fill" : "archivebox") { withAnimation(.snappy(duration: 0.2)) { store.toggleArchived(path: card.path, title: draft.title) } }
+            Button(store.isArchived(card.path) ? "Unarchive" : "Archive", systemImage: store.isArchived(card.path) ? "archivebox.fill" : "archivebox") { withAnimation(.snappy(duration: 0.2)) { store.toggleArchived(path: card.path, title: draft.title, closing: card.id, in: river) } }
             }
         }
         Section {

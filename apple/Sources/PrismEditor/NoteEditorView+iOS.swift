@@ -23,6 +23,8 @@ public struct NoteEditorView: UIViewRepresentable {
     let editor: NoteEditor
     let theme: EditorTheme
     let isWriting: Bool
+    /// Starting to be written in, the caret at the end of the note — not where it was.
+    var startsAtEnd = false
     @Binding var height: CGFloat
     var pageExists: (String) -> Bool
     /// Whether the page a link leads to is archived.
@@ -79,7 +81,7 @@ public struct NoteEditorView: UIViewRepresentable {
     ///   - height: kept at the height the text needs at the width given.
     ///   - refresh: any value that changes when the look should be redone.
     public init(
-        editor: NoteEditor, theme: EditorTheme, isWriting: Bool, height: Binding<CGFloat>, refresh: Int = 0,
+        editor: NoteEditor, theme: EditorTheme, isWriting: Bool, startsAtEnd: Bool = false, height: Binding<CGFloat>, refresh: Int = 0,
         pageExists: @escaping (String) -> Bool = { _ in true },
         pageArchived: @escaping (String) -> Bool = { _ in false },
         linkLabel: @escaping (String) -> String? = { _ in nil },
@@ -99,6 +101,7 @@ public struct NoteEditorView: UIViewRepresentable {
         self.editor = editor
         self.theme = theme
         self.isWriting = isWriting
+        self.startsAtEnd = startsAtEnd
         _height = height
         self.refresh = refresh
         self.pageExists = pageExists
@@ -174,6 +177,9 @@ public struct NoteEditorView: UIViewRepresentable {
         if isWriting, !view.isFirstResponder {
             DispatchQueue.main.async { [weak view] in
                 guard let view, view.window != nil, !view.isFirstResponder, view.focusReports == 0, view.coordinator?.parent.isWriting == true else { return }
+                if view.coordinator?.parent.startsAtEnd == true {
+                    view.selectedRange = NSRange(location: (view.text as NSString).length, length: 0)
+                }
                 view.becomeFirstResponder()
             }
         } else if !isWriting, view.isFirstResponder {
