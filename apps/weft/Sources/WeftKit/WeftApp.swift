@@ -71,6 +71,8 @@ public struct WeftMacApp: App {
                 Button("New Query River…") { store?.queryAsk = .new }.keyboardShortcut("t", modifiers: [.command, .option])
                 Button("Quick Open…") { actions.quickOpen += 1 }.keyboardShortcut("o")
                 Button("Find in River…") { actions.findInRiver += 1 }.keyboardShortcut("a", modifiers: [.command, .shift])
+                // As Bike's: a row of any card in the river, found by what it says, the outline kept in sight.
+                Button("Go to Row…") { actions.goToRow += 1 }.keyboardShortcut("p", modifiers: [.command, .option])
                 Button(store?.river.name == nil ? "Save River…" : "Rename River…") { actions.saveRiver += 1 }.keyboardShortcut("s")
                 Divider()
                 Button("Open Folder…") { choose() }.keyboardShortcut("o", modifiers: [.command, .shift])
@@ -485,7 +487,8 @@ enum RiverKeys {
                 let index = digit == 9 ? store.rivers.count - 1 : digit - 1
                 guard store.rivers.indices.contains(index) else { return digit < 9 }
                 CommandKey.shared.used()
-                withAnimation(.snappy(duration: 0.2)) { store.currentRiver = index }
+                // At once: the river is shown as it is, not faded into — the tabs move on their own.
+                store.currentRiver = index
                 return true
             }
         }

@@ -100,5 +100,5 @@ pub use inline::{Span, SpanKind, Style};
 pub use note::{name_key, ImageRef, LinkKind, Meta, Note, NoteKind, NoteLink, References, TaskRef, WebLink};
 pub use query::{Clause, Query};
 pub use river::River;
-pub use session::{RowInfo, Session};
+pub use session::{OutlineRow, RowInfo, Session};
 pub use table::Table;

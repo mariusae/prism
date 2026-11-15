@@ -78,6 +78,10 @@ public struct NoteEditorView: NSViewRepresentable {
     /// and brought into sight.
     var marks: [NSRange]
     var markAt: Int?
+    /// Where the app asks the caret to be — a row gone to — brought into
+    /// sight; and told, once it is there, that it is taken.
+    var caretAt: Int?
+    var onCaretTaken: () -> Void
     /// Asked to show one row of the outline as a note of its own — only
     /// what is under it: handed the row's name in the note, for the app
     /// to have this card show it (`NoteEditor.setFocus`), or — `apart` —
@@ -119,7 +123,7 @@ public struct NoteEditorView: NSViewRepresentable {
         onMoveRows: ((_ markdown: String, _ moved: @escaping () -> Void) -> Void)? = nil,
         savePictures: @escaping ([EditorPastedPicture]) -> [String] = { _ in [] },
         onZoom: ((_ row: String, _ apart: Bool) -> Void)? = nil, onZoomOut: (() -> Void)? = nil,
-        marks: [NSRange] = [], markAt: Int? = nil,
+        marks: [NSRange] = [], markAt: Int? = nil, caretAt: Int? = nil, onCaretTaken: @escaping () -> Void = {},
         onChange: @escaping () -> Void = {}, onFocus: @escaping (Bool) -> Void = { _ in }, onFollow: @escaping (EditorLink) -> Void = { _ in }
     ) {
         self.editor = editor
@@ -145,6 +149,8 @@ public struct NoteEditorView: NSViewRepresentable {
         self.onZoom = onZoom
         self.marks = marks
         self.markAt = markAt
+        self.caretAt = caretAt
+        self.onCaretTaken = onCaretTaken
         self.onZoomOut = onZoomOut
         self.onMoveRows = onMoveRows
         self.savePictures = savePictures
@@ -190,6 +196,7 @@ public struct NoteEditorView: NSViewRepresentable {
         } else if looks {
             coordinator.restyle()
         }
+        if let caretAt { coordinator.go(to: caretAt) }
         if isWriting, view.window?.firstResponder !== view {
             DispatchQueue.main.async { [weak view] in
                 guard let view, let window = view.window, window.firstResponder !== view else { return }
@@ -1612,8 +1619,10 @@ public final class NoteTextView: NSTextView {
     }
 
     public override func setSelectedRanges(_ ranges: [NSValue], affinity: NSSelectionAffinity, stillSelecting: Bool) {
-        guard !outlineLines.isEmpty, !isChoosingRows else { return super.setSelectedRanges(ranges, affinity: affinity, stillSelecting: stillSelecting) }
         let old = selectedRange()
+        // Never inside a link shown as its page's title: it is one thing, before or after it.
+        let ranges = ranges.map { value in NSValue(range: textStorage.map { BodyStyler.outsideWholes(in: $0, value.rangeValue, from: old) } ?? value.rangeValue) }
+        guard !outlineLines.isEmpty, !isChoosingRows else { return super.setSelectedRanges(ranges, affinity: affinity, stillSelecting: stillSelecting) }
         let snapped = ranges.map { value -> NSValue in
             var range = value.rangeValue
             if range.length == 0 {

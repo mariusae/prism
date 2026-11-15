@@ -10,12 +10,17 @@ enum Days {
     static func shown(_ title: String) -> String { dateTitle(name: title) ?? title }
 
     static func name(_ date: Date) -> String {
+        dayFormat.string(from: date)
+    }
+
+    /// Made once: a formatter is slow to make, and a day's name is asked for as cards are drawn.
+    private static let dayFormat: DateFormatter = {
         let format = DateFormatter()
         format.calendar = Calendar(identifier: .gregorian)
         format.locale = Locale(identifier: "en_US_POSIX")
         format.dateFormat = "yyyy-MM-dd"
-        return format.string(from: date)
-    }
+        return format
+    }()
 
     /// Whether the app is being run without a screen, to be pictured or measured.
     static var isHeadless: Bool {

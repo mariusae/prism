@@ -47,9 +47,7 @@ struct RiverView: View {
         // the ticks say what is in the river, however it is put away.
         if card.folded, let open = store.cardHeights[card.spot] { return Double(open) + 70 }
         if !card.folded, let known = heights[card.id] { return Double(known) }
-        let file = (try? store.engine.absolutePath(path: card.path)) ?? ""
-        let bytes = ((try? FileManager.default.attributesOfItem(atPath: file))?[.size] as? NSNumber)?.doubleValue ?? 400
-        return 90 + bytes / 70 * 22
+        return 90 + store.bytes(of: card.path) / 70 * 22
     }
 
     /// What a tick's card shows of its note.
@@ -444,3 +442,4 @@ struct CardMove: DropDelegate {
     func dropExited(info: DropInfo) {}
 }
 #endif
+

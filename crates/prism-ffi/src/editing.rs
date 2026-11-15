@@ -10,6 +10,8 @@ use crate::engine::RiverFoldedRow;
 use prism::markup::editor::{self, Command, CompletionKind, Layout, LineKind, RowKind, RunKind};
 use prism::markup::river::FoldedRow;
 use prism::markup::{inline, Note, Session, Style, Value};
+use std::collections::HashMap;
+use std::ops::Range;
 use std::sync::{Arc, Mutex, MutexGuard};
 
 /// Byte offsets of a text as UTF-16 offsets, and back, each in one pass.
@@ -41,6 +43,125 @@ impl Offsets {
     fn to8(&self, utf16: u32) -> usize {
         self.utf16.partition_point(|units| *units < utf16).min(self.utf16.len() - 1)
     }
+}
+
+/// The text a view shows: the session's, with each link to a page — one
+/// atom there — shown as that atom and then its label's words, so that the
+/// words of a long title wrap as any words do. The atom stays, first: the
+/// room for the link's icon. Offsets of the shown text are UTF-16.
+struct Shown {
+    text: String,
+    /// For each byte offset of the session's text that starts a character
+    /// (and its end): the UTF-16 units before it in the shown text.
+    utf16: Vec<u32>,
+    /// Each label: its UTF-16 span in the shown text — its atom's offset,
+    /// and its words' end — and its atom's bytes in the session's text.
+    labels: Vec<(u32, u32, Range<usize>)>,
+}
+
+impl Shown {
+    /// The session's text, with these atoms — by byte offset — given these labels.
+    fn of(raw: &str, expand: &[(usize, String)]) -> Shown {
+        let mut utf16 = vec![0u32; raw.len() + 1];
+        let mut text = String::with_capacity(raw.len() + expand.iter().map(|(_, label)| label.len()).sum::<usize>());
+        let mut labels = Vec::with_capacity(expand.len());
+        let mut next = expand.iter().peekable();
+        let mut units = 0u32;
+        for (at, c) in raw.char_indices() {
+            for inside in 0..c.len_utf8() {
+                utf16[at + inside] = units;
+            }
+            text.push(c);
+            let start = units;
+            units += c.len_utf16() as u32;
+            while next.peek().is_some_and(|(byte, _)| *byte < at) {
+                next.next();
+            }
+            if let Some((_, label)) = next.next_if(|(byte, _)| *byte == at) {
+                text.push_str(label);
+                units += label.encode_utf16().count() as u32;
+                labels.push((start, units, at..at + c.len_utf8()));
+            }
+        }
+        utf16[raw.len()] = units;
+        Shown { text, utf16, labels }
+    }
+
+    fn to16(&self, byte: usize) -> u32 {
+        self.utf16[byte.min(self.utf16.len() - 1)]
+    }
+
+    /// The session's byte offset of a place in the shown text. A place in
+    /// a label's words is none of the session's: it is the link's start,
+    /// or — `after` — its end, for a link is changed whole or not at all.
+    fn to8(&self, utf16: u32, after: bool) -> usize {
+        if let Some((_, _, atom)) = self.labels.iter().find(|(start, end, _)| *start < utf16 && utf16 < *end) {
+            return if after { atom.end } else { atom.start };
+        }
+        self.utf16.partition_point(|units| *units < utf16).min(self.utf16.len() - 1)
+    }
+
+    /// A range of the shown text, in the session's bytes: a link it runs
+    /// into is in it whole; a place in a label, its end.
+    fn range(&self, start: u32, end: u32) -> Range<usize> {
+        let end = end.max(start);
+        if start == end {
+            let at = self.to8(start, true);
+            return at..at;
+        }
+        self.to8(start, false)..self.to8(end, true)
+    }
+}
+
+/// A row's words, plain, as a view shows them: a link to a page by its
+/// label — the one given, else its own, else its target — and a picture by
+/// nothing; one line.
+fn words_of(markdown: &str, labels: Option<&HashMap<String, String>>) -> String {
+    use prism::markup::rich::{AtomKind, Mark, Rich, ATOM};
+    let rich = Rich::parse(markdown);
+    let mut out = String::with_capacity(rich.text.len());
+    for (at, c) in rich.text.char_indices() {
+        if c != ATOM {
+            out.push(if c == '\n' || c == '\u{2028}' { ' ' } else { c });
+            continue;
+        }
+        let atom = rich.runs.iter().find_map(|run| match &run.mark {
+            Mark::Atom(atom) if run.range.start == at => Some(&atom.kind),
+            _ => None,
+        });
+        if let Some(AtomKind::Page { target, label, embed: false }) = atom {
+            let given = labels.and_then(|labels| labels.get(target)).filter(|label| !label.is_empty());
+            out.push_str(given.or(label.as_ref()).unwrap_or(target));
+        }
+    }
+    out.trim().to_owned()
+}
+
+/// Where two texts differ, in UTF-16: the range of the first that the
+/// second replaces, and what with.
+fn difference(before: &str, after: &str) -> (u32, u32, String) {
+    let (was, is): (Vec<u16>, Vec<u16>) = (before.encode_utf16().collect(), after.encode_utf16().collect());
+    let same = was.iter().zip(&is).take_while(|(a, b)| a == b).count();
+    let tail = was[same..].iter().rev().zip(is[same..].iter().rev()).take_while(|(a, b)| a == b).count();
+    let replacement = String::from_utf16_lossy(&is[same..is.len() - tail]);
+    (same as u32, (was.len() - tail) as u32, replacement)
+}
+
+/// A row of a note's outline, as a search of a river's outlines lists it.
+#[derive(Debug, Clone, PartialEq, Eq, uniffi::Record)]
+pub struct BodyOutlineRow {
+    /// Its place among all the note's rows, folded away or not: what
+    /// [`NoteEditor::reveal_row`] is asked with.
+    pub index: u32,
+    /// How many rows it is under.
+    pub depth: u32,
+    /// Its words, plain: no Markdown.
+    pub words: String,
+    /// A heading's level.
+    pub heading: Option<u8>,
+    /// Its checkbox: open, or done.
+    pub done: Option<bool>,
+    pub has_children: bool,
 }
 
 /// What a line of a body is.
@@ -151,8 +272,7 @@ pub struct BodyLayout {
 
 /// A layout in the view's own offsets. `folds` says of each line of an
 /// outline whether it is folded, and whether it has rows under it.
-fn layout_of(read: Layout, body: &str, folds: &[(bool, bool)], cards: &[bool]) -> BodyLayout {
-    let offsets = Offsets::of(body);
+fn layout_of(read: Layout, offsets: &Shown, folds: &[(bool, bool)], cards: &[bool]) -> BodyLayout {
     let lines = read
         .lines
         .into_iter()
@@ -421,6 +541,9 @@ pub fn web_address(text: String) -> Option<String> {
 #[derive(uniffi::Object)]
 pub struct NoteEditor {
     session: Mutex<Session>,
+    /// What links to pages are shown as, by target — once a view has said
+    /// ([`set_link_labels`](Self::set_link_labels)); till then each is its atom alone.
+    labels: Mutex<Option<HashMap<String, String>>>,
 }
 
 impl NoteEditor {
@@ -428,24 +551,43 @@ impl NoteEditor {
         self.session.lock().unwrap_or_else(|poisoned| poisoned.into_inner())
     }
 
-    /// A change of the session's, in the view's own offsets: its range of
-    /// the text as it was, its selection of the text as it now is.
-    fn edit(before: &str, after: &str, change: prism::markup::session::Change) -> BodyEdit {
-        let (was, is) = (Offsets::of(before), Offsets::of(after));
-        BodyEdit {
-            start: was.to16(change.range.start),
-            end: was.to16(change.range.end),
-            replacement: change.replacement,
-            selection_start: is.to16(change.selection.start),
-            selection_end: is.to16(change.selection.end),
-        }
+    fn labels(&self) -> MutexGuard<'_, Option<HashMap<String, String>>> {
+        self.labels.lock().unwrap_or_else(|poisoned| poisoned.into_inner())
     }
 
-    fn changing(&self, change: impl FnOnce(&mut Session, &Offsets) -> Option<prism::markup::session::Change>) -> Option<BodyEdit> {
+    /// The session's text as the view shows it: each link to a page with its label, if labels are given.
+    fn shown(&self, session: &Session) -> Shown {
+        let labels = self.labels();
+        let Some(labels) = labels.as_ref() else { return Shown::of(session.text(), &[]) };
+        let text = session.text();
+        if !text.contains(prism::markup::rich::ATOM) {
+            return Shown::of(text, &[]);
+        }
+        let expand: Vec<(usize, String)> = session
+            .layout()
+            .runs
+            .into_iter()
+            .filter_map(|run| match run.kind {
+                RunKind::PageLink { target, embed: false } if text.get(run.range.clone()) == Some("\u{FFFC}") => {
+                    let label = labels.get(&target).filter(|label| !label.is_empty()).cloned().unwrap_or(target);
+                    Some((run.range.start, label))
+                }
+                _ => None,
+            })
+            .collect();
+        Shown::of(text, &expand)
+    }
+
+    /// A change of the session's, in the view's own offsets: what of the
+    /// text as it was is replaced, found by comparing it with the text as
+    /// it now is; and the selection, of the text as it now is.
+    fn changing(&self, change: impl FnOnce(&mut Session, &Shown) -> Option<prism::markup::session::Change>) -> Option<BodyEdit> {
         let mut session = self.session();
-        let before = session.text().to_owned();
-        let made = change(&mut session, &Offsets::of(&before))?;
-        Some(NoteEditor::edit(&before, session.text(), made))
+        let before = self.shown(&session);
+        let made = change(&mut session, &before)?;
+        let after = self.shown(&session);
+        let (start, end, replacement) = difference(&before.text, &after.text);
+        Some(BodyEdit { start, end, replacement, selection_start: after.to16(made.selection.start), selection_end: after.to16(made.selection.end) })
     }
 }
 
@@ -454,7 +596,7 @@ impl NoteEditor {
     /// Opens a note's file.
     #[uniffi::constructor]
     pub fn open(source: String) -> Arc<NoteEditor> {
-        Arc::new(NoteEditor { session: Mutex::new(Session::new(&source)) })
+        Arc::new(NoteEditor { session: Mutex::new(Session::new(&source)), labels: Mutex::new(None) })
     }
 
     /// The note's file, as it now is. What was not edited is as it was read.
@@ -476,27 +618,49 @@ impl NoteEditor {
 
     /// What the view shows.
     pub fn text(&self) -> String {
-        self.session().text().to_owned()
+        let session = self.session();
+        self.shown(&session).text
+    }
+
+    /// The pages the note links to, as written: those a view gives labels for.
+    pub fn link_targets(&self) -> Vec<String> {
+        let mut targets: Vec<String> = Vec::new();
+        for run in self.session().layout().runs {
+            if let RunKind::PageLink { target, embed: false } = run.kind {
+                if !targets.contains(&target) {
+                    targets.push(target);
+                }
+            }
+        }
+        targets
+    }
+
+    /// What each link to a page is shown as, by its target — its page's
+    /// title, say. From then on each such link is its atom and then those
+    /// words, which wrap as words do; one with none given, its target.
+    /// The text changes: a view shows it again.
+    pub fn set_link_labels(&self, labels: HashMap<String, String>) {
+        *self.labels() = Some(labels);
     }
 
     /// What the view shows, read for drawing.
     pub fn layout(&self) -> BodyLayout {
         let session = self.session();
-        layout_of(session.layout(), session.text(), &session.row_folds(), &session.row_cards())
+        layout_of(session.layout(), &self.shown(&session), &session.row_folds(), &session.row_cards())
     }
 
     /// What was typed, pasted or deleted in the view: a range of what it
     /// showed, replaced. The answer is what the view should now do —
     /// which is not always what was typed.
     pub fn replace(&self, start: u32, end: u32, replacement: String) -> BodyEdit {
-        let edit = self.changing(|session, offsets| Some(session.replace(offsets.to8(start)..offsets.to8(end.max(start)), &replacement)));
+        let edit = self.changing(|session, offsets| Some(session.replace(offsets.range(start, end), &replacement)));
         edit.unwrap_or(BodyEdit { start, end, replacement: String::new(), selection_start: start, selection_end: start })
     }
 
     /// Carries out a command. `nil` when it has nothing to do there, and
     /// the view should do what it would have done.
     pub fn perform(&self, selection_start: u32, selection_end: u32, command: EditCommand) -> Option<BodyEdit> {
-        self.changing(|session, offsets| session.perform(offsets.to8(selection_start)..offsets.to8(selection_end.max(selection_start)), self::command(command)))
+        self.changing(|session, offsets| session.perform(offsets.range(selection_start, selection_end), self::command(command)))
     }
 
     /// Carries out a command on some rows of an outline — lines of the
@@ -508,7 +672,7 @@ impl NoteEditor {
     pub fn perform_on(&self, rows: Vec<u32>, selection_start: u32, selection_end: u32, command: EditCommand) -> Option<BodyEdit> {
         let rows: Vec<usize> = rows.into_iter().map(|row| row as usize).collect();
         self.changing(|session, offsets| {
-            session.perform_on(&rows, offsets.to8(selection_start)..offsets.to8(selection_end.max(selection_start)), self::command(command))
+            session.perform_on(&rows, offsets.range(selection_start, selection_end), self::command(command))
         })
     }
 
@@ -520,7 +684,7 @@ impl NoteEditor {
     pub fn move_rows(&self, rows: Vec<u32>, before: u32, depth: u32, selection_start: u32, selection_end: u32) -> Option<BodyEdit> {
         let rows: Vec<usize> = rows.into_iter().map(|row| row as usize).collect();
         self.changing(|session, offsets| {
-            session.move_rows(&rows, before as usize, depth as usize, offsets.to8(selection_start)..offsets.to8(selection_end.max(selection_start)))
+            session.move_rows(&rows, before as usize, depth as usize, offsets.range(selection_start, selection_end))
         })
     }
 
@@ -530,7 +694,7 @@ impl NoteEditor {
     /// note shown as text, and for Markdown with nothing in it.
     pub fn insert_rows(&self, markdown: String, before: u32, depth: u32, selection_start: u32, selection_end: u32) -> Option<BodyEdit> {
         self.changing(|session, offsets| {
-            session.insert_rows(&markdown, before as usize, depth as usize, offsets.to8(selection_start)..offsets.to8(selection_end.max(selection_start)))
+            session.insert_rows(&markdown, before as usize, depth as usize, offsets.range(selection_start, selection_end))
         })
     }
 
@@ -572,8 +736,8 @@ impl NoteEditor {
     /// The words chosen in the view, as Markdown: what copying them gives.
     pub fn markdown_between(&self, start: u32, end: u32) -> String {
         let session = self.session();
-        let offsets = Offsets::of(session.text());
-        session.markdown_between(offsets.to8(start)..offsets.to8(end.max(start)))
+        let offsets = self.shown(&session);
+        session.markdown_between(offsets.range(start, end))
     }
 
     pub fn markdown_of(&self, rows: Vec<u32>) -> String {
@@ -586,7 +750,35 @@ impl NoteEditor {
     /// address onto words does. `nil` when nothing is selected, when the
     /// selection spans lines, or when the address is none (`web_address`).
     pub fn link(&self, selection_start: u32, selection_end: u32, address: String) -> Option<BodyEdit> {
-        self.changing(|session, offsets| session.link(offsets.to8(selection_start)..offsets.to8(selection_end.max(selection_start)), &address))
+        self.changing(|session, offsets| session.link(offsets.range(selection_start, selection_end), &address))
+    }
+
+    /// Every row of the outline the view shows, under folds or not, in
+    /// reading order: what a search of a river's outlines looks through.
+    pub fn outline(&self) -> Vec<BodyOutlineRow> {
+        self.session()
+            .outline()
+            .into_iter()
+            .enumerate()
+            .map(|(index, row)| BodyOutlineRow {
+                index: index as u32,
+                depth: row.depth as u32,
+                words: words_of(&row.text, self.labels().as_ref()),
+                heading: row.heading,
+                done: row.task,
+                has_children: row.has_children,
+            })
+            .collect()
+    }
+
+    /// Brings a row of the outline into sight — the rows it is under
+    /// unfolded — and says where its words then start in the text, as
+    /// the view shows it. `nil` for no such row, or one not shown. The
+    /// view shows the text again if it changed.
+    pub fn reveal_row(&self, index: u32) -> Option<u32> {
+        let mut session = self.session();
+        let at = session.reveal_row(index as usize)?;
+        Some(self.shown(&session).to16(at))
     }
 
     /// The rows folded: each by its place among all the body's rows —
@@ -827,6 +1019,33 @@ mod tests {
         assert_eq!((layout.lines[0].content, layout.lines[0].end), (0, units.len() as u32));
         let typed = completion_at("🚀 see [[Caf".into(), 12).unwrap();
         assert_eq!((typed.kind, typed.typed.as_str(), typed.start, typed.end), (BodyCompletionKind::Link, "Caf", 7, 12));
+    }
+
+    #[test]
+    fn a_link_to_a_page_is_shown_with_its_label_and_changed_whole() {
+        let editor = NoteEditor::open("- notes from [[meeting-x]] then\n".into());
+        assert_eq!(editor.text(), "notes from \u{FFFC} then");
+        assert_eq!(editor.link_targets(), vec!["meeting-x".to_string()]);
+        editor.set_link_labels(HashMap::from([("meeting-x".to_string(), "Meeting: Object model".to_string())]));
+        let text = editor.text();
+        assert_eq!(text, "notes from \u{FFFC}Meeting: Object model then");
+        // The link's run covers its atom and its words.
+        let layout = editor.layout();
+        let link = layout.runs.iter().find(|run| matches!(&run.kind, BodyRunKind::PageLink { .. })).unwrap();
+        assert_eq!((link.start, link.end), (11, 11 + 1 + 21));
+        // Typed inside the words: after the link, and the link kept as it was.
+        let edit = editor.replace(15, 15, "!".into());
+        assert_eq!(editor.markdown(), "- notes from [[meeting-x]]! then\n");
+        assert_eq!((edit.start, edit.end, edit.replacement.as_str(), edit.selection_start), (33, 33, "!", 34));
+        // A character of its words deleted: the whole link goes.
+        let edit = editor.replace(32, 33, String::new());
+        assert_eq!(editor.markdown(), "- notes from ! then\n");
+        assert_eq!((edit.start, edit.end, edit.replacement.as_str(), edit.selection_start), (11, 33, "", 11));
+        // Copied across the words: the link, as Markdown.
+        let editor = NoteEditor::open("- see [[a]] and [[b]]\n".into());
+        editor.set_link_labels(HashMap::from([("a".to_string(), "Alpha".to_string())]));
+        assert_eq!(editor.text(), "see \u{FFFC}Alpha and \u{FFFC}b");
+        assert_eq!(editor.markdown_between(6, 14), "[[a]] and");
     }
 
     #[test]

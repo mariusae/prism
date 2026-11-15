@@ -45,6 +45,20 @@ pub struct Change {
     pub selection: Range<usize>,
 }
 
+/// A row of the outline, as a search of it lists it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct OutlineRow {
+    /// How many rows it is under.
+    pub depth: usize,
+    /// Its words, as written: Markdown.
+    pub text: String,
+    /// A heading's level.
+    pub heading: Option<u8>,
+    /// A checkbox: open, or done.
+    pub task: Option<bool>,
+    pub has_children: bool,
+}
+
 /// A line break inside a block, as an outline shows it.
 pub const SOFT_BREAK: char = '\u{2028}';
 
@@ -1655,6 +1669,51 @@ impl Session {
         self.body.rows().iter().enumerate().filter(|(_, row)| folded(row.block)).map(|(index, row)| FoldedRow { index, text: row.block.text.clone() }).collect()
     }
 
+    /// Every row of what is shown — under folds or not — in reading
+    /// order: what a search of the outline looks through. A row is known
+    /// by its place here, as a fold is ([`folded_rows`](Self::folded_rows)).
+    pub fn outline(&self) -> Vec<OutlineRow> {
+        self.body
+            .rows()
+            .into_iter()
+            .map(|row| OutlineRow {
+                depth: row.depth,
+                text: row.block.text.clone(),
+                heading: match row.block.kind {
+                    BlockKind::Heading(level) => Some(level),
+                    _ => None,
+                },
+                task: match row.block.kind {
+                    BlockKind::Item(item) => item.task.map(|task| matches!(task, Task::Done(_))),
+                    _ => None,
+                },
+                has_children: !row.block.children.is_empty(),
+            })
+            .collect()
+    }
+
+    /// Brings a row into sight: the rows it is under unfolded. Where its
+    /// words then start in the text, if it is shown; `None` for no such
+    /// row, or one the view does not show (in a note shown as text).
+    pub fn reveal_row(&mut self, index: usize) -> Option<usize> {
+        let path = self.body.rows().get(index)?.path.clone();
+        let mut opened = false;
+        for end in 1..path.len() {
+            if let Some(block) = self.body.get_mut(&path[..end]) {
+                if block.folded {
+                    block.folded = false;
+                    opened = true;
+                }
+            }
+        }
+        if opened {
+            self.typing = None;
+            self.project();
+        }
+        let span = self.rows.iter().find(|row| row.path == path)?;
+        Some(span.range.start)
+    }
+
     /// Folds these rows, and no others: as the app remembers them. A row
     /// is found by its words — at its place, or nearest to it, the note
     /// having perhaps changed since ([`Document::locate`] tells how a
@@ -2279,6 +2338,21 @@ mod tests {
     }
 
     /// A session in an outline, and the view of it.
+    #[test]
+    fn the_outline_lists_every_row_and_a_row_is_brought_into_sight() {
+        let mut session = Session::new("- one\n  - two\n    - three\n- four\n");
+        let rows: Vec<(usize, String)> = session.outline().into_iter().map(|row| (row.depth, row.text)).collect();
+        assert_eq!(rows, vec![(0, "one".into()), (1, "two".into()), (2, "three".into()), (0, "four".into())]);
+        // "one" folded: "three" is not shown, but listed still.
+        session.set_folded_rows(&[FoldedRow { index: 0, text: "one".into() }]);
+        assert_eq!(session.text(), "one\nfour");
+        assert_eq!(session.outline().len(), 4);
+        let at = session.reveal_row(2).unwrap();
+        assert_eq!(session.text(), "one\ntwo\nthree\nfour");
+        assert_eq!(&session.text()[at..at + 5], "three");
+        assert!(session.reveal_row(9).is_none());
+    }
+
     #[test]
     fn a_folded_row_is_marked_in_the_file_and_read_folded_again() {
         const NOTE: &str = "# Plan\n\n- one\n  - under\n- [ ] two\n  more of two\n  - under two\n- three\n";

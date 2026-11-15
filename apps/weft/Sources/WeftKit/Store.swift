@@ -40,6 +40,12 @@ public final class GraphStore {
     public let finding = RiverFind()
     /// What names lead to, kept until the index next moves.
     @ObservationIgnored private var resolved: [String: ResolvedPage?] = [:]
+    /// What notes not open are called, as the index has them: asked of it once until the index moves.
+    @ObservationIgnored private var knownLabels: [String: String] = [:]
+    /// How long each note's file is, for a tick's guess at its card: asked of the file once until the graph changes.
+    @ObservationIgnored private var knownBytes: [String: Double] = [:]
+    /// The notes each saved river not open holds, as read from its file: until the graph or a river changes.
+    @ObservationIgnored var knownMembers: [String: Set<String>] = [:]
     @ObservationIgnored private var labels: [String: String?] = [:]
     /// What a card last measured, and what stood at its foot: so that a
     /// card scrolled back into view comes as it was, at its full height,
@@ -254,6 +260,9 @@ public final class GraphStore {
         case .indexUpdated(let paths):
             resolved.removeAll(keepingCapacity: true)
             labels.removeAll(keepingCapacity: true)
+            knownLabels.removeAll(keepingCapacity: true)
+            knownMembers.removeAll()
+            for path in paths { knownBytes[path] = nil }
             indexRevision += 1
             refreshCounts()
             // A file written by another hand: a draft with nothing unsaved takes it.
@@ -413,6 +422,7 @@ public final class GraphStore {
 
     /// A saved river written to while not open: what the lists say of it, read again.
     func noteSaved(_ name: String) {
+        knownMembers[name] = nil
         guard let river = (try? engine.river(name: name)) ?? nil, let index = savedRivers.firstIndex(where: { $0.name == name }) else { return }
         savedRivers[index].cards = river.cards.count
         savedRivers[index].titles = Array(river.cards.prefix(6).map(\.title))
@@ -480,9 +490,21 @@ public final class GraphStore {
 
     /// What a note is shown as called: its title, or — never given one —
     /// its first words, as the engine's index has them.
+    /// How long a note's file is, in bytes: a guess at its card's height before it is drawn.
+    func bytes(of path: String) -> Double {
+        if let known = knownBytes[path] { return known }
+        let file = (try? engine.absolutePath(path: path)) ?? ""
+        let bytes = ((try? FileManager.default.attributesOfItem(atPath: file))?[.size] as? NSNumber)?.doubleValue ?? 400
+        knownBytes[path] = bytes
+        return bytes
+    }
+
     public func label(path: String, title: String) -> String {
         if let open = drafts[path] { return open.label }
-        return ((try? engine.page(path: path)) ?? nil)?.label ?? Days.shown(title)
+        if let known = knownLabels[path] { return known }
+        let label = ((try? engine.page(path: path)) ?? nil)?.label ?? Days.shown(title)
+        if !path.isEmpty { knownLabels[path] = label }
+        return label
     }
 
     /// The day or the week a few words ask for — "today", "last tuesday",
@@ -1055,7 +1077,7 @@ public final class GraphStore {
     // MARK: Reopening what was closed
 
     /// A card closed, or a note deleted: enough of it to bring it back.
-    private struct Shut {
+    struct Shut {
         /// What was done that shut it: undone, it is no longer shut.
         var action: Int
         var card: Card
@@ -1066,16 +1088,23 @@ public final class GraphStore {
         var wasFound: Bool
         /// What a deleted note said.
         var written: String?
+        /// Whether it was archived as it was closed: brought back, it is unarchived.
+        var archived = false
     }
 
-    @ObservationIgnored private var shut: [Shut] = []
+    @ObservationIgnored fileprivate(set) var shut: [Shut] = []
     @ObservationIgnored private var actions = 0
 
-    private func remember(shut cards: [(card: Card, index: Int, wasFound: Bool)], in river: River, written: String? = nil) -> Int {
+    func remember(shut cards: [(card: Card, index: Int, wasFound: Bool)], in river: River, written: String? = nil, archived: Bool = false) -> Int {
         actions += 1
-        shut.append(contentsOf: cards.map { Shut(action: actions, card: $0.card, index: $0.index, river: river, wasFound: $0.wasFound, written: written) })
+        shut.append(contentsOf: cards.map { Shut(action: actions, card: $0.card, index: $0.index, river: river, wasFound: $0.wasFound, written: written, archived: archived) })
         if shut.count > 100 { shut.removeFirst(shut.count - 100) }
         return actions
+    }
+
+    /// Forgets what an action shut: it was undone.
+    func forgetShut(action: Int) {
+        shut.removeAll { $0.action == action }
     }
 
     /// Brings back the card closed last, where it was — a note deleted
@@ -1095,6 +1124,14 @@ public final class GraphStore {
                 }
             }
             dismissUndo()
+            // Archived as it was closed: out of the archive again.
+            if last.archived, isArchived(last.card.path) {
+                let draft = draft(path: last.card.path, title: last.card.title)
+                draft.setField("archived", values: [])
+                draft.saveNow()
+                archived.remove(last.card.path)
+                touchCollections()
+            }
             let river = last.river.flatMap { river in rivers.contains { $0 === river } ? river : nil } ?? self.river
             if let index = rivers.firstIndex(where: { $0 === river }) { currentRiver = index }
             if last.wasFound {
@@ -1460,6 +1497,9 @@ public final class River: Identifiable {
     public var stuck: Card.ID?
     /// Asks the river's view to scroll a card to the top; moved each time.
     public var scrollTarget: (card: Card.ID, tick: Int)?
+    /// A row gone to (Go to Row): its card, and where in what the card shows the caret goes.
+    /// Taken — and put back to nothing — by the card's editor once the caret is there.
+    public var goingTo: (card: Card.ID, at: Int)?
     /// Asks the river's view to bring a card into sight, moving no more
     /// than that takes: after a card was closed or folded, so that what
     /// is left is not a stretch of nothing. Moved each time.
@@ -2316,4 +2356,21 @@ public final class PageDraft {
 enum NotePath {
     static func isNote(_ path: String) -> Bool { path.hasPrefix("notes/") }
     static func isDay(_ path: String) -> Bool { path.hasPrefix("daily/") }
+}
+
+extension GraphStore {
+    /// Goes to a row of a card's note in the river shown: the card opened,
+    /// the rows the row is under unfolded, and the caret put at its words.
+    public func goToRow(card id: Card.ID, index: UInt32) {
+        let river = self.river
+        guard let card = river.card(id) else { return }
+        if card.folded { river.toggleFold(id) }
+        let draft = draft(path: card.path, title: card.title)
+        guard let shown = river.card(id), let at = (draft.view(of: shown) ?? draft.editor).revealRow(index: index) else { return }
+        river.selected = id
+        river.writing = id
+        river.goingTo = (id, Int(at))
+        river.reveal(id, unfolding: false)
+        rememberRivers()
+    }
 }

@@ -59,6 +59,46 @@ enum Snapshot {
         guard let path else { return }
         let environment = ProcessInfo.processInfo.environment
         let names = { (key: String) in (environment[key] ?? "").split(separator: "|").map(String.init) }
+        // WEFT_SWITCH_BENCH=3: the rivers as they were left, each gone to so many times over —
+        // how long each switch takes until the window is laid out and drawn, printed.
+        if let rounds = Int(environment["WEFT_SWITCH_BENCH"] ?? "") {
+            let frame = CGRect(x: 0, y: 0, width: 1240, height: 860)
+            let window = NSWindow(contentRect: frame, styleMask: [.titled, .closable, .resizable, .fullSizeContentView], backing: .buffered, defer: false)
+            window.contentView = NSHostingView(rootView: ContentView(store: store, actions: actions).frame(width: frame.width, height: frame.height))
+            window.setFrame(frame, display: true)
+            window.orderBack(nil)
+            self.window = window
+            let settle = {
+                window.contentView?.layoutSubtreeIfNeeded()
+                window.displayIfNeeded()
+                RunLoop.main.run(until: Date().addingTimeInterval(0.001))
+                window.contentView?.layoutSubtreeIfNeeded()
+                window.displayIfNeeded()
+            }
+            DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) {
+                settle()
+                let clock = ContinuousClock()
+                print("rivers: \(store.rivers.map { "\(store.title(of: $0)) (\($0.all.count))" }.joined(separator: ", "))")
+                var times: [Int: [Double]] = [:]
+                // WEFT_SWITCH_ORDER=3,7: only those, back and forth, as one goes between two.
+                let order = (environment["WEFT_SWITCH_ORDER"] ?? "").split(separator: ",").compactMap { Int($0) }.filter { store.rivers.indices.contains($0) }
+                for _ in 0..<rounds {
+                    for index in order.isEmpty ? Array(store.rivers.indices) : order {
+                        let took = clock.measure {
+                            store.currentRiver = index
+                            settle()
+                        }
+                        times[index, default: []].append(Double(took.components.attoseconds) / 1e15 + Double(took.components.seconds) * 1000)
+                    }
+                }
+                for index in store.rivers.indices where times[index] != nil {
+                    let each = times[index] ?? []
+                    print(String(format: "%@: first %.1f ms, then %@", store.title(of: store.rivers[index]), each.first ?? 0, each.dropFirst().map { String(format: "%.1f", $0) }.joined(separator: " ")))
+                }
+                exit(0)
+            }
+            return
+        }
         // WEFT_SAVED=Work: that saved river, shown as its file has it; else a river with nothing in it yet.
         if let saved = environment["WEFT_SAVED"] { store.openSaved(saved) } else { store.river.cards.removeAll() }
         for name in names("WEFT_OPEN").reversed() { store.open(name: name) }
@@ -130,6 +170,8 @@ enum Snapshot {
         }
         // WEFT_OVERVIEW: the river shown whole, its cards as tiles.
         if environment["WEFT_OVERVIEW"] != nil { DispatchQueue.main.async { actions.overview += 1 } }
+        // WEFT_GO_TO_ROW=words: Go to Row, with those words typed.
+        if let typed = environment["WEFT_GO_TO_ROW"] { DispatchQueue.main.async { actions.goToRowSeed = typed; actions.goToRow += 1 } }
         // WEFT_STAMP: the note chosen stamped with today, as ⌃⌘T does.
         if environment["WEFT_STAMP"] != nil { DispatchQueue.main.async { store.stampToday() } }
         // WEFT_MENTION="Meeting|2026-11-12": that note gone to as a backlink pill goes to it — showing where it speaks of the page.
@@ -171,6 +213,10 @@ enum Snapshot {
         // WEFT_DELETE=Title: that card's note deleted, as its button does it — and the offer to undo shown.
         if let title = environment["WEFT_DELETE"], let card = store.river.cards.first(where: { $0.title == title }) {
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) { store.delete(card.id, in: store.river) }
+        }
+        // WEFT_ARCHIVE=Title: that card's note archived from its menu — the card closed, the offer to undo shown.
+        if let title = environment["WEFT_ARCHIVE"], let card = store.river.cards.first(where: { $0.title == title }) {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) { store.toggleArchived(path: card.path, title: card.title, closing: card.id, in: store.river) }
         }
         let delay = Double(environment["WEFT_DELAY"] ?? "") ?? 2
         DispatchQueue.main.asyncAfter(deadline: .now() + delay) {

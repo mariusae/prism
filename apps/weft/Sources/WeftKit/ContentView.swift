@@ -19,6 +19,10 @@ public final class WindowActions {
     public var saveRiver = 0
     /// Moved to find among the river's own notes: by name, or in what they say.
     public var findInRiver = 0
+    /// Go to a row of the river's outlines: ⌥⌘P.
+    public var goToRow = 0
+    /// What Go to Row opens with typed: a snapshot's.
+    public var goToRowSeed = ""
     public init() {}
 }
 
@@ -56,6 +60,7 @@ public struct ContentView: View {
     @State private var showsOverview = false
     /// Whether what is being found is found among the river's own notes only.
     @State private var findsInRiver = false
+    @State private var showsGoToRow = false
     @State private var columns: NavigationSplitViewVisibility = .detailOnly
     @State private var searchFocus = 0
     /// How wide the river's side of the window is: what the bar is fitted to.
@@ -103,6 +108,16 @@ public struct ContentView: View {
                     }
                 }
                 .animation(.easeOut(duration: 0.12), value: showsQuickOpen)
+                .overlay(alignment: .top) {
+                    if showsGoToRow {
+                        ZStack(alignment: .top) {
+                            Color.black.opacity(0.06).ignoresSafeArea().onTapGesture { showsGoToRow = false }
+                            GoToRow(store: store, isShown: $showsGoToRow, typed: actions.goToRowSeed).padding(.top, 6)
+                        }
+                        .transition(.opacity.combined(with: .scale(scale: 0.98, anchor: .top)))
+                    }
+                }
+                .animation(.easeOut(duration: 0.12), value: showsGoToRow)
                 // ⇧⌘M: a river to move the card chosen to, found by name.
                 .overlay(alignment: .top) {
                     if let moving = store.movingCards {
@@ -210,6 +225,11 @@ public struct ContentView: View {
             showsOverview = false
             if store.finding.isShown { store.finding.close() }
         }
+        .onChange(of: actions.goToRow) { _, _ in
+            showsQuickOpen = false
+            showsGoToRow.toggle()
+        }
+        .onChange(of: store.currentRiver) { _, _ in showsGoToRow = false }
         .onChange(of: actions.findInRiver) { _, _ in
             if showsQuickOpen, findsInRiver { return showsQuickOpen = false }
             seed = actions.typed
@@ -223,6 +243,7 @@ public struct ContentView: View {
     }
 
     private func show(_ typed: String) {
+        showsGoToRow = false
         findsInRiver = false
         seed = typed
         showsQuickOpen = true
@@ -384,7 +405,7 @@ struct RiverBar: View {
                 }
                 .contentShape(Capsule())
                 .onTapGesture {
-                    if current { onFind() } else { withAnimation(.snappy(duration: 0.2)) { store.currentRiver = index } }
+                    if current { onFind() } else { store.currentRiver = index }
                 }
                 .onHover { hovered = $0 ? river.id : (hovered == river.id ? nil : hovered) }
                 // Held and carried along the bar, as Safari's tabs are: the others make room as it passes.

@@ -58,6 +58,10 @@ public struct NoteEditorView: UIViewRepresentable {
     /// and brought into sight.
     var marks: [NSRange]
     var markAt: Int?
+    /// Where the app asks the caret to be — a row gone to — brought into
+    /// sight; and told, once it is there, that it is taken.
+    var caretAt: Int?
+    var onCaretTaken: () -> Void
     /// Asked to show one row of the outline as a note of its own — only
     /// what is under it: handed the row's name in the note, for the app
     /// to have this card show it (`NoteEditor.setFocus`), or — `apart` —
@@ -95,7 +99,7 @@ public struct NoteEditorView: UIViewRepresentable {
         onMoveRows: ((_ markdown: String, _ moved: @escaping () -> Void) -> Void)? = nil,
         savePictures: @escaping ([EditorPastedPicture]) -> [String] = { _ in [] },
         onZoom: ((_ row: String, _ apart: Bool) -> Void)? = nil, onZoomOut: (() -> Void)? = nil,
-        marks: [NSRange] = [], markAt: Int? = nil,
+        marks: [NSRange] = [], markAt: Int? = nil, caretAt: Int? = nil, onCaretTaken: @escaping () -> Void = {},
         onChange: @escaping () -> Void = {}, onFocus: @escaping (Bool) -> Void = { _ in }, onFollow: @escaping (EditorLink) -> Void = { _ in }
     ) {
         self.editor = editor
@@ -121,6 +125,8 @@ public struct NoteEditorView: UIViewRepresentable {
         self.onZoom = onZoom
         self.marks = marks
         self.markAt = markAt
+        self.caretAt = caretAt
+        self.onCaretTaken = onCaretTaken
         self.onZoomOut = onZoomOut
         self.onMoveRows = onMoveRows
         self.savePictures = savePictures
@@ -170,6 +176,7 @@ public struct NoteEditorView: UIViewRepresentable {
         } else if looks {
             coordinator.restyle()
         }
+        if let caretAt { coordinator.go(to: caretAt) }
         view.showTools()
         // While the app has yet to hear that the caret came or went, what
         // it says of where the caret should be is what it said before.
@@ -208,6 +215,10 @@ extension NoteEditorView.Coordinator: UITextViewDelegate {
         // would break off; and not between a change and the note's taking
         // it, when what the note says of the text is of the text before.
         guard let view, !view.isComposing, !isBehind else { return }
+        // Never inside a link shown as its page's title: it is one thing, before or after it.
+        let snapped = BodyStyler.outsideWholes(in: textView.textStorage, textView.selectedRange, from: lastSelection)
+        lastSelection = snapped
+        if snapped != textView.selectedRange { return textView.selectedRange = snapped }
         selectionChanged()
         view.showFold()
     }

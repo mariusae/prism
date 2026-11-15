@@ -23,6 +23,8 @@ extension NoteEditorView {
         private(set) var layout = BodyLayout(lines: [], runs: [])
         private var revealed = Set<Int>()
         private(set) var isApplying = false
+        /// The selection as it last was: which way a caret moved, to step it past a link whole.
+        var lastSelection = NSRange(location: 0, length: 0)
 
         init(_ parent: NoteEditorView) { self.parent = parent }
 
@@ -68,9 +70,27 @@ extension NoteEditorView {
             parent.onFolds(now)
         }
 
+        /// The labels the editor was last given: what each link to a page is shown as.
+        private var givenLabels: [String: String]?
+
+        /// Tells the editor what each link to a page is shown as — its page's title, a river's
+        /// name — so that it shows them as words, which wrap. Whether that changed what it shows.
+        @discardableResult
+        func giveLabels() -> Bool {
+            var labels: [String: String] = [:]
+            for target in editor.linkTargets() {
+                labels[target] = riverName(linkTarget: target) ?? parent.linkLabel(target) ?? target
+            }
+            guard labels != givenLabels else { return false }
+            givenLabels = labels
+            editor.setLinkLabels(labels: labels)
+            return true
+        }
+
         /// Shows the editor's note from scratch.
         func load() {
             guard let view, let storage = view.noteStorage else { return }
+            giveLabels()
             shown = editor.text()
             if storage.string != shown {
                 isApplying = true
@@ -80,6 +100,18 @@ extension NoteEditorView {
                 isApplying = false
             }
             restyle()
+        }
+
+        /// The caret put where the app asked — once the view is in a window
+        /// and laid out — and brought into sight; the app told it is taken.
+        func go(to location: Int) {
+            DispatchQueue.main.async { [weak self] in
+                guard let self, let view = self.view, view.window != nil else { return }
+                let at = NSRange(location: min(location, view.noteStorage?.length ?? 0), length: 0)
+                view.caret = at
+                view.scrollRangeToVisible(at)
+                self.parent.onCaretTaken()
+            }
         }
 
         /// Marks what the app says is found, and brings the one gone to into sight.
@@ -108,6 +140,8 @@ extension NoteEditorView {
         /// Dresses the text again, as the editor reads it.
         func restyle() {
             guard let view, let storage = view.noteStorage, let manager = view.noteLayout as? BodyLayoutManager else { return }
+            // A page linked to has another title now: the text that shows it is made again.
+            if !isApplying, givenLabels != nil, giveLabels(), editor.text() != shown { return load() }
             var styler = BodyStyler(theme: parent.theme, pageExists: parent.pageExists, linkLabel: parent.linkLabel, linkIcon: parent.linkIcon)
             // A row's own Markdown: the view shows its words, not how they are written.
             let editor = self.editor

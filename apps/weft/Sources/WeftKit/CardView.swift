@@ -135,7 +135,7 @@ struct CardView: View {
         .contentShape(Rectangle())
         .onTapGesture { river.selected = card.id }
         .onHover { isHovered = $0 }
-        .contextMenu { menu }
+        .contextMenu { Deferred { menu } }
         .task(id: store.indexRevision) { refresh() }
         .onChange(of: bodyHeight) { _, height in store.cardHeights[card.spot] = height }
         // The row it showed is in the note no more: it shows the note.
@@ -437,7 +437,7 @@ struct CardView: View {
                 CardButton("chevron.right", help: "The Day After") { step(1) }
             }
             // Few, and quiet: writing as text or an outline, pinning, the inbox and deleting are under "…".
-            Menu { menu } label: { CardButtonFace(symbol: "ellipsis") }
+            Menu { Deferred { menu } } label: { CardButtonFace(symbol: "ellipsis") }
                 .menuStyle(.button)
                 .buttonStyle(.plain)
                 .menuIndicator(.hidden)
@@ -511,6 +511,8 @@ struct CardView: View {
                     onZoom: { name, apart in zoom(name, apart: apart) },
                     onZoomOut: isFocus ? { widen(shown) } : nil,
                     marks: store.finding.marks(of: card.id) ?? marks(in: shown, isFocus: isFocus), markAt: store.finding.at(card.id),
+                    caretAt: river.goingTo?.card == card.id ? river.goingTo?.at : nil,
+                    onCaretTaken: { if river.goingTo?.card == card.id { river.goingTo = nil } },
                     onChange: { if isFocus { draft.changed(from: card.id) } else { draft.changed() } },
                     onFocus: { focused in
                         if focused {

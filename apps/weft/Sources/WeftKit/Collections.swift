@@ -25,7 +25,11 @@ extension GraphStore {
     public func isIn(_ river: String, path: String) -> Bool {
         _ = indexRevision
         if let open = rivers.first(where: { $0.name == river }) { return open.cards.contains { $0.path == path && $0.focus == nil } }
-        return members(of: river).contains(path)
+        // Read from its file once — asked for every card as its menu is made — until it changes.
+        if let known = knownMembers[river] { return known.contains(path) }
+        let members = Set(members(of: river))
+        knownMembers[river] = members
+        return members.contains(path)
     }
 
     public func isPinned(_ path: String) -> Bool { isIn(Self.pinnedRiver, path: path) }
@@ -81,7 +85,10 @@ extension GraphStore {
     }
 
     /// Moves the index's revision on, for what reads a river's membership.
-    private func touchCollections() { collectionsRevision += 1 }
+    func touchCollections() {
+        knownMembers.removeAll()
+        collectionsRevision += 1
+    }
 
     // MARK: Archived
 
@@ -104,14 +111,18 @@ extension GraphStore {
         if now { archived.insert(path) } else { archived.remove(path) }
         // The card it was archived from, closed — and where it stood, to come back to.
         var closed: (river: River, after: Card.ID?)?
-        if now, let card, let river, let place = river.all.firstIndex(where: { $0.id == card }) {
+        // Kept as a card closed is, to be opened again (⇧⌘T) once the offer to undo is gone.
+        var action: Int?
+        if now, let card, let river, let place = river.all.firstIndex(where: { $0.id == card }), let shown = river.card(card) {
             closed = (river, place > 0 ? river.all[place - 1].id : nil)
+            action = remember(shut: [(shown, river.cards.firstIndex { $0.id == card } ?? 0, river.isFound(card))], in: river, archived: true)
             river.close(card)
             rememberRivers()
         }
         touchCollections()
         undoable(now ? "Archived “\(draft.label)”" : "Unarchived “\(draft.label)”") { [weak self] in
             guard let self else { return }
+            if let action { self.forgetShut(action: action) }
             let draft = self.draft(path: path, title: title)
             draft.setField("archived", values: now ? [] : ["true"])
             draft.saveNow()

@@ -63,6 +63,8 @@ extension NSAttributedString.Key {
     static let prismPill = NSAttributedString.Key("prism.pill")
     static let prismLink = NSAttributedString.Key("prism.link")
     static let prismLabel = NSAttributedString.Key("prism.label")
+    /// A link to a page shown as its words, whole: where it starts. The caret is never inside it.
+    static let prismWhole = NSAttributedString.Key("prism.whole")
     static let prismBullet = NSAttributedString.Key("prism.bullet")
     static let prismTask = NSAttributedString.Key("prism.task")
     static let prismQuote = NSAttributedString.Key("prism.quote")
@@ -388,7 +390,12 @@ struct BodyStyler {
                 link(storage, range, to: .page(target), symbol: symbol, missing: missing, line: line, markupEnd: markupEnd, faint: !isRiver && !missing && pageArchived(target))
                 // A link written with its page's file's name shows the page's title — off the lines being written in.
                 let words = (storage.string as NSString).substring(with: range)
-                if words == "\u{FFFC}" {
+                if range.length > 1, (storage.string as NSString).character(at: range.location) == 0xFFFC {
+                    // Its atom, and then its words — the page's title — which wrap as words do:
+                    // the atom is the room for its icon, and not seen; the whole is one thing to the caret.
+                    storage.addAttributes([.font: Self.hiddenFont, .foregroundColor: EditorColor.clear, .kern: symbol == nil ? 0 : leadWidth], range: NSRange(location: range.location, length: 1))
+                    storage.addAttribute(.prismWhole, value: range.location, range: range)
+                } else if words == "\u{FFFC}" {
                     // A link to a page is one character: drawn as its page's title, or its own name.
                     // Its icon in its own room, first: never out over what stands before the row's words.
                     relabel(storage, range, as: isRiver ? (riverName(linkTarget: target) ?? target) : (linkLabel(target) ?? target), lead: symbol == nil ? 0 : leadWidth)
@@ -399,7 +406,7 @@ struct BodyStyler {
                 // An address shown as itself is cut to what says where it leads.
                 let bare = (storage.string as NSString).substring(with: range) == url
                 link(storage, range, to: .web(url), symbol: nil, missing: false, line: line, markupEnd: markupEnd, leaves: true)
-                if bare { shorten(storage, range, address: url as NSString, lead: range.location == Int(line.start)) }
+                if bare { shorten(storage, range, address: url as NSString) }
             case .tag(let name):
                 link(storage, range, to: .tag(name), symbol: nil, missing: false, line: line, markupEnd: markupEnd)
             case .image:
@@ -459,7 +466,7 @@ struct BodyStyler {
         if case .heading = line.kind { return }
         let closes = markupEnd[NSMaxRange(range)].map { $0 > NSMaxRange(range) } ?? false
         // A link to a page shown as its title — one character — has its icon's room in it.
-        let atom = (storage.string as NSString).substring(with: range) == "\u{FFFC}"
+        let atom = range.length > 0 && (storage.string as NSString).character(at: range.location) == 0xFFFC
         storage.addAttribute(.prismPill, value: Pill(symbol: symbol, tint: tint, isMissing: missing, leaves: leaves, roomInside: leaves && !closes, iconInside: atom), range: range)
         // Room for the icon, on the last character of the markup before the words…
         if symbol != nil, !atom, range.location > Int(line.start) {
@@ -473,6 +480,27 @@ struct BodyStyler {
         } else if leaves, range.length > 0 {
             storage.addAttribute(.kern, value: after, range: NSRange(location: NSMaxRange(range) - 1, length: 1))
         }
+    }
+
+    /// A selection kept out of the inside of a link shown as its words: a
+    /// caret there goes to its edge, the way it was going from `old`; a
+    /// range that runs into one takes it in whole.
+    static func outsideWholes(in storage: NSAttributedString, _ range: NSRange, from old: NSRange) -> NSRange {
+        func whole(around at: Int) -> NSRange? {
+            guard at > 0, at < storage.length else { return nil }
+            var found = NSRange()
+            guard let start = storage.attribute(.prismWhole, at: at, longestEffectiveRange: &found, in: NSRange(location: 0, length: storage.length)) as? Int,
+                  storage.attribute(.prismWhole, at: at - 1, effectiveRange: nil) as? Int == start else { return nil }
+            return found
+        }
+        var range = range
+        if range.length == 0 {
+            if let link = whole(around: range.location) { range.location = range.location > old.location ? NSMaxRange(link) : link.location }
+        } else {
+            if let link = whole(around: range.location) { range = NSRange(location: link.location, length: NSMaxRange(range) - link.location) }
+            if let link = whole(around: NSMaxRange(range)) { range.length = NSMaxRange(link) - range.location }
+        }
+        return range
     }
 
     /// Shows other words in a link's place: what is written is hidden,
@@ -511,7 +539,7 @@ struct BodyStyler {
     /// Hides what of a web address says nothing: its scheme, a leading
     /// `www.`, and everything from its query on. Off the lines being
     /// written in only; the address itself is not touched.
-    private func shorten(_ storage: NSTextStorage, _ range: NSRange, address: NSString, lead: Bool) {
+    private func shorten(_ storage: NSTextStorage, _ range: NSRange, address: NSString) {
         let hidden: [NSAttributedString.Key: Any] = [.font: Self.hiddenFont, .foregroundColor: EditorColor.clear, .prismMarkup: true]
         var start = 0
         let scheme = address.range(of: "://")
@@ -524,11 +552,8 @@ struct BodyStyler {
         }
         while end > start + 1, address.character(at: end - 1) == 47 { end -= 1 }
         guard end > start else { return }
-        if start > 0 {
-            storage.addAttributes(hidden, range: NSRange(location: range.location, length: start))
-            // The icon's room, on the last of what is hidden before the words.
-            if lead { storage.addAttribute(.kern, value: leadWidth, range: NSRange(location: range.location + start - 1, length: 1)) }
-        }
+        // (No room for an icon before it: an address has none drawn.)
+        if start > 0 { storage.addAttributes(hidden, range: NSRange(location: range.location, length: start)) }
         if end < address.length {
             storage.addAttributes(hidden, range: NSRange(location: range.location + end, length: address.length - end))
         }
@@ -859,7 +884,9 @@ final class BodyLayoutManager: NSLayoutManager {
             // On the line's own baseline: drawn from a corner, a face with leading of its own — a
             // typographer's — would sit below its neighbours by it.
             let baseline = CGPoint(x: fragment.minX + at.x + label.lead + origin.x, y: fragment.minY + at.y + origin.y)
-            label.text.draw(with: CGRect(origin: baseline, size: CGSize(width: 10_000, height: 0)), options: [], context: nil)
+            // Past the text's edge, the title ends in "…" where the edge is — not cut through a letter.
+            let room = container.size.width - container.lineFragmentPadding - (fragment.minX + at.x + label.lead)
+            Self.fitted(label.text, to: room).draw(with: CGRect(origin: baseline, size: CGSize(width: 10_000, height: 0)), options: [], context: nil)
         }
 
         storage.enumerateAttribute(.prismBullet, in: characters) { value, range, _ in
@@ -924,6 +951,22 @@ final class BodyLayoutManager: NSLayoutManager {
             let drawn = CGRect(x: bar.minX + 1, y: bar.minY, width: 2, height: max(bar.height, 2)).offsetBy(dx: origin.x, dy: origin.y)
             Self.roundedPath(drawn, radius: 1).fill()
         }
+    }
+
+    /// Words as wide as `room` at most: cut at a word where one ends near enough, with "…" after.
+    static func fitted(_ text: NSAttributedString, to room: CGFloat) -> NSAttributedString {
+        guard room > 0, text.size().width > room, text.length > 1 else { return text }
+        let attributes = text.attributes(at: 0, effectiveRange: nil)
+        let words = text.string
+        var count = words.count
+        var cut = text
+        while count > 1 {
+            count -= 1
+            let kept = String(words.prefix(count)).trimmingCharacters(in: .whitespaces) + "…"
+            cut = NSAttributedString(string: kept, attributes: attributes)
+            if cut.size().width <= room { break }
+        }
+        return cut
     }
 
     /// A row's handle: a small triangle pointing at its words — down when its rows are shown.

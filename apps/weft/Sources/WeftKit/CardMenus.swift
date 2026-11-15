@@ -16,3 +16,12 @@ struct ShowAsMenu: View {
         .pickerStyle(.menu)
     }
 }
+
+
+/// What a view is made of, made only when it is shown: a card's menu, asked
+/// for every card as the river is drawn, is made when it is opened.
+struct Deferred<Content: View>: View {
+    @ViewBuilder let make: () -> Content
+
+    var body: some View { make() }
+}
