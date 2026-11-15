@@ -15,6 +15,8 @@ struct RiverView: View {
     /// show: what the ticks at the river's edge are drawn from.
     @State private var heights: [Card.ID: CGFloat] = [:]
     @State private var showing: Set<Card.ID> = []
+    /// How tall the river's view is: what of it is in sight.
+    @State private var sightHeight: CGFloat = 0
     /// The card picked up to be moved, while it is carried.
     @State private var carried: Card.ID?
     /// How far down the window's bar reaches over the river.
@@ -75,10 +77,16 @@ struct RiverView: View {
                                 .onGeometryChange(for: CGRect.self) { $0.frame(in: .scrollView) } action: { frame in
                                     place(card.id, at: frame)
                                     scroll.saw(card, at: frame, in: river)
+                                    // In sight, its tick lit: from where it is, whenever it moves —
+                                    // never from being told, which a card scrolled past may not be.
+                                    let seen = frame.maxY > 0 && frame.minY < sightHeight
+                                    if seen != showing.contains(card.id) {
+                                        if seen { showing.insert(card.id) } else { showing.remove(card.id) }
+                                    }
                                 }
-                                .onScrollVisibilityChange(threshold: 0.001) { visible in
-                                    if visible { showing.insert(card.id) } else { showing.remove(card.id) }
-                                }
+                                // Let go of by the lazy stack — scrolled far past, or jumped over —
+                                // a card may never be told it is out of sight: gone, it is.
+                                .onDisappear { showing.remove(card.id) }
                                 .opacity(carried == card.id ? 0.45 : 1)
                                 // Picked up by anything of it that is not its words, and
                                 // carried: the others make room as it passes over them.
@@ -113,6 +121,7 @@ struct RiverView: View {
             }
             .background(Color.inkPage)
             .scrollPosition($position)
+            .onScrollGeometryChange(for: CGFloat.self) { $0.containerSize.height } action: { _, height in sightHeight = height }
             .onScrollGeometryChange(for: CGPoint.self) { CGPoint(x: $0.contentInsets.top, y: $0.contentOffset.y) } action: { _, at in
                 scroll.offset = at.y
                 scroll.inset = at.x
