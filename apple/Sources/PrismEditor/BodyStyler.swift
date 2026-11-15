@@ -129,7 +129,8 @@ struct BodyStyler {
     var taskRoom: CGFloat { (size * 1.5).rounded(.up) }
 
     /// The room under each of a row's lines, for the line height a row of its
-    /// kind is set to: an outline compact but not dense (1.45), what is read
+    /// kind is set to: an outline compact, for scanning a list (1.4; on a phone,
+    /// where a row is also a finger's target, a little more), what is read
     /// as prose — a paragraph shown as prose, a quote — more open (1.6), a
     /// heading tight (1.15), code between. As the font's own height differs
     /// from face to face, the room is what is left to the height asked for.
@@ -138,11 +139,25 @@ struct BodyStyler {
         case .heading: 1.15
         case .quote: 1.6
         case .code, .fence: 1.3
-        default: prose && depth <= 1 ? 1.6 : 1.45
+        default: prose && depth <= 1 ? 1.6 : outlineHeight
         }
         let natural = font.ascender - font.descender + font.leading
         return max((font.pointSize * height - natural).rounded(), 0)
     }
+
+    #if os(iOS)
+    static let outlineHeight: CGFloat = 1.4
+    /// The room after an outline's row, before the next: a row's whole pitch is this and its line's height.
+    static let outlineGap: CGFloat = 0.1
+    #else
+    static let outlineHeight: CGFloat = 1.4
+    static let outlineGap: CGFloat = 0.05
+    #endif
+
+    /// What a row is, for the room between rows: rows of one kind stand
+    /// together, and where the kind changes — a note's properties to its
+    /// words, words to a quote — a little more room sets the groups apart.
+    enum Group { case property, quote, other }
 
     /// The properties a note is given as rows — a link kept, an article —
     /// whose names are said as what they are: about the note, not of it.
@@ -238,6 +253,7 @@ struct BodyStyler {
         storage.setAttributes(baseAttributes, range: whole)
 
         // Lines: indentation, and the fonts a whole line takes.
+        var previousGroup: Group?
         for (index, line) in layout.lines.enumerated() {
             let range = NSRange(location: Int(line.start), length: Int(line.end - line.start))
             guard NSMaxRange(range) <= storage.length else { continue }
@@ -245,7 +261,7 @@ struct BodyStyler {
             let indent = Self.wordsIndent(of: line, step: theme.step, prose: prose)
             paragraph.firstLineHeadIndent = indent
             paragraph.headIndent = indent
-            paragraph.paragraphSpacing = (size * (prose && line.depth <= 1 ? 0.7 : 0.2)).rounded()
+            paragraph.paragraphSpacing = (size * (prose && line.depth <= 1 ? 0.7 : Self.outlineGap)).rounded()
             switch line.kind {
             case .heading(let level):
                 let scale = Self.headingScales[min(max(Int(level), 1), 6) - 1]
@@ -275,8 +291,10 @@ struct BodyStyler {
             }
             // A property, written as a row — `URL: …`, `Type: …` — says something about the note:
             // its name in the set's label face, small and quiet; a URL's address the same, smaller.
+            var group: Group = if case .quote = line.kind { .quote } else { .other }
             if case .item(nil, nil, "-") = line.kind, let key = Self.propertyName(in: storage.string as NSString, range: range) {
-                storage.addAttributes([.font: theme.label((size * 0.85).rounded(), weight: .medium), .foregroundColor: theme.secondary], range: key)
+                group = .property
+                storage.addAttributes([.font: theme.label((size * 0.85).rounded(), weight: .regular), .foregroundColor: theme.secondary], range: key)
                 holdLine(of: paragraph, key: key, in: range, storage: storage)
                 if (storage.string as NSString).substring(with: key).lowercased().hasPrefix("url") {
                     // The address only — not the space before it, which keeps the line as it is.
@@ -288,7 +306,8 @@ struct BodyStyler {
                     }
                 }
             } else if case .paragraph = line.kind, let key = Self.propertyName(in: storage.string as NSString, range: range) {
-                storage.addAttributes([.font: theme.label((size * 0.85).rounded(), weight: .medium), .foregroundColor: theme.secondary], range: key)
+                group = .property
+                storage.addAttributes([.font: theme.label((size * 0.85).rounded(), weight: .regular), .foregroundColor: theme.secondary], range: key)
                 holdLine(of: paragraph, key: key, in: range, storage: storage)
             }
             // An empty typed row, while the note is only read: no room at all.
@@ -300,6 +319,12 @@ struct BodyStyler {
                 if whole.length > 0 { storage.addAttribute(.paragraphStyle, value: paragraph, range: whole) }
                 continue
             }
+            // Where the kind of row changes — properties to words, words to a quote — room sets the groups apart.
+            // A heading has its own room before it already.
+            if let previousGroup, previousGroup != group, previousGroup != .other || group != .other {
+                if case .heading = line.kind {} else { paragraph.paragraphSpacingBefore += (size * 0.55).rounded() }
+            }
+            previousGroup = group
             // The room between its lines, by its kind and the font it is set in.
             let lineFont: EditorFont = switch line.kind {
             case .heading(let level): theme.display(size * Self.headingScales[min(max(Int(level), 1), 6) - 1])
@@ -871,14 +896,23 @@ final class BodyLayoutManager: NSLayoutManager {
             let glyphs = glyphRange(forCharacterRange: range, actualCharacterRange: nil)
             var whole = CGRect.null
             var left = CGFloat.greatestFiniteMagnitude
-            enumerateLineFragments(forGlyphRange: glyphs) { fragment, used, _, _, _ in
-                // The whole height of each line: so that the next quote's bar meets this one's.
+            var bottom = CGFloat.zero
+            var top = CGFloat?.none
+            enumerateLineFragments(forGlyphRange: glyphs) { fragment, used, _, lineGlyphs, _ in
                 whole = whole.union(CGRect(x: used.minX, y: fragment.minY, width: used.width, height: fragment.height))
                 left = min(left, used.minX)
+                // Where the line's words end below: its baseline and the font's descent — not the room under the line.
+                let baseline = fragment.minY + self.location(forGlyphAt: lineGlyphs.location).y
+                if top == nil { top = baseline - font.ascender }
+                bottom = baseline - font.descender
             }
             guard !whole.isNull else { return }
-            let bar = CGRect(x: max(left - theme.step / 2 - 2, 0), y: whole.minY, width: 4, height: whole.height)
-            if let last = bars.last, abs(last.minX - bar.minX) < 1, bar.minY - last.maxY < size * 0.9 {
+            // A rule a little longer than the words, at both ends: from just above the first line's
+            // ascent to just under the last line's descent.
+            let reach = (size * 0.2).rounded()
+            let start = max((top ?? whole.minY) - reach, whole.minY)
+            let bar = CGRect(x: max(left - theme.step / 2 - 2, 0), y: start, width: 4, height: bottom + reach - start)
+            if let last = bars.last, abs(last.minX - bar.minX) < 1, bar.minY - last.maxY < size * 1.2 {
                 bars[bars.count - 1] = last.union(bar)
             } else {
                 bars.append(bar)
@@ -887,7 +921,7 @@ final class BodyLayoutManager: NSLayoutManager {
         for bar in bars {
             // A quote: a thin rule at its left, and nothing behind it — its words, and that line, say enough.
             theme.faint.setFill()
-            let drawn = CGRect(x: bar.minX + 1, y: bar.minY + 3, width: 2, height: max(bar.height - 6, 2)).offsetBy(dx: origin.x, dy: origin.y)
+            let drawn = CGRect(x: bar.minX + 1, y: bar.minY, width: 2, height: max(bar.height, 2)).offsetBy(dx: origin.x, dy: origin.y)
             Self.roundedPath(drawn, radius: 1).fill()
         }
     }

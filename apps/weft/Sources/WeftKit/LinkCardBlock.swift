@@ -60,7 +60,7 @@ struct LinkCardBlock: View {
             if let detail = about ?? found?.detail, !detail.isEmpty {
                 Text(detail).font(.system(size: 12.5)).foregroundStyle(Color.inkSecondary).lineLimit(2)
             }
-            Text(Self.host(address)).font(.caption).foregroundStyle(Color.inkFaint).lineLimit(1)
+            Text(Self.host(address)).font(.caption).foregroundStyle(Color.inkSecondary).lineLimit(1)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .onAppear { WebCards.shared.look(address) }
@@ -175,7 +175,7 @@ struct LinkNoteHeader: View {
                     Text(host).lineLimit(1)
                 }
                 .font(.caption)
-                .foregroundStyle(Color.inkFaint)
+                .foregroundStyle(Color.inkSecondary)
             }
             .frame(maxWidth: .infinity, alignment: .leading)
         }

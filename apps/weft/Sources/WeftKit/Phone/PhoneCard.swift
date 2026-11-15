@@ -511,7 +511,7 @@ struct PhoneCard: View {
             .padding(.horizontal, 9)
             .padding(.vertical, 4)
             .foregroundStyle(tint)
-            .background(Capsule().fill(tint.opacity(0.10)))
+            .background(Capsule().fill(tint.opacity(0.07)))
         }
         .buttonStyle(.plain)
     }

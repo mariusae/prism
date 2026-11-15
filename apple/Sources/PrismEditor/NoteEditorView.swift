@@ -864,7 +864,67 @@ public final class NoteTextView: NSTextView {
     public override func draw(_ dirtyRect: NSRect) {
         super.draw(dirtyRect)
         (layoutManager as? BodyLayoutManager)?.drawEmptyRow(at: textContainerOrigin)
+        if let tail, showsCaret {
+            indicator.color.setFill()
+            NSBezierPath(rect: tail).fill()
+        }
     }
+
+    // MARK: The caret
+    //
+    // The system's own caret, as a text view of TextKit 2 has it — thicker,
+    // in the accent, fading as it blinks — where this view's would be. The
+    // text view still says where (`drawInsertionPoint`), and when there is
+    // one at all (`updateInsertionPointStateAndRestartTimer`); it draws
+    // nothing of its own.
+
+    private lazy var indicator: NSTextInsertionIndicator = {
+        let indicator = NSTextInsertionIndicator(frame: .zero)
+        indicator.displayMode = .hidden
+        addSubview(indicator)
+        return indicator
+    }()
+
+    /// Where, beside the caret, a tail says which side's formatting what is typed joins.
+    private var tail: NSRect?
+
+    /// Whether there is a caret to show: the view writing in a window that is
+    /// being written in, nothing selected, and the caret not put away.
+    private var showsCaret: Bool {
+        guard let window, window.isKeyWindow, window.firstResponder === self, isEditable else { return false }
+        return selectedRange().length == 0 && (insertionPointColor?.alphaComponent ?? 0) > 0
+    }
+
+    private func showCaret() {
+        let shown = showsCaret
+        indicator.color = insertionPointColor.flatMap { $0.alphaComponent > 0 ? $0 : nil } ?? dictationAccent
+        indicator.displayMode = shown ? .automatic : .hidden
+        if !shown, let old = tail {
+            tail = nil
+            setNeedsDisplay(old)
+        }
+    }
+
+    public override func updateInsertionPointStateAndRestartTimer(_ restartFlag: Bool) {
+        super.updateInsertionPointStateAndRestartTimer(restartFlag)
+        showCaret()
+    }
+
+    public override var insertionPointColor: NSColor? {
+        didSet { if window != nil { showCaret() } }
+    }
+
+    public override func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        NotificationCenter.default.removeObserver(self, name: NSWindow.didBecomeKeyNotification, object: nil)
+        NotificationCenter.default.removeObserver(self, name: NSWindow.didResignKeyNotification, object: nil)
+        guard let window else { return }
+        for name in [NSWindow.didBecomeKeyNotification, NSWindow.didResignKeyNotification] {
+            NotificationCenter.default.addObserver(self, selector: #selector(keyChanged), name: name, object: window)
+        }
+    }
+
+    @objc private func keyChanged() { showCaret() }
 
     /// The caret is as tall as the words it stands among, and no taller:
     /// a line's box also holds the room left under it before the next,
@@ -874,14 +934,23 @@ public final class NoteTextView: NSTextView {
         let font = (typingAttributes[.font] as? NSFont) ?? coordinator?.parent.theme.body ?? .systemFont(ofSize: NSFont.systemFontSize)
         let tall = (font.ascender - font.descender).rounded(.up) + 2
         if rect.height > tall { rect.size.height = tall }
-        super.drawInsertionPoint(in: rect, color: color, turnedOn: flag)
+        // The system's caret stands where this one would have, centred on its line.
+        let width = max(indicator.intrinsicContentSize.width, 2)
+        let frame = NSRect(x: (rect.minX + rect.width / 2 - width / 2).rounded(), y: rect.minY, width: width, height: rect.height)
+        if indicator.frame != frame { indicator.frame = frame }
+        showCaret()
         // At an edge of formatting, a tail toward the words what is typed joins — Bike's typing affinity.
+        // Drawn steady, under the system's caret, which blinks on its own.
         let at = selectedRange().location
-        if flag, selectedRange().length == 0, isMarkup(at - 1) != isMarkup(at) {
+        var wanted: NSRect?
+        if showsCaret, isMarkup(at - 1) != isMarkup(at) {
             let joinsAfter = isMarkup(at - 1)
-            color.setFill()
-            let tail = NSRect(x: joinsAfter ? rect.maxX : rect.minX - 3, y: rect.maxY - 2, width: 3, height: 2)
-            NSBezierPath(rect: tail).fill()
+            wanted = NSRect(x: joinsAfter ? frame.maxX : frame.minX - 3, y: frame.maxY - 2, width: 3, height: 2)
+        }
+        if wanted != tail {
+            if let old = tail { setNeedsDisplay(old) }
+            tail = wanted
+            if let wanted { setNeedsDisplay(wanted) }
         }
     }
 

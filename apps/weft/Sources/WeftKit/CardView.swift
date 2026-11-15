@@ -865,7 +865,7 @@ struct FootPill: View {
             .padding(.horizontal, 7)
             .padding(.vertical, 2.5)
             .foregroundStyle(tint)
-            .background(Capsule().fill(tint.opacity(isHovered ? 0.18 : 0.10)))
+            .background(Capsule().fill(tint.opacity(isHovered ? 0.14 : 0.07)))
             .background(Capsule().fill(solid ? Color.inkCard : .clear))
             .contentShape(Capsule())
         }
