@@ -117,13 +117,76 @@ fn read(markdown: &str) -> (Rich, Vec<Piece>) {
     (rich, pieces)
 }
 
+/// The references a space or a tab is written as where Markdown would
+/// drop it — at a line's start or end — and what each stands for.
+const KEPT_SPACES: [(&str, char); 2] = [("&#32;", ' '), ("&#9;", '\t')];
+
 fn push_plain(markdown: &str, range: Range<usize>, rich: &mut Rich, pieces: &mut Vec<Piece>) {
     if range.is_empty() {
         return;
     }
+    // Spaces at a line's start or end are no words — Markdown drops them — but markup.
+    let blank = |b: u8| b == b' ' || b == b'\t';
+    let bytes = markdown.as_bytes();
+    let mut edge = None;
+    let mut at = range.start;
+    while at < range.end {
+        if blank(bytes[at]) {
+            let end = (at..range.end).find(|i| !blank(bytes[*i])).unwrap_or(range.end);
+            let run_end = (at..bytes.len()).find(|i| !blank(bytes[*i])).unwrap_or(bytes.len());
+            if (at == 0 || bytes[at - 1] == b'\n') || run_end == bytes.len() || bytes[run_end] == b'\n' {
+                edge = Some(at..end);
+                break;
+            }
+            at = end;
+        } else {
+            at += 1;
+        }
+    }
+    if let Some(edge) = edge {
+        push_plain(markdown, range.start..edge.start, rich, pieces);
+        push_markup(edge.clone(), rich, pieces);
+        return push_plain(markdown, edge.end..range.end, rich, pieces);
+    }
+    // A space kept by its reference is shown as the space; the reference is markup.
+    let next = KEPT_SPACES
+        .iter()
+        .filter_map(|(written, c)| markdown[range.clone()].find(written).map(|at| (range.start + at, *written, *c)))
+        .min_by_key(|found| found.0);
+    if let Some((found, written, c)) = next {
+        push_plain(markdown, range.start..found, rich, pieces);
+        let at = rich.text.len();
+        rich.text.push(c);
+        pieces.push(Piece { markdown: found..found + written.len(), shown: at..rich.text.len(), plain: false });
+        return push_plain(markdown, found + written.len()..range.end, rich, pieces);
+    }
     let at = rich.text.len();
     rich.text.push_str(&markdown[range.clone()]);
     pieces.push(Piece { markdown: range, shown: at..rich.text.len(), plain: true });
+}
+
+/// Words written with the spaces at each line's ends kept: Markdown drops
+/// them there — and two at an end would break the line — so the outermost
+/// is written as its reference.
+fn keep_spaces(written: String) -> String {
+    let reference = |c: char| if c == '\t' { "&#9;" } else { "&#32;" };
+    let lines: Vec<String> = written
+        .split('\n')
+        .map(|line| {
+            let mut line = line.to_owned();
+            if let Some(last) = line.chars().next_back().filter(|c| *c == ' ' || *c == '\t') {
+                if line.len() > 1 || !line.starts_with(last) {
+                    line.truncate(line.len() - 1);
+                    line.push_str(reference(last));
+                }
+            }
+            if let Some(first) = line.chars().next().filter(|c| *c == ' ' || *c == '\t') {
+                line.replace_range(..1, reference(first));
+            }
+            line
+        })
+        .collect();
+    lines.join("\n")
 }
 
 fn push_markup(range: Range<usize>, rich: &Rich, pieces: &mut Vec<Piece>) {
@@ -502,7 +565,7 @@ impl Rich {
     /// that cannot be read as another kind of row whatever they begin
     /// with — a heading's.
     pub fn markdown(&self, guarded: bool) -> String {
-        let guard_start = |written: String| if guarded { guard_start(written) } else { written };
+        let guard_start = |written: String| keep_spaces(if guarded { guard_start(written) } else { written });
         // Emphasis as it was written; else by `_`, which does not run into `**`.
         let underscored = Rich {
             text: self.text.clone(),
@@ -686,6 +749,10 @@ fn escape(words: &str, before: &str, out: &mut String, escaping: Escaping) {
                     || (c == '<' && next.is_some_and(|n| n == '!' || n.is_ascii_alphabetic()))
                     || (c == '~' && next == Some('~'))
                     || (c == '=' && next == Some('='))
+                    || (c == '&'
+                        && KEPT_SPACES
+                            .iter()
+                            .any(|(written, _)| words[words.len() - chars.clone().map(char::len_utf8).sum::<usize>()..].starts_with(&written[1..])))
                     || (c == '!' && next == Some('['))
                     || (c == '#' && next.is_some_and(|n| !n.is_whitespace() && n != '#') && previous.is_none_or(char::is_whitespace) && false)
             }
@@ -929,5 +996,16 @@ mod graph {
             eprintln!("  {from:?}\n→ {to:?}");
         }
         assert!(misread.is_empty());
+    }
+
+    #[test]
+    fn spaces_at_a_lines_ends_are_kept() {
+        for words in [" lead", "  two lead", "trail ", "end  ", " ", "\tindent", "a\n  b ", "say &#32; literally"] {
+            let written = Rich::plain(words).to_markdown();
+            assert_eq!(Rich::parse(&written).text, words, "{words:?} written {written:?}");
+        }
+        // Only what Markdown would drop is written as a reference.
+        assert_eq!(Rich::plain(" a  b ").to_markdown(), "&#32;a  b&#32;");
+        assert_eq!(Rich::plain("a b").to_markdown(), "a b");
     }
 }

@@ -691,7 +691,12 @@ impl<'a> Parser<'a> {
 
     fn append_continuation(&mut self, line: &str, indent: usize) {
         if is_blank(line) {
-            // A blank line inside a block is kept as it was, spaces and all.
+            // Spaces alone, indented as far as the block: they are the block's, past its indentation.
+            let column = self.last_content_column;
+            if column > 0 && line.len() > column && line.bytes().take(column).all(|b| b == b' ') {
+                return self.append_line(&line[column..], None);
+            }
+            // Any other blank line inside a block is kept as it was, spaces and all.
             return self.append_line(line, if line.is_empty() { None } else { Some(0) });
         }
         let strip = indent.min(self.last_content_column);
@@ -742,17 +747,25 @@ fn write(rows: &[(usize, &Block)], trailing: &[String], final_newline: bool, end
     // The depth of an empty item just written: Markdown reads its first
     // child as its own only with no blank line between them.
     let mut empty_item: Option<usize> = None;
+    // The depth of a quote just written: a quote straight after it, with no
+    // blank line between, would be read as more of it.
+    let mut quote: Option<usize> = None;
     for &(row_depth, block) in rows {
         if block.kind == BlockKind::Raw {
             lines.extend(block.text.split('\n').map(str::to_owned));
             columns.clear();
             continuing = None;
+            quote = None;
             continue;
         }
         let opens_empty = empty_item.is_some_and(|over| row_depth > over);
         if !opens_empty {
             lines.extend(block.layout.gap.iter().cloned());
         }
+        if block.kind == BlockKind::Quote && block.layout.gap.is_empty() && quote == Some(row_depth) {
+            lines.push(String::new());
+        }
+        quote = (block.kind == BlockKind::Quote).then_some(row_depth);
         let depth = row_depth.min(columns.len());
         columns.truncate(depth);
         let base = columns.last().copied().unwrap_or(0);

@@ -57,8 +57,6 @@ extension NSAttributedString.Key {
     static let prismBullet = NSAttributedString.Key("prism.bullet")
     static let prismTask = NSAttributedString.Key("prism.task")
     static let prismQuote = NSAttributedString.Key("prism.quote")
-    /// A code block's fence: its backticks drawn set down into their line.
-    static let prismFence = NSAttributedString.Key("prism.fence")
     /// Markdown that is never seen: the caret steps over it, Delete leaves it be.
     static let prismMarkup = NSAttributedString.Key("prism.markup")
 }
@@ -161,14 +159,12 @@ struct BodyStyler {
                 paragraph.headIndent += theme.step
                 storage.addAttribute(.prismQuote, value: true, range: range)
                 storage.addAttribute(.foregroundColor, value: theme.secondary, range: range)
-            case .fence:
-                storage.addAttributes([.font: theme.mono(size * 0.92), .foregroundColor: EditorColor.clear, .prismFence: true], range: range)
             case .code:
+                // Only the code: its fences are Markdown, and never in the view. Room
+                // above and below it, where its fences stood, sets it apart.
                 storage.addAttribute(.font, value: theme.mono(size * 0.92), range: range)
-                // A row of code's fences, there to be edited and not read: faint,
-                // and their backticks — which sit at the top of a line — set down
-                // into it, so the fences stand evenly above and below the code.
-                dimFences(storage, in: range)
+                paragraph.paragraphSpacingBefore += (size * 0.5).rounded()
+                paragraph.paragraphSpacing += (size * 0.3).rounded()
             case .rule:
                 storage.addAttribute(.foregroundColor, value: theme.faint, range: range)
             default:
@@ -270,26 +266,6 @@ struct BodyStyler {
             }
         }
         storage.endEditing()
-    }
-
-    /// The first and last lines of a row of code — its lines parted by
-    /// U+2028 — when they are fences: faint, and set down in their lines.
-    private func dimFences(_ storage: NSTextStorage, in row: NSRange) {
-        let text = storage.string as NSString
-        let parts = text.substring(with: row).components(separatedBy: "\u{2028}")
-        guard parts.count >= 2 else { return }
-        let isFence = { (line: String) in
-            let trimmed = line.trimmingCharacters(in: .whitespaces)
-            return trimmed.hasPrefix("```") || trimmed.hasPrefix("~~~")
-        }
-        let fence: [NSAttributedString.Key: Any] = [.foregroundColor: EditorColor.clear, .prismFence: true]
-        if let first = parts.first, isFence(first) {
-            storage.addAttributes(fence, range: NSRange(location: row.location, length: (first as NSString).length))
-        }
-        if let last = parts.last, isFence(last) {
-            let length = (last as NSString).length
-            storage.addAttributes(fence, range: NSRange(location: NSMaxRange(row) - length, length: length))
-        }
     }
 
     private func hide(_ storage: NSTextStorage, _ range: NSRange) {
@@ -742,21 +718,6 @@ final class BodyLayoutManager: NSLayoutManager {
                 bars.append(bar)
             }
         }
-        // A fence's backticks sit at the top of their line, leaving it looking
-        // empty under them: they are drawn lower, faint, where the line's
-        // middle is — and the fences stand evenly above and below the code.
-        storage.enumerateAttribute(.prismFence, in: characters) { value, range, _ in
-            guard value != nil else { return }
-            let glyphs = glyphRange(forCharacterRange: range, actualCharacterRange: nil)
-            guard glyphs.length > 0 else { return }
-            let fragment = lineFragmentRect(forGlyphAt: glyphs.location, effectiveRange: nil)
-            let start = location(forGlyphAt: glyphs.location)
-            let font = theme.mono(size * 0.92)
-            let words = NSAttributedString(string: (storage.string as NSString).substring(with: range), attributes: [.font: font, .foregroundColor: theme.faint])
-            let top = fragment.minY + start.y - font.ascender + (size * 0.3).rounded()
-            words.draw(at: CGPoint(x: fragment.minX + start.x + origin.x, y: top + origin.y))
-        }
-
         theme.faint.setFill()
         for bar in bars {
             // Bike's quote: a faint, rounded box behind the words, the bar at its left edge.

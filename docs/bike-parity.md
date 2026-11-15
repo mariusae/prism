@@ -309,9 +309,17 @@ an outline still, handles and all. A folded paragraph shows a pill.
 - Fixed: an empty row with rows under it lost them on reading back (a blank
   line between `- ` and its first child ends the item); and a row whose words
   start with a space took its children's place in the list.
-- Open: typing into a code row's fence line breaks the fence, and Return in a
-  quote leaves a bare `> ` line that reads back as raw text (both found by the
-  random test; not yet fixed). A row's leading spaces are not kept.
+- Fixed: a code row shows its code only. Its fences are Markdown, written
+  around the code and never in the view, so they cannot be typed into. Return
+  on an empty last line leaves the block, as Bike's code rows are left; the
+  language is set as the block is made (```rust then Return).
+- Fixed: Return in a quote made a second quote row written straight after the
+  first, read back as one; quote rows are now written a blank line apart.
+- Fixed: spaces at the start or end of a row's lines are kept, written as
+  `&#32;` (a tab `&#9;`) only where Markdown would drop them. Spaces a file
+  already had at a line's end mean nothing to Markdown and are not words.
+- The random test now covers code, quotes and spaces too: about 250,000 runs
+  read back as the same rows.
 
 - An empty indented row written `  - ` reads back as part of the row
   above (`one - `): the row is lost.

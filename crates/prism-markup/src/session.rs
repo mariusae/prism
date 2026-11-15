@@ -297,7 +297,7 @@ impl Session {
                     }
                     let start = text.len();
                     // A row's words as they read: its Markdown never in the view.
-                    let words = if is_rich(block) { Rich::parse(&block.text).text } else { block.text.clone() };
+                    let words = words_of(block).text;
                     text.extend(words.chars().map(|c| if c == '\n' { SOFT_BREAK } else { c }));
                     self.rows.push(RowSpan { path, range: start..text.len() });
                 }
@@ -763,17 +763,18 @@ impl Session {
                 }
                 let block = self.body.get(&path)?;
                 if !block.splits() {
-                    // Return on a code block's closing fence, or on the empty line
-                    // just before it: out of the block, into a row after it.
-                    let offset = own_offset(&self.text[self.rows[first].range.clone()], start.1);
-                    if kind == BlockKind::Code {
-                        if let Some(text) = leaving_code(&block.text, offset) {
-                            self.body.get_mut(&path)?.text = text;
-                            let (&index, parent) = path.split_last()?;
-                            let next = [parent, &[index + 1]].concat();
-                            outline::insert(&mut self.body, &next, Block::new(BlockKind::Item(Item { marker: Marker::Bullet('-'), task: None }), ""))?;
-                            return Some(self.changed(before, (next, 0), None));
-                        }
+                    // Return on a block of code's empty last line: out of the block, into a
+                    // row after it — the empty line gone, as Bike's code rows are left.
+                    let offset = rich_offset(&self.text[self.rows[first].range.clone()], start.1);
+                    let mut code = words_of(block);
+                    if kind == BlockKind::Code && offset == code.text.len() && code.text.ends_with('\n') {
+                        let end = code.text.len();
+                        code.replace(end - 1..end, &Rich::plain(""), None);
+                        set_words(self.body.get_mut(&path)?, &code);
+                        let (&index, parent) = path.split_last()?;
+                        let next = [parent, &[index + 1]].concat();
+                        outline::insert(&mut self.body, &next, Block::new(BlockKind::Item(Item { marker: Marker::Bullet('-'), task: None }), ""))?;
+                        return Some(self.changed(before, (next, 0), None));
                     }
                     // In code, a line of the same block.
                     return Some(self.replace_rows(selection, &SOFT_BREAK.to_string()));
@@ -809,11 +810,10 @@ impl Session {
                     && words.text.strip_prefix("```").is_some_and(|info| !info.contains(['`', '\n']));
                 if fenced {
                     let fence = words.text.clone();
+                    let close = "`".repeat(fence.len() - fence.trim_start_matches('`').len());
                     outline::set_kind(&mut self.body, &path, BlockKind::Code);
-                    let code = format!("{fence}\n\n```");
-                    let caret = shown_offset(&code, fence.len() + 1);
-                    self.body.get_mut(&path)?.text = code;
-                    return Some(self.changed(before, (path, caret), None));
+                    self.body.get_mut(&path)?.text = format!("{fence}\n{close}");
+                    return Some(self.changed(before, (path, 0), None));
                 }
                 if offset == 0 && !at_end {
                     // At a row's start: an empty row above it, and the caret stays with the words.
@@ -885,14 +885,12 @@ impl Session {
                             if !row.children.is_empty() {
                                 return None;
                             }
-                            let words = words_of(row).text;
-                            let code = &self.body.get(&onto)?.text;
-                            let fence = code.rfind('\n').filter(|at| is_fence(&code[at + 1..]))?;
-                            let mut joined = code.clone();
-                            joined.insert_str(fence, &words);
+                            let words = words_of(row);
+                            let mut code = onto_words;
+                            let offset = view_offset(&code.text, code.text.len());
+                            code.append(&words);
                             outline::remove(&mut self.body, &path)?;
-                            self.body.get_mut(&onto)?.text = joined;
-                            let offset = shown_offset(&self.body.get(&onto)?.text, fence);
+                            set_words(self.body.get_mut(&onto)?, &code);
                             return Some(self.changed(before, (onto, offset), None));
                         }
                         let (onto, _) = outline::join_onto(&mut self.body, &path, &onto)?;
@@ -2130,43 +2128,55 @@ fn is_fence(line: &str) -> bool {
     marks >= 3 && line.chars().skip(marks).all(|c| c.is_alphanumeric() || "+#.-_".contains(c))
 }
 
-/// A code block's text with Return given at a byte offset in it, when that
-/// leaves the block: on its closing fence as it is, or on the empty line
-/// just before the fence without that line.
-fn leaving_code(text: &str, offset: usize) -> Option<String> {
-    let mut lines: Vec<&str> = text.split('\n').collect();
-    if lines.len() < 2 || !is_fence(lines.last()?) {
-        return None;
-    }
-    let line = text[..offset.min(text.len())].matches('\n').count();
-    if line == lines.len() - 2 && line > 0 && lines[line].trim().is_empty() && lines.len() > 2 {
-        lines.remove(line);
-    } else if line != lines.len() - 1 {
-        return None;
-    }
-    Some(lines.join("\n"))
-}
-
-/// An offset in a row as shown, as an offset in the block's own text:
-/// a soft break is three bytes shown, one kept.
 /// Whether a block's words are edited as rich text — shown without their
 /// Markdown — rather than as written: code and tables are as written.
 fn is_rich(block: &Block) -> bool {
     matches!(block.kind, BlockKind::Paragraph | BlockKind::Heading(_) | BlockKind::Item(_) | BlockKind::Quote)
 }
 
-/// A block's words: rich, or as written.
+/// A fenced block of code's parts: its opening fence line, its code, and
+/// its closing fence — one made to match, if it had none. `None` for a
+/// block that is not code between fences.
+fn fenced(block: &Block) -> Option<(&str, &str, String)> {
+    if block.kind != BlockKind::Code {
+        return None;
+    }
+    let (open, rest) = block.text.split_once('\n').unwrap_or((&block.text, ""));
+    let mark = open.trim_start().chars().next().filter(|c| matches!(c, '`' | '~'))?;
+    let run = open.trim_start().chars().take_while(|c| *c == mark).count();
+    if run < 3 {
+        return None;
+    }
+    let closes = |line: &str| line.trim().len() >= run && line.trim().chars().all(|c| c == mark);
+    Some(match rest.rsplit_once('\n') {
+        Some((code, close)) if closes(close) => (open, code, close.to_owned()),
+        None if closes(rest) => (open, "", rest.to_owned()),
+        _ => (open, rest, mark.to_string().repeat(run)),
+    })
+}
+
+/// A block's words: rich, as written — or, for code between fences, the
+/// code: its fences are Markdown, and never shown.
 fn words_of(block: &Block) -> Rich {
     if is_rich(block) {
         Rich::parse(&block.text)
+    } else if let Some((_, code, _)) = fenced(block) {
+        Rich::plain(code)
     } else {
         Rich::plain(&block.text)
     }
 }
 
-/// Words put back in a block: as Markdown, or as written.
+/// Words put back in a block: as Markdown, as written, or as code between its fences.
 fn set_words(block: &mut Block, words: &Rich) {
-    block.text = if is_rich(block) { words.markdown(!matches!(block.kind, BlockKind::Heading(_))) } else { words.text.clone() };
+    block.text = if is_rich(block) {
+        words.markdown(!matches!(block.kind, BlockKind::Heading(_)))
+    } else if let Some((open, _, close)) = fenced(block) {
+        let between = if words.text.is_empty() { String::new() } else { format!("{}\n", words.text) };
+        format!("{open}\n{between}{close}")
+    } else {
+        words.text.clone()
+    };
 }
 
 /// A place in a row as the view shows it — its line breaks U+2028 — as a
@@ -2186,6 +2196,8 @@ fn view_offset(words: &str, offset: usize) -> usize {
 fn markdown_at(block: &Block, rich: usize) -> usize {
     if is_rich(block) {
         Rich::markdown_offset(&block.text, rich, false)
+    } else if let Some((open, code, _)) = fenced(block) {
+        open.len() + 1 + rich.min(code.len())
     } else {
         rich
     }
@@ -2193,7 +2205,13 @@ fn markdown_at(block: &Block, rich: usize) -> usize {
 
 /// Where a place in a block's Markdown is shown in its row.
 fn shown_in(block: &Block, markdown: usize) -> usize {
-    let rich = if is_rich(block) { Rich::shown_offset(&block.text, markdown) } else { markdown };
+    let rich = if is_rich(block) {
+        Rich::shown_offset(&block.text, markdown)
+    } else if let Some((open, code, _)) = fenced(block) {
+        markdown.saturating_sub(open.len() + 1).min(code.len())
+    } else {
+        markdown
+    };
     view_offset(&words_of(block).text, rich)
 }
 
@@ -2231,17 +2249,6 @@ fn rich_runs(words: &Rich, row_start: usize, runs: &mut Vec<editor::Run>) {
         };
         runs.push(editor::Run { range: at(run.range.start)..at(run.range.end), kind });
     }
-}
-
-fn own_offset(shown: &str, offset: usize) -> usize {
-    let offset = offset.min(shown.len());
-    offset - shown[..offset].matches(SOFT_BREAK).count() * (SOFT_BREAK.len_utf8() - 1)
-}
-
-/// An offset in a block's own text, as an offset in the row as shown.
-fn shown_offset(own: &str, offset: usize) -> usize {
-    let offset = offset.min(own.len());
-    offset + own[..offset].matches('\n').count() * (SOFT_BREAK.len_utf8() - 1)
 }
 
 /// The least that turns one text into another: a range of the first, and
@@ -2462,10 +2469,7 @@ mod tests {
     #[test]
     fn an_outline_shows_a_row_a_block_and_only_its_words() {
         let session = Session::new(NOTE);
-        assert_eq!(
-            session.text(),
-            "A paragraph\u{2028}of two lines.\nNext\nBook a room\nask \u{FFFC}\nSend invites\nFirst\n```query\u{2028}tag: Person\u{2028}```"
-        );
+        assert_eq!(session.text(), "A paragraph\u{2028}of two lines.\nNext\nBook a room\nask \u{FFFC}\nSend invites\nFirst\ntag: Person");
         let layout = session.layout();
         let lines: Vec<_> = layout.lines.iter().map(|line| (&session.text()[line.range.clone()], line.kind.clone(), line.depth)).collect();
         use LineKind::*;
@@ -2690,10 +2694,10 @@ mod tests {
         let end = view.len();
         let change = session.perform(end..end, Command::Newline).unwrap();
         shown(&mut view, &change);
-        assert_eq!(view, format!("one\ntwo\n```rust{SOFT_BREAK}{SOFT_BREAK}```"));
-        // The caret is between the fences, and what is typed there is the code.
+        // The row is code, and shows none of its fences: only the code, none yet.
+        assert_eq!(view, "one\ntwo\n");
         let caret = change.selection.start;
-        assert_eq!(caret, view.len() - "```".len() - SOFT_BREAK.len_utf8());
+        assert_eq!(caret, view.len());
         shown(&mut view, &session.replace(caret..caret, "let x = 1;"));
         assert_eq!(session.markdown(), "- one\n- two\n```rust\nlet x = 1;\n```\n");
         assert_eq!(session.layout().lines.last().map(|line| line.kind.clone()), Some(LineKind::Code));
@@ -2741,11 +2745,11 @@ mod tests {
         shown(&mut view, &change);
         shown(&mut view, &session.replace(change.selection.clone(), "after"));
         assert_eq!(session.markdown(), "- one\n```\nfoobar\n```\n- after\n");
-        // On the closing fence, too.
+        // Return at the end of a line with code on it is a line of the code.
         let at = view.find("after").unwrap() - 1;
         let change = session.perform(at..at, Command::Newline).unwrap();
         shown(&mut view, &change);
-        assert_eq!(session.markdown(), "- one\n```\nfoobar\n```\n- \n- after\n");
+        assert_eq!(session.markdown(), "- one\n```\nfoobar\n\n```\n- after\n");
         assert_eq!(view, session.text());
     }
 
@@ -2756,7 +2760,8 @@ mod tests {
         shown(&mut view, &session.replace(end..end, "\n```rust"));
         let end = view.len();
         shown(&mut view, &session.perform(end..end, Command::Newline).unwrap());
-        let start = view.find("```").unwrap();
+        // The empty code row, at the end: Delete at its start.
+        let start = view.len();
         let change = session.perform(start..start, Command::DeleteBackward).unwrap();
         shown(&mut view, &change);
         assert_eq!(session.markdown(), "- one\n- ```rust\n");
@@ -3238,8 +3243,7 @@ mod tests {
             BlockKind::Item(item) => format!("item {:?} {}", std::mem::discriminant(&item.marker), item.task.is_some()),
             other => format!("{other:?}"),
         };
-        // Markdown keeps no space before a row's words, in either form.
-        session.body().rows().iter().map(|row| (row.depth, class(row.block), words_of(row.block).text.trim_start().to_owned())).collect()
+        session.body().rows().iter().map(|row| (row.depth, class(row.block), words_of(row.block).text)).collect()
     }
 
     #[test]
@@ -3253,6 +3257,7 @@ mod tests {
             "- one\n\n  more of one\n- two\n",
             "Para\n\n1. x\n2. y\n",
             "- [ ] task\n  + [x] done\n\nPara\n\n## Sub\n\nLast words.\n",
+            "> quoted\n\nPara\n\n```rust\nlet x = 1;\n```\n\n- after\n",
         ];
         let commands = [
             Command::Newline,
@@ -3281,7 +3286,7 @@ mod tests {
                         let at = next(session.text().len() + 1);
                         let at = (0..=at).rev().find(|at| session.text().is_char_boundary(*at)).unwrap_or(0);
                         if next(3) == 0 {
-                            session.replace(at..at, "w");
+                            session.replace(at..at, ["w", " ", "w "][next(3)]);
                         } else {
                             session.perform(at..at, commands[next(commands.len())].clone());
                         }

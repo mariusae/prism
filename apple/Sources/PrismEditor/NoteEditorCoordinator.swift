@@ -191,13 +191,13 @@ extension NoteEditorView {
             var found: [(EditorBlock, ClosedRange<Int>, NSRange)] = []
             among = [:]
             let part = { (range: NSRange) in text.substring(with: range) }
-            // A block of code is one row, its lines parted by U+2028.
+            // A block of code is one row: the view shows its code, its lines parted by U+2028;
+            // what it is written in — its fence's info — is in its Markdown.
             for (index, line) in layout.lines.enumerated() where line.kind == .code {
                 let range = NSRange(location: Int(line.start), length: Int(line.end - line.start))
-                let parts = part(range).components(separatedBy: "\u{2028}")
-                guard parts.count >= 2, let first = parts.first else { continue }
-                let info = first.trimmingCharacters(in: CharacterSet(charactersIn: "`~ "))
-                found.append((EditorBlock(info: info, source: parts.dropFirst().dropLast().joined(separator: "\n")), index...index, range))
+                let fence = (editor.rowMarkdown(row: UInt32(index)) ?? "").split(separator: "\n", maxSplits: 1, omittingEmptySubsequences: false).first.map(String.init) ?? ""
+                let info = fence.trimmingCharacters(in: CharacterSet(charactersIn: "`~ "))
+                found.append((EditorBlock(info: info, source: part(range).replacingOccurrences(of: "\u{2028}", with: "\n")), index...index, range))
             }
             // A row shown as the card of its link, its words a link alone: the card, in its place.
             var cards = Set<Int>()
