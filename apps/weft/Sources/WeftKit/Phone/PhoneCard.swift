@@ -290,8 +290,9 @@ struct PhoneCard: View {
             .shadow(color: .black.opacity(card.folded ? 0.02 : 0.045), radius: card.folded ? 4 : 10, y: card.folded ? 1 : 3)
             .contentShape(Rectangle())
             .simultaneousGesture(TapGesture().onEnded { river.selected = card.id })
-            // Held — for its menu, or to carry it — it is the card chosen too.
-            .simultaneousGesture(LongPressGesture(minimumDuration: 0.3).onEnded { _ in if river.selected != card.id { river.selected = card.id } })
+            // Held, it is chosen too — but by its menu's showing, or its being let go of where it is
+            // carried (`PhoneCardMove`), never by a hold of its own: choosing it opens its strip under
+            // it, and the card moved under the finger as it is lifted is never picked up.
             .modifier(CardSwipe(leading: leadingActions, trailing: trailingActions, enabled: !isWriting && !isRenaming))
             if showsDrawer, let focused {
                 focusDrawer(focused).transition(.scale(scale: 0.5, anchor: .top).combined(with: .opacity))
@@ -698,6 +699,8 @@ struct PhoneCard: View {
     /// as a row of three — reading it first, when there is something to
     /// read — and then everything, in the order the Mac's menu has.
     @ViewBuilder private var holdMenu: some View {
+        // Its menu shown: the card chosen — once the menu is over it, and the card is not being lifted.
+        Color.clear.frame(width: 0, height: 0).onAppear { DispatchQueue.main.async { if river.selected != card.id { river.selected = card.id } } }
         ControlGroup {
             if canRead {
                 Button("Read", systemImage: "doc.richtext") { read() }
@@ -890,6 +893,8 @@ struct PhoneCardMove: DropDelegate {
 
     func performDrop(info: DropInfo) -> Bool {
         place(info)
+        // Let go of: the card chosen, where it now is.
+        if let held = carry.current(info) { held.river.selected = held.id }
         carry.end()
         store.rememberRivers()
         return true
