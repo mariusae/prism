@@ -7,12 +7,67 @@ import WeftShared
 import UIKit
 import UniformTypeIdentifiers
 
-private struct CarriedCardKey: EnvironmentKey { static let defaultValue: Binding<Card.ID?> = .constant(nil) }
+private struct CardCarryKey: EnvironmentKey { static let defaultValue: CardCarry? = nil }
 extension EnvironmentValues {
-    var carriedCard: Binding<Card.ID?> {
-        get { self[CarriedCardKey.self] }
-        set { self[CarriedCardKey.self] = newValue }
+    /// Where a card held to be moved is kept while it is carried — over
+    /// any river, so that it can be let go of in another.
+    var cardCarry: CardCarry? {
+        get { self[CardCarryKey.self] }
+        set { self[CardCarryKey.self] = newValue }
     }
+}
+
+/// The card held and carried, if one is: which, and the river it is in
+/// now — the one it was picked up from, or another it has been brought to.
+@MainActor
+@Observable
+final class CardCarry {
+    struct Held {
+        var id: Card.ID
+        var river: River
+    }
+
+    private(set) var held: Held?
+    /// Whether it is truly carried: over a card, not only held for its menu.
+    private(set) var moving = false
+    /// What was last held: a session the app was not told the end of —
+    /// held still a long while — is taken up again when it moves.
+    @ObservationIgnored private var last: Held?
+    @ObservationIgnored private(set) var seen = Date()
+
+    func pick(_ id: Card.ID, in river: River) {
+        held = Held(id: id, river: river)
+        last = held
+        moving = false
+        seen = Date()
+    }
+
+    /// What is carried, for a drop over the river: taken up again if it was given up for still.
+    func current(_ info: DropInfo) -> Held? {
+        seen = Date()
+        if held == nil, let last, info.hasItemsConforming(to: [PhoneCardMove.type]) { held = last }
+        if held != nil, !moving { moving = true }
+        return held
+    }
+
+    func brought(_ id: Card.ID, to river: River) {
+        held = Held(id: id, river: river)
+        last = held
+    }
+
+    func end() {
+        held = nil
+        last = nil
+        moving = false
+    }
+
+    /// Nothing heard of it for a while: no longer drawn as carried.
+    func rest() {
+        held = nil
+        moving = false
+    }
+
+    func isCarried(_ id: Card.ID) -> Bool { moving && held?.id == id }
 }
 
 /// One card of a river on the phone: a note, written in where it stands.
@@ -36,7 +91,7 @@ struct PhoneCard: View {
     @State private var backlinks: [Source] = []
     @State private var tags: [String] = []
     @FocusState private var titleFocused: Bool
-    @Environment(\.carriedCard) private var carried
+    @Environment(\.cardCarry) private var carrying
 
     init(store: GraphStore, river: River, card: Card) {
         self.store = store
@@ -791,7 +846,7 @@ struct PhoneCard: View {
     }
 
     private func carry() -> NSItemProvider {
-        carried.wrappedValue = card.id
+        carrying?.pick(card.id, in: river)
         UIImpactFeedbackGenerator(style: .medium).impactOccurred()
         let provider = NSItemProvider()
         provider.registerDataRepresentation(forTypeIdentifier: PhoneCardMove.type.identifier, visibility: .ownProcess) { done in
@@ -809,31 +864,58 @@ struct PhoneCard: View {
     }
 }
 
-/// A card carried over the river's others: each it passes over makes room.
+/// A card carried over a river's cards: each it passes over makes room
+/// — it goes before one when over its top half, after it when over the
+/// rest, so that it settles, and the river can be read on under it by
+/// another finger. Carried into another river, it is moved there.
+/// With no `target`, the river's foot: over no card, it goes last.
 struct PhoneCardMove: DropDelegate {
     static let type = UTType(exportedAs: "com.mariusae.weft.card")
 
-    let target: Card.ID
+    let target: Card.ID?
     let river: River
     let store: GraphStore
-    @Binding var carried: Card.ID?
-    /// Whether a card is truly being dragged: over a card, not only held for its menu.
-    @Binding var dragging: Bool
+    let carry: CardCarry
+    /// How tall the card dropped over is, for which half of it the finger is in.
+    var height: () -> CGFloat = { 0 }
 
-    func dropEntered(info: DropInfo) {
-        if carried != nil, !dragging { dragging = true }
-        guard let carried, carried != target, let place = river.all.firstIndex(where: { $0.id == target }) else { return }
-        withAnimation(.snappy(duration: 0.28)) { river.move(carried, toPlace: place) }
-        UISelectionFeedbackGenerator().selectionChanged()
+    func validateDrop(info: DropInfo) -> Bool { info.hasItemsConforming(to: [Self.type]) }
+
+    func dropEntered(info: DropInfo) { place(info) }
+
+    func dropUpdated(info: DropInfo) -> DropProposal? {
+        place(info)
+        return DropProposal(operation: .move)
     }
 
-    func dropUpdated(info: DropInfo) -> DropProposal? { DropProposal(operation: .move) }
-
     func performDrop(info: DropInfo) -> Bool {
-        carried = nil
-        dragging = false
+        place(info)
+        carry.end()
         store.rememberRivers()
         return true
+    }
+
+    private func place(_ info: DropInfo) {
+        guard var held = carry.current(info) else { return }
+        if held.river !== river {
+            guard let id = store.bring(held.id, from: held.river, to: river) else { return }
+            carry.brought(id, to: river)
+            held = .init(id: id, river: river)
+            UIImpactFeedbackGenerator(style: .light).impactOccurred()
+        }
+        let cards = river.all
+        guard let from = cards.firstIndex(where: { $0.id == held.id }) else { return }
+        let to: Int
+        if let target {
+            guard target != held.id, let at = cards.firstIndex(where: { $0.id == target }) else { return }
+            let after = info.location.y > height() / 2
+            to = from < at ? (after ? at : at - 1) : (after ? at + 1 : at)
+        } else {
+            to = cards.count - 1
+        }
+        guard to != from else { return }
+        withAnimation(.snappy(duration: 0.28)) { river.move(held.id, toPlace: to) }
+        UISelectionFeedbackGenerator().selectionChanged()
     }
 }
 

@@ -29,6 +29,10 @@ final class PhoneState {
     /// The river being named.
     var naming: River?
     var name = ""
+    /// The card held and carried, over whichever river.
+    let carry = CardCarry()
+    /// The river turning under a card carried to the screen's edge.
+    @ObservationIgnored var edgeTurn: Task<Void, Never>?
 }
 
 /// Weft on the phone: one river at a time, the next a swipe of the bar
@@ -113,6 +117,25 @@ struct PhoneShell: View {
                         .ignoresSafeArea(edges: .vertical)
                 }
             }
+            // A card carried to either edge, and held there: the river turns to the next, to be let go of in.
+            .overlay {
+                if state.carry.moving {
+                    HStack(spacing: 0) {
+                        if store.currentRiver > 0 { CarryEdge(store: store, state: state, step: -1, width: width) }
+                        Spacer(minLength: 0)
+                        if store.currentRiver + 1 < store.rivers.count { CarryEdge(store: store, state: state, step: 1, width: width) }
+                    }
+                    .transition(.opacity)
+                }
+            }
+            .animation(.easeOut(duration: 0.2), value: state.carry.moving)
+            // A carry the app was never told the end of — let go of off the app — is given up after a while.
+            .task(id: state.carry.held?.id) {
+                while state.carry.held != nil, !Task.isCancelled {
+                    try? await Task.sleep(for: .seconds(1))
+                    if Date().timeIntervalSince(state.carry.seen) > 5 { state.carry.rest() }
+                }
+            }
             .environment(\.riverWidth, width)
             .environment(\.riverHeight, room.size.height)
             .environment(\.barOnSide, Self.barOnSide(room.safeAreaInsets))
@@ -176,6 +199,89 @@ struct PhoneShell: View {
     }
 }
 
+/// Either edge of the screen, while a card is carried: held over, the
+/// river turns to the one beside it, and on, every moment it is held
+/// there. Let go of over it, the card is put at the head of the river shown.
+private struct CarryEdge: View {
+    let store: GraphStore
+    let state: PhoneState
+    let step: Int
+    let width: CGFloat
+    @State private var isOver = false
+
+    var body: some View {
+        let next = store.currentRiver + step
+        ZStack {
+            LinearGradient(colors: [Color.inkAccent.opacity(isOver ? 0.28 : 0.12), .clear], startPoint: step < 0 ? .leading : .trailing, endPoint: step < 0 ? .trailing : .leading)
+            VStack(spacing: 6) {
+                Image(systemName: step < 0 ? "chevron.left" : "chevron.right").font(.system(size: 15, weight: .semibold))
+                if store.rivers.indices.contains(next) {
+                    Text(store.title(of: store.rivers[next])).font(.caption2.weight(.semibold)).lineLimit(1).fixedSize()
+                        .rotationEffect(.degrees(step < 0 ? -90 : 90))
+                        .frame(width: 14, height: 120)
+                }
+            }
+            .foregroundStyle(Color.inkAccent)
+            .padding(step < 0 ? .leading : .trailing, 4)
+            .frame(maxWidth: .infinity, alignment: step < 0 ? .leading : .trailing)
+        }
+        .frame(width: 34)
+        .contentShape(Rectangle())
+        .ignoresSafeArea(edges: .vertical)
+        .onDrop(of: [PhoneCardMove.type], delegate: Delegate(edge: self, isOver: $isOver))
+    }
+
+    /// Turns the river a step, as the bar swiped does: the next slides in.
+    @MainActor
+    fileprivate func turn() {
+        let to = store.currentRiver + step
+        guard store.rivers.indices.contains(to) else { return }
+        UIImpactFeedbackGenerator(style: .medium).impactOccurred()
+        store.currentRiver = to
+        state.swipe = -CGFloat(step) * (width + 14)
+        withAnimation(.interpolatingSpring(stiffness: 260, damping: 30)) { state.swipe = 0 }
+    }
+
+    private struct Delegate: DropDelegate {
+        let edge: CarryEdge
+        @Binding var isOver: Bool
+
+        func dropEntered(info: DropInfo) {
+            _ = edge.state.carry.current(info)
+            isOver = true
+            edge.state.edgeTurn?.cancel()
+            edge.state.edgeTurn = Task { @MainActor in
+                // Held there a moment: turned; held on, turned again.
+                try? await Task.sleep(for: .seconds(0.55))
+                while !Task.isCancelled {
+                    edge.turn()
+                    try? await Task.sleep(for: .seconds(0.9))
+                }
+            }
+        }
+
+        func dropUpdated(info: DropInfo) -> DropProposal? {
+            _ = edge.state.carry.current(info)
+            return DropProposal(operation: .move)
+        }
+
+        func dropExited(info: DropInfo) {
+            isOver = false
+            edge.state.edgeTurn?.cancel()
+        }
+
+        func performDrop(info: DropInfo) -> Bool {
+            isOver = false
+            edge.state.edgeTurn?.cancel()
+            let carry = edge.state.carry
+            if let held = carry.current(info), held.river !== edge.store.river { _ = edge.store.bring(held.id, from: held.river, to: edge.store.river) }
+            carry.end()
+            edge.store.rememberRivers()
+            return true
+        }
+    }
+}
+
 private struct RiverWidthKey: EnvironmentKey { static let defaultValue: CGFloat = 390 }
 private struct RiverHeightKey: EnvironmentKey { static let defaultValue: CGFloat = 700 }
 private struct BarOnSideKey: EnvironmentKey { static let defaultValue = false }
@@ -201,6 +307,11 @@ extension EnvironmentValues {
     }
 }
 
+/// How tall each card of a river is; read as a card is carried, never drawn from.
+final class Heights {
+    var of: [Card.ID: CGFloat] = [:]
+}
+
 /// One river: its cards one after another, read down.
 struct RiverColumn: View {
     let store: GraphStore
@@ -211,12 +322,11 @@ struct RiverColumn: View {
     @State private var travelled: CGFloat = 0
     @State private var lastY: CGFloat = 0
     @State private var byHand = false
-    @State private var carried: Card.ID?
     /// Where the river was read to, kept and gone back to.
     @State private var scroll = RiverScroll()
     @State private var position = ScrollPosition()
-    /// Whether the card held is being dragged — and so drawn faint; held for its menu only, it is not.
-    @State private var dragging = false
+    /// How tall each card is, with the room under it: which half of one a carried card is over.
+    @State private var heights = Heights()
 
     var body: some View {
         ScrollViewReader { proxy in
@@ -244,10 +354,13 @@ struct RiverColumn: View {
                         ForEach(river.all) { card in
                             PhoneCard(store: store, river: river, card: card)
                                 .onGeometryChange(for: CGRect.self) { $0.frame(in: .scrollView) } action: { scroll.saw(card, at: $0, in: river) }
-                                .opacity(dragging && carried == card.id ? 0.45 : 1)
-                                .onDrop(of: [PhoneCardMove.type], delegate: PhoneCardMove(target: card.id, river: river, store: store, carried: $carried, dragging: $dragging))
-                                .environment(\.carriedCard, $carried)
+                                .opacity(state.carry.isCarried(card.id) ? 0.45 : 1)
+                                .environment(\.cardCarry, state.carry)
+                                // The room under it is its own, to be dropped over: no gap between two cards is nowhere.
                                 .padding(.bottom, card.folded ? Measures.foldedGap : Measures.cardGap)
+                                .contentShape(Rectangle())
+                                .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { heights.of[card.id] = $0 }
+                                .onDrop(of: [PhoneCardMove.type], delegate: PhoneCardMove(target: card.id, river: river, store: store, carry: state.carry) { [heights] in heights.of[card.id] ?? 0 })
                                 .id(card.id)
                                 .transition(.poof)
                         }
@@ -298,14 +411,8 @@ struct RiverColumn: View {
                 DispatchQueue.main.asyncAfter(deadline: .now() + 0.26) { withAnimation(.snappy(duration: 0.14)) { proxy.scrollTo(target, anchor: top) } }
             }
             .task(id: "\(store.indexRevision)|\(river.query ?? "")|\(river.hidden.count)|\(river.cards.count)") { store.find(for: river) }
-            .task(id: carried) {
-                guard carried != nil else { return dragging = false }
-                try? await Task.sleep(for: .seconds(8))
-                if !Task.isCancelled {
-                    carried = nil
-                    dragging = false
-                }
-            }
+            // Over no card — under the last, or a river with none: it goes last.
+            .onDrop(of: [PhoneCardMove.type], delegate: PhoneCardMove(target: nil, river: river, store: store, carry: state.carry))
             .sensoryFeedback(.impact(weight: .light), trigger: river.all.filter(\.folded).count)
             .sensoryFeedback(.impact(weight: .light), trigger: river.all.count)
             .safeAreaInset(edge: .bottom) {

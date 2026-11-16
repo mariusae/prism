@@ -32,6 +32,15 @@ extension GraphStore {
     /// Cards taken out of a river and put at the head of another — or,
     /// `copying`, put there and kept here too. The river shown stays as it
     /// is, but for the cards gone; undone, all is as it was.
+    /// A card carried into another open river: moved there, at its head,
+    /// as Move to River moves it — and undone the same way. What it is
+    /// called there.
+    func bring(_ id: Card.ID, from river: River, to other: River) -> Card.ID? {
+        guard river !== other, let card = river.card(id) else { return nil }
+        move([id], from: river, to: .open(other.id))
+        return other.cards.first { $0.spot == card.spot }?.id
+    }
+
     public func move(_ ids: [Card.ID], from river: River, to target: RiverTarget, copying: Bool = false) {
         let cards = ids.compactMap { river.card($0) }
         guard !cards.isEmpty else { return }
