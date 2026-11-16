@@ -18,6 +18,9 @@ public final class PhoneSession {
         didSet { UserDefaults.standard.set(onboarded, forKey: "Onboarded") }
     }
 
+    /// What a link from a widget or a control asked for, until the views take it up.
+    public var asked: PhoneAsk?
+
     @ObservationIgnored private var pushToken: Data?
     @ObservationIgnored private var registered: String?
     @ObservationIgnored private var lastActive = Date.distantPast
@@ -61,6 +64,7 @@ public final class PhoneSession {
             // Which repository the graph is, for the other app — Weft Reader — to bring down the same.
             if !Self.isTrial, let remote = store?.remote { UserDefaults(suiteName: Setup.appGroup)?.set(remote, forKey: Self.graphRemoteKey) }
             store?.takeSharedPages()
+            if let store { Glances.takeTicks(store) }
         } catch {
             failure = "\(error)"
         }
@@ -87,6 +91,7 @@ public final class PhoneSession {
     public func activated() {
         // Pages shared from other apps meanwhile: their link notes, made and shown.
         store?.takeSharedPages()
+        if let store { Glances.takeTicks(store) }
         guard let store, Date().timeIntervalSince(lastActive) > 1.5 else { return }
         lastActive = Date()
         if store.relay != .listening { store.reconnectRelay() }
@@ -100,6 +105,8 @@ public final class PhoneSession {
         store.rememberRivers()
         store.engine.push()
         RiverShortcuts.offer(store)
+        // What the widgets show: as it is now that the app is left.
+        Glances.refresh(store)
     }
 
     // MARK: Pushes
@@ -142,7 +149,12 @@ public final class PhoneSession {
         open()
         guard let store else { return done(false) }
         store.note("relay", "Woken by a silent push: syncing")
-        Task { done(await store.syncAndWait()) }
+        Task {
+            let pulled = await store.syncAndWait()
+            // What came in, on the widgets too.
+            if pulled { Glances.refresh(store) }
+            done(pulled)
+        }
     }
 }
 
@@ -185,11 +197,8 @@ public struct PhoneRoot: View {
             @unknown default: break
             }
         }
-        .onOpenURL { url in
-            // weft://river/<name>: that river, shown.
-            guard url.scheme == "weft", url.host == "river" else { return }
-            session.openRiver(named: url.pathComponents.dropFirst().joined(separator: "/").removingPercentEncoding ?? "")
-        }
+        // weft://…: from a widget, a control, a shortcut.
+        .onOpenURL { session.follow($0) }
     }
 }
 #endif

@@ -187,6 +187,19 @@ struct PhoneShell: View {
             Text("A named river is kept in the graph, on every device.")
         }
         .sensoryFeedback(.selection, trigger: store.currentRiver)
+        // The widgets kept up as the graph changes — once it has settled a moment, and never from an index not yet read.
+        .task(id: store.indexRevision) {
+            guard store.indexRevision > 0 else { return }
+            try? await Task.sleep(for: .seconds(2))
+            if !Task.isCancelled { Glances.refresh(store) }
+        }
+        // Asked by a widget for the to-dos: the tasks, over the river.
+        .onChange(of: PhoneSession.shared.asked, initial: true) { _, asked in
+            guard asked == .toDos else { return }
+            PhoneSession.shared.asked = nil
+            UserDefaults.standard.set(StartPage.Tab.tasks.rawValue, forKey: "WeftStartTab")
+            state.start = .browse
+        }
     }
 
     /// The rivers on screen, each with its place: 0 the one shown, ±1 its neighbours while it is dragged.
@@ -551,6 +564,8 @@ struct PhoneBar: View {
     @State private var showsCalendar = false
     /// The name was just held: its being let go is no tap.
     @State private var wasJumping = false
+    /// Listening because a widget or a control asked: a tap of + ends it, not a lifting.
+    @State private var listensUntilTapped = false
 
     private var river: River { store.river }
 
@@ -577,7 +592,7 @@ struct PhoneBar: View {
             .foregroundStyle(Color.inkAccent)
         }
         .overlay(alignment: .bottomTrailing) {
-            if let said = held.problem ?? (held.listening ? "Let go to keep it, or slide up to give it up." : nil) {
+            if let said = held.problem ?? (held.listening ? (listensUntilTapped ? "Listening. Tap + to keep it." : "Let go to keep it, or slide up to give it up.") : nil) {
                 HeardBubble(text: said, quiet: held.problem == nil)
                     .frame(width: 260)
                     .padding(.trailing, 58)
@@ -715,7 +730,7 @@ struct PhoneBar: View {
         // moment, why it can't listen.
         .overlay(alignment: .bottom) {
             // What is said is written in the note itself: over the bar is only how to end it.
-            if let said = held.problem ?? (held.listening ? "Let go to keep it, or slide up to give it up." : nil) {
+            if let said = held.problem ?? (held.listening ? (listensUntilTapped ? "Listening. Tap + to keep it." : "Let go to keep it, or slide up to give it up.") : nil) {
                 HeardBubble(text: said, quiet: held.problem == nil)
                     .padding(.horizontal, 14)
                     // Its foot a little above the bar's top.
@@ -734,6 +749,14 @@ struct PhoneBar: View {
                 }
             }
         }
+        // Asked by a widget or a control to listen: listening, until + is tapped.
+        .onChange(of: PhoneSession.shared.asked, initial: true) { _, asked in
+            guard asked == .dictate, !nameOnly else { return }
+            PhoneSession.shared.asked = nil
+            listensUntilTapped = true
+            held.begin(store: store)
+        }
+        .onChange(of: held.listening) { _, listening in if !listening { listensUntilTapped = false } }
         // Something came over the app — asked whether it may listen, a call — and the finger's lifting may never be told: given up.
         .onReceive(NotificationCenter.default.publisher(for: UIApplication.willResignActiveNotification)) { _ in
             pressed?.cancel()
