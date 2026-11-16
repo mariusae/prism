@@ -1973,6 +1973,9 @@ public final class NoteTextView: NSTextView {
         case ([.command], "d"): return .duplicateRows
         case ([.command, .option], "g"): return .group
         case ([.command, .shift], "8"), ([.command, .shift], "*"): return .bullet
+        // The editor's own, before the menus: ⇧⌘L is also the system's Search With Google.
+        case ([.command, .shift], "l"): return .cycleChecklist
+        case ([.command, .control], "l"): return .toggleTask
         case ([.command], "9"): return .fold
         case ([.command], "0"): return .unfold
         case ([.command, .option], "9"): return .foldByLevel

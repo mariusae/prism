@@ -280,7 +280,9 @@ draw as bulleted rows.
 
 Weft's own commands on these keys move: ⌃⌘↑ ⌃⌘↓ (Fold Card), ⌘Return
 (checklist), ⇧⌘Return (task), ⌥⌘9 / ⌥⌘0 (fold all), ⌘P, ⌘D, ⌘L, ⌘Y,
-⇧⌘A, ⇧⌘C, ⌘E.
+⇧⌘A, ⇧⌘C, ⌘E. The checklist is on ⇧⌘L, as in Notes (a box, ticked,
+none); the task on ⌃⌘L — with no row written in, the card chosen made
+a to-do or not. Both are the same on an iPhone's keyboard.
 
 ## Prose
 

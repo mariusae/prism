@@ -945,7 +945,7 @@ public final class NoteTextView: UITextView {
         ("h", [.command, .shift], "highlight"), ("-", [.command, .shift], "strikethrough"),
         ("k", [.command, .shift], "deleteRows"), ("k", [.control, .alternate], "deleteRowOnly"), ("d", [.command], "duplicateRows"),
         ("g", [.command, .alternate], "group"), ("\u{8}", [.command, .control], "joinRows"),
-        ("8", [.command, .shift], "bullet"), ("l", [.command, .shift], "toggleTask"),
+        ("8", [.command, .shift], "bullet"), ("l", [.command, .shift], "cycleChecklist"), ("l", [.command, .control], "toggleTask"),
         ("9", [.command], "fold"), ("0", [.command], "unfold"),
         ("9", [.command, .alternate], "foldByLevel"), ("0", [.command, .alternate], "unfoldByLevel"),
         ("9", [.command, .control], "foldAll"), ("0", [.command, .control], "unfoldAll"),
@@ -963,7 +963,7 @@ public final class NoteTextView: UITextView {
     private static let commands: [String: EditCommand] = [
         "bold": .bold, "italic": .italic, "code": .code, "highlight": .highlight, "strikethrough": .strikethrough,
         "deleteRows": .deleteRows, "deleteRowOnly": .deleteRowOnly, "duplicateRows": .duplicateRows, "group": .group, "joinRows": .joinRows,
-        "bullet": .bullet, "toggleTask": .toggleTask, "fold": .fold, "unfold": .unfold, "foldByLevel": .foldByLevel, "unfoldByLevel": .unfoldByLevel,
+        "bullet": .bullet, "cycleChecklist": .cycleChecklist, "toggleTask": .toggleTask, "fold": .fold, "unfold": .unfold, "foldByLevel": .foldByLevel, "unfoldByLevel": .unfoldByLevel,
         "foldAll": .foldAll, "unfoldAll": .unfoldAll, "foldAllByLevel": .foldAllByLevel, "unfoldAllByLevel": .unfoldAllByLevel,
         "insertBelow": .insertBelow, "insertAbove": .insertAbove, "insertChild": .insertChild,
         "moveUp": .moveUp, "moveDown": .moveDown, "indent": .indent, "outdent": .outdent,

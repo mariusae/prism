@@ -112,9 +112,10 @@ public struct WeftMacApp: App {
                 Divider()
                 Group {
                     format("Bullet", .bullet, "8", [.command, .shift])
-                    Button("Checkbox") { _ = NoteTextView.writing?.run(.cycleChecklist) }
-                    // ⇧⌘L, as a checklist is in Notes: the rows written in, or, written in nowhere, the note chosen.
-                    Button("To-Do") { toggleToDo() }.keyboardShortcut("l", modifiers: [.command, .shift])
+                    // ⇧⌘L, as a checklist is in Notes: a box, then ticked, then none.
+                    format("Checkbox", .cycleChecklist, "l", [.command, .shift])
+                    // ⌃⌘L: a to-do, which the queries and To-Dos find — the rows written in, or, written in nowhere, the note chosen.
+                    Button("To-Do") { toggleToDo() }.keyboardShortcut("l", modifiers: [.command, .control])
                 }
             }
             CommandMenu("Outline") {
