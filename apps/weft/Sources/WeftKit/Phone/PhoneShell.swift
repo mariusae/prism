@@ -31,6 +31,11 @@ final class PhoneState {
     var name = ""
     /// The card held and carried, over whichever river.
     let carry = CardCarry()
+    /// + held, or a widget or a control asking: what is said, into a new note.
+    /// The shell's, not a bar's: there may be no bar up when it is asked for.
+    let held = HeldDictation()
+    /// Listening because a widget or a control asked: a tap of + ends it, not a lifting.
+    var listensUntilTapped = false
     /// The river turning under a card carried to the screen's edge.
     @ObservationIgnored var edgeTurn: Task<Void, Never>?
 }
@@ -39,6 +44,7 @@ final class PhoneState {
 /// away, and everything else reached from the one glass bar at the foot.
 struct PhoneShell: View {
     let store: GraphStore
+    @Environment(\.scenePhase) private var scenePhase
     @State private var state = PhoneState()
     /// Whether the window is wide enough for two panes: an iPhone Duo
     /// opened, an iPad. A note's pages are then read beside the river,
@@ -193,12 +199,36 @@ struct PhoneShell: View {
             try? await Task.sleep(for: .seconds(2))
             if !Task.isCancelled { Glances.refresh(store) }
         }
-        // Asked by a widget for the to-dos: the tasks, over the river.
-        .onChange(of: PhoneSession.shared.asked, initial: true) { _, asked in
-            guard asked == .toDos else { return }
-            PhoneSession.shared.asked = nil
+        // Asked by a widget or a control: taken up once the app is in front —
+        // from the Lock Screen it is asked before it is unlocked, and can't listen yet.
+        .onChange(of: PhoneSession.shared.asked, initial: true) { _, _ in takeAsk() }
+        .onChange(of: scenePhase, initial: true) { _, _ in takeAsk() }
+        .onChange(of: state.held.listening) { _, listening in if !listening { state.listensUntilTapped = false } }
+    }
+
+    /// What a widget or a control asked for, done — once the app is in front.
+    private func takeAsk() {
+        guard let asked = PhoneSession.shared.asked, scenePhase == .active else { return }
+        PhoneSession.shared.asked = nil
+        switch asked {
+        case .toDos:
+            // The tasks, over the river.
             UserDefaults.standard.set(StartPage.Tab.tasks.rawValue, forKey: "WeftStartTab")
             state.start = .browse
+        case .dictate:
+            // Out of any card being written, and anything over the river: the bar, and its +, up.
+            UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder), to: nil, from: nil, for: nil)
+            store.river.writing = nil
+            state.start = nil
+            state.showsCards = false
+            state.showsOverview = false
+            state.tucked = false
+            state.listensUntilTapped = true
+            // A moment for what was over the river to go, and the keyboard with it: then listening.
+            Task { @MainActor in
+                try? await Task.sleep(for: .milliseconds(400))
+                state.held.begin(store: store)
+            }
         }
     }
 
@@ -553,7 +583,7 @@ struct PhoneBar: View {
     @Environment(\.riverHeight) private var height
     @Namespace private var glass
     /// + held: what is said, into a new note.
-    @State private var held = HeldDictation()
+    private var held: HeldDictation { state.held }
     /// + pressed, and since when: held long enough, dictating.
     @State private var pressed: Task<Void, Never>?
     /// + held long enough: let go, not a tap, even when it couldn't listen.
@@ -564,8 +594,6 @@ struct PhoneBar: View {
     @State private var showsCalendar = false
     /// The name was just held: its being let go is no tap.
     @State private var wasJumping = false
-    /// Listening because a widget or a control asked: a tap of + ends it, not a lifting.
-    @State private var listensUntilTapped = false
 
     private var river: River { store.river }
 
@@ -592,7 +620,7 @@ struct PhoneBar: View {
             .foregroundStyle(Color.inkAccent)
         }
         .overlay(alignment: .bottomTrailing) {
-            if let said = held.problem ?? (held.listening ? (listensUntilTapped ? "Listening. Tap + to keep it." : "Let go to keep it, or slide up to give it up.") : nil) {
+            if let said = held.problem ?? (held.listening ? (state.listensUntilTapped ? "Listening. Tap + to keep it." : "Let go to keep it, or slide up to give it up.") : nil) {
                 HeardBubble(text: said, quiet: held.problem == nil)
                     .frame(width: 260)
                     .padding(.trailing, 58)
@@ -730,7 +758,7 @@ struct PhoneBar: View {
         // moment, why it can't listen.
         .overlay(alignment: .bottom) {
             // What is said is written in the note itself: over the bar is only how to end it.
-            if let said = held.problem ?? (held.listening ? (listensUntilTapped ? "Listening. Tap + to keep it." : "Let go to keep it, or slide up to give it up.") : nil) {
+            if let said = held.problem ?? (held.listening ? (state.listensUntilTapped ? "Listening. Tap + to keep it." : "Let go to keep it, or slide up to give it up.") : nil) {
                 HeardBubble(text: said, quiet: held.problem == nil)
                     .padding(.horizontal, 14)
                     // Its foot a little above the bar's top.
@@ -749,14 +777,6 @@ struct PhoneBar: View {
                 }
             }
         }
-        // Asked by a widget or a control to listen: listening, until + is tapped.
-        .onChange(of: PhoneSession.shared.asked, initial: true) { _, asked in
-            guard asked == .dictate, !nameOnly else { return }
-            PhoneSession.shared.asked = nil
-            listensUntilTapped = true
-            held.begin(store: store)
-        }
-        .onChange(of: held.listening) { _, listening in if !listening { listensUntilTapped = false } }
         // Something came over the app — asked whether it may listen, a call — and the finger's lifting may never be told: given up.
         .onReceive(NotificationCenter.default.publisher(for: UIApplication.willResignActiveNotification)) { _ in
             pressed?.cancel()

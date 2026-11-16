@@ -11,11 +11,16 @@ import WeftKit
 // where it is done, and into the widgets' extension, where the controls
 // are, which only names it.
 
-/// Follows one of Weft's own links, in the app.
+/// Follows one of Weft's own links: in the app, at once; run anywhere
+/// else — by a control, in the widgets' extension — by opening the app at
+/// the link, so that it is done whichever process the system chose.
 @MainActor
-private func follow(_ url: URL) {
-    #if !WIDGET_EXTENSION
+private func follow(_ url: URL) -> some IntentResult & OpensIntent {
+    #if WIDGET_EXTENSION
+    return .result(opensIntent: OpenURLIntent(url))
+    #else
     PhoneSession.shared.follow(url)
+    return .result()
     #endif
 }
 
@@ -26,9 +31,8 @@ struct NewNoteIntent: AppIntent {
     static let openAppWhenRun = true
 
     @MainActor
-    func perform() async throws -> some IntentResult {
+    func perform() async throws -> some IntentResult & OpensIntent {
         follow(Glance.Link.new)
-        return .result()
     }
 }
 
@@ -39,9 +43,8 @@ struct DictateNoteIntent: AppIntent {
     static let openAppWhenRun = true
 
     @MainActor
-    func perform() async throws -> some IntentResult {
+    func perform() async throws -> some IntentResult & OpensIntent {
         follow(Glance.Link.dictate)
-        return .result()
     }
 }
 
@@ -52,9 +55,8 @@ struct OpenTodayIntent: AppIntent {
     static let openAppWhenRun = true
 
     @MainActor
-    func perform() async throws -> some IntentResult {
+    func perform() async throws -> some IntentResult & OpensIntent {
         follow(Glance.Link.today)
-        return .result()
     }
 }
 
@@ -65,8 +67,7 @@ struct OpenToDosIntent: AppIntent {
     static let openAppWhenRun = true
 
     @MainActor
-    func perform() async throws -> some IntentResult {
+    func perform() async throws -> some IntentResult & OpensIntent {
         follow(Glance.Link.toDos)
-        return .result()
     }
 }
