@@ -197,14 +197,20 @@ public struct NoteEditorView: NSViewRepresentable {
             coordinator.restyle()
         }
         if let caretAt { coordinator.go(to: caretAt) }
+        // The app has caught up with a focus given by a click: it is the app's to move again.
+        if isWriting { view.tookFocusAt = nil }
         if isWriting, view.window?.firstResponder !== view {
             DispatchQueue.main.async { [weak view] in
                 guard let view, let window = view.window, window.firstResponder !== view else { return }
+                // Not from a note just clicked into, which the app has not yet been told of:
+                // its "writing" is this one's only because it is behind. Taken back, the two
+                // would hand it to each other at every redraw.
+                if let other = window.firstResponder as? NoteTextView, other.isNewlyFocused { return }
                 window.makeFirstResponder(view)
             }
         } else if !isWriting, view.window?.firstResponder === view {
             DispatchQueue.main.async { [weak view] in
-                guard let view, view.window?.firstResponder === view else { return }
+                guard let view, view.window?.firstResponder === view, !view.isNewlyFocused else { return }
                 view.window?.makeFirstResponder(nil)
             }
         }
@@ -1153,8 +1159,15 @@ public final class NoteTextView: NSTextView {
     /// nothing of what lies over it, and make an I-beam of a card's buttons.
     public override func resetCursorRects() {}
 
+    /// When it was given focus, until the app says it is the one written
+    /// in: meanwhile the app's word that another is — or that none is — is
+    /// out of date, and neither takes it away.
+    var tookFocusAt: Date?
+    var isNewlyFocused: Bool { tookFocusAt.map { Date().timeIntervalSince($0) < 1 } ?? false }
+
     public override func becomeFirstResponder() -> Bool {
         let became = super.becomeFirstResponder()
+        if became { tookFocusAt = Date() }
         if became { DispatchQueue.main.async { [weak self] in self?.coordinator?.focusChanged(true) } }
         return became
     }
@@ -1162,6 +1175,7 @@ public final class NoteTextView: NSTextView {
     public override func resignFirstResponder() -> Bool {
         let resigned = super.resignFirstResponder()
         if resigned {
+            tookFocusAt = nil
             leaveRows()
             setSelectedRange(NSRange(location: selectedRange().location, length: 0))
             DispatchQueue.main.async { [weak self] in self?.coordinator?.focusChanged(false) }
