@@ -34,6 +34,10 @@ final class CardCarry {
     /// held still a long while — is taken up again when it moves.
     @ObservationIgnored private var last: Held?
     @ObservationIgnored private(set) var seen = Date()
+    /// Where each card of the rivers shown stands, with the room under it,
+    /// in the shell's space: what a carried card is over, found by where
+    /// the finger is — never by a view that may be gone when the river turns.
+    @ObservationIgnored var frames: [Card.ID: CGRect] = [:]
 
     func pick(_ id: Card.ID, in river: River) {
         held = Held(id: id, river: river)
@@ -68,6 +72,20 @@ final class CardCarry {
     }
 
     func isCarried(_ id: Card.ID) -> Bool { moving && held?.id == id }
+}
+
+extension View {
+    /// A card's menu, at a hold. Left off in a debug build launched with
+    /// `-CardsWithoutMenu YES`: the simulator lifts a card for a drag
+    /// only where no menu is waiting for the hold.
+    @ViewBuilder
+    func cardMenu<Menu: View>(@ViewBuilder _ menu: () -> Menu) -> some View {
+        #if DEBUG
+        if UserDefaults.standard.bool(forKey: "CardsWithoutMenu") { self } else { contextMenu { menu() } }
+        #else
+        contextMenu { menu() }
+        #endif
+    }
 }
 
 /// One card of a river on the phone: a note, written in where it stands.
@@ -385,7 +403,7 @@ struct PhoneCard: View {
                     .contentShape(Rectangle())
                     .onTapGesture(count: 2) { startRenaming() }
                     .onTapGesture { fold() }
-                    .contextMenu { holdMenu }
+                    .cardMenu { holdMenu }
                     .onDrag { carry() } preview: { carriedLabel }
             } else {
                 HStack(alignment: .firstTextBaseline, spacing: TextSettings.titleSize * 0.3) {
@@ -401,7 +419,7 @@ struct PhoneCard: View {
                 .contentShape(Rectangle())
                 .onTapGesture(count: 2) { if !isDay { startRenaming() } }
                 .onTapGesture { fold() }
-                .contextMenu { holdMenu }
+                .cardMenu { holdMenu }
                 .onDrag { carry() } preview: { carriedLabel }
                 if store.isPinned(card.path) { Image(systemName: "pin.fill").font(.caption).foregroundStyle(Color.inkAccent) }
                 if store.isArchived(card.path) { ArchivedLabel() }
@@ -613,7 +631,7 @@ struct PhoneCard: View {
             river.writing = card.id
         }
         .onTapGesture { fold() }
-        .contextMenu { holdMenu }
+        .cardMenu { holdMenu }
         .onDrag { carry() } preview: { carriedLabel }
     }
 
@@ -867,20 +885,24 @@ struct PhoneCard: View {
     }
 }
 
-/// A card carried over a river's cards: each it passes over makes room
-/// — it goes before one when over its top half, after it when over the
-/// rest, so that it settles, and the river can be read on under it by
-/// another finger. Carried into another river, it is moved there.
-/// With no `target`, the river's foot: over no card, it goes last.
+/// A card carried over the river shown: wherever the finger is, the card
+/// makes room there — before a card when over its top half, after it when
+/// over the rest — so that it settles, and the river can be read on under
+/// it by another finger. Carried into another river, it is moved there,
+/// before the card it is over. Over none — above the cards, under the
+/// last — it goes before the first shown, or after the last.
+///
+/// One for the whole of the screen, never one for each card: a river
+/// turned while the card is held — at an edge, by the bar — is a river
+/// whose cards were not there when the card was picked up, and the
+/// screen is.
 struct PhoneCardMove: DropDelegate {
     static let type = UTType(exportedAs: "com.mariusae.weft.card")
+    /// The space the cards' frames, and the finger, are told in: the shell's.
+    static let room = "carry room"
 
-    let target: Card.ID?
-    let river: River
     let store: GraphStore
     let carry: CardCarry
-    /// How tall the card dropped over is, for which half of it the finger is in.
-    var height: () -> CGFloat = { 0 }
 
     func validateDrop(info: DropInfo) -> Bool { info.hasItemsConforming(to: [Self.type]) }
 
@@ -902,21 +924,39 @@ struct PhoneCardMove: DropDelegate {
 
     private func place(_ info: DropInfo) {
         guard var held = carry.current(info) else { return }
+        let river = store.river
+        var entering = false
         if held.river !== river {
             guard let id = store.bring(held.id, from: held.river, to: river) else { return }
             carry.brought(id, to: river)
             held = .init(id: id, river: river)
+            entering = true
             UIImpactFeedbackGenerator(style: .light).impactOccurred()
         }
         let cards = river.all
         guard let from = cards.firstIndex(where: { $0.id == held.id }) else { return }
+        // The cards on screen, top to bottom.
+        let y = info.location.y
+        let shown = cards.compactMap { card in carry.frames[card.id].map { (card.id, $0) } }
+            .filter { $0.1.height > 0 }
+            .sorted { $0.1.minY < $1.1.minY }
+        // Over the card carried, where it already is: it stays.
+        if !entering, let mine = carry.frames[held.id], mine.minY <= y, y < mine.maxY { return }
+        let others = shown.filter { $0.0 != held.id }
+        guard !others.isEmpty else { return }
+        let index = { (id: Card.ID) in cards.firstIndex { $0.id == id } ?? from }
+        let before = { (id: Card.ID) -> Int in let at = index(id); return from < at ? at - 1 : at }
+        let after = { (id: Card.ID) -> Int in let at = index(id); return from < at ? at : at + 1 }
         let to: Int
-        if let target {
-            guard target != held.id, let at = cards.firstIndex(where: { $0.id == target }) else { return }
-            let after = info.location.y > height() / 2
-            to = from < at ? (after ? at : at - 1) : (after ? at + 1 : at)
+        if let (id, frame) = others.first(where: { $0.1.minY <= y && y < $0.1.maxY }) {
+            // Brought in over a card: before it. Over another of its own river's: by which half.
+            to = entering || y < frame.midY ? before(id) : after(id)
+        } else if let first = others.first, y < first.1.minY {
+            to = before(first.0)
+        } else if let last = others.last {
+            to = after(last.0)
         } else {
-            to = cards.count - 1
+            return
         }
         guard to != from else { return }
         withAnimation(.snappy(duration: 0.28)) { river.move(held.id, toPlace: to) }

@@ -111,6 +111,9 @@ struct PhoneShell: View {
                     .offset(x: width + 14 + state.swipe)
                 }
             }
+            // A card carried anywhere over the river shown: one place for all of it, whichever river that is.
+            .coordinateSpace(.named(PhoneCardMove.room))
+            .onDrop(of: [PhoneCardMove.type], delegate: PhoneCardMove(store: store, carry: state.carry))
             // In from the left edge, as anywhere on the phone: back to where the reader was.
             .overlay(alignment: .leading) {
                 if store.canGoBack {
@@ -126,10 +129,12 @@ struct PhoneShell: View {
             // A card carried to either edge, and held there: the river turns to the next, to be let go of in.
             .overlay {
                 if state.carry.moving {
+                    // Both, all the while it is carried, with a river beyond or none: one taken away
+                    // from under the finger leaves the carry told of nothing more, wherever it goes.
                     HStack(spacing: 0) {
-                        if store.currentRiver > 0 { CarryEdge(store: store, state: state, step: -1, width: width) }
+                        CarryEdge(store: store, state: state, step: -1, width: width)
                         Spacer(minLength: 0)
-                        if store.currentRiver + 1 < store.rivers.count { CarryEdge(store: store, state: state, step: 1, width: width) }
+                        CarryEdge(store: store, state: state, step: 1, width: width)
                     }
                     .transition(.opacity)
                 }
@@ -254,6 +259,7 @@ private struct CarryEdge: View {
 
     var body: some View {
         let next = store.currentRiver + step
+        let beyond = store.rivers.indices.contains(next)
         ZStack {
             LinearGradient(colors: [Color.inkAccent.opacity(isOver ? 0.28 : 0.12), .clear], startPoint: step < 0 ? .leading : .trailing, endPoint: step < 0 ? .trailing : .leading)
             VStack(spacing: 6) {
@@ -268,21 +274,24 @@ private struct CarryEdge: View {
             .padding(step < 0 ? .leading : .trailing, 4)
             .frame(maxWidth: .infinity, alignment: step < 0 ? .leading : .trailing)
         }
+        // No river beyond: nothing shown, but still there to be carried over.
+        .opacity(beyond ? 1 : 0)
         .frame(width: 34)
         .contentShape(Rectangle())
         .ignoresSafeArea(edges: .vertical)
         .onDrop(of: [PhoneCardMove.type], delegate: Delegate(edge: self, isOver: $isOver))
     }
 
-    /// Turns the river a step, as the bar swiped does: the next slides in.
+    /// Turns the river a step, as the bar swiped does — but at once, not
+    /// sliding in: the card is held still over the edge, and the river under it is the next.
     @MainActor
     fileprivate func turn() {
         let to = store.currentRiver + step
         guard store.rivers.indices.contains(to) else { return }
         UIImpactFeedbackGenerator(style: .medium).impactOccurred()
         store.currentRiver = to
-        state.swipe = -CGFloat(step) * (width + 14)
-        withAnimation(.interpolatingSpring(stiffness: 260, damping: 30)) { state.swipe = 0 }
+        // At once: what slides in while a card is held is not drawn until it is let go of.
+        state.swipe = 0
     }
 
     private struct Delegate: DropDelegate {
@@ -350,11 +359,6 @@ extension EnvironmentValues {
     }
 }
 
-/// How tall each card of a river is; read as a card is carried, never drawn from.
-final class Heights {
-    var of: [Card.ID: CGFloat] = [:]
-}
-
 /// One river: its cards one after another, read down.
 struct RiverColumn: View {
     let store: GraphStore
@@ -368,8 +372,6 @@ struct RiverColumn: View {
     /// Where the river was read to, kept and gone back to.
     @State private var scroll = RiverScroll()
     @State private var position = ScrollPosition()
-    /// How tall each card is, with the room under it: which half of one a carried card is over.
-    @State private var heights = Heights()
 
     var body: some View {
         ScrollViewReader { proxy in
@@ -393,22 +395,23 @@ struct RiverColumn: View {
                             }
                             .buttonStyle(.plain)
                             .padding(.bottom, Measures.foldedGap)
+                            .padding(.horizontal, Measures.riverSides)
                         }
                         ForEach(river.all) { card in
                             PhoneCard(store: store, river: river, card: card)
                                 .onGeometryChange(for: CGRect.self) { $0.frame(in: .scrollView) } action: { scroll.saw(card, at: $0, in: river) }
                                 .opacity(state.carry.isCarried(card.id) ? 0.45 : 1)
                                 .environment(\.cardCarry, state.carry)
-                                // The room under it is its own, to be dropped over: no gap between two cards is nowhere.
+                                // The room under it is its own, to be carried over: no gap between two cards is nowhere.
                                 .padding(.bottom, card.folded ? Measures.foldedGap : Measures.cardGap)
-                                .contentShape(Rectangle())
-                                .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { heights.of[card.id] = $0 }
-                                .onDrop(of: [PhoneCardMove.type], delegate: PhoneCardMove(target: card.id, river: river, store: store, carry: state.carry) { [heights] in heights.of[card.id] ?? 0 })
+                                // Where it stands, across the river's width: what a carried card is over.
+                                .padding(.horizontal, Measures.riverSides)
+                                .onGeometryChange(for: CGRect.self) { $0.frame(in: .named(PhoneCardMove.room)) } action: { [carry = state.carry] in carry.frames[card.id] = $0 }
+                                .onDisappear { [carry = state.carry] in carry.frames[card.id] = nil }
                                 .id(card.id)
                                 .transition(.poof)
                         }
                     }
-                    .padding(.horizontal, Measures.riverSides)
                     .padding(.vertical, Measures.riverEnds)
                     .frame(maxWidth: 820)
                     .frame(maxWidth: .infinity)
@@ -454,8 +457,6 @@ struct RiverColumn: View {
                 DispatchQueue.main.asyncAfter(deadline: .now() + 0.26) { withAnimation(.snappy(duration: 0.14)) { proxy.scrollTo(target, anchor: top) } }
             }
             .task(id: "\(store.indexRevision)|\(river.query ?? "")|\(river.hidden.count)|\(river.cards.count)") { store.find(for: river) }
-            // Over no card — under the last, or a river with none: it goes last.
-            .onDrop(of: [PhoneCardMove.type], delegate: PhoneCardMove(target: nil, river: river, store: store, carry: state.carry))
             .sensoryFeedback(.impact(weight: .light), trigger: river.all.filter(\.folded).count)
             .sensoryFeedback(.impact(weight: .light), trigger: river.all.count)
             .safeAreaInset(edge: .bottom) {
@@ -878,8 +879,13 @@ struct PhoneBar: View {
                 // The next river slides in the rest of the way: it is shown from where the finger left it.
                 let page = width + 14
                 if to >= store.rivers.count { store.newRiver() } else { store.currentRiver = to }
-                state.swipe = x + CGFloat(step) * page
-                withAnimation(.interpolatingSpring(stiffness: 260, damping: 30)) { state.swipe = 0 }
+                if state.carry.moving {
+                    // A card held meanwhile, by another finger: at once — what slides in while it is held is not drawn until it is let go of.
+                    state.swipe = 0
+                } else {
+                    state.swipe = x + CGFloat(step) * page
+                    withAnimation(.interpolatingSpring(stiffness: 260, damping: 30)) { state.swipe = 0 }
+                }
                 state.tucked = false
             }
     }

@@ -37,6 +37,12 @@ extension GraphStore {
     /// called there.
     func bring(_ id: Card.ID, from river: River, to other: River) -> Card.ID? {
         guard river !== other, let card = river.card(id) else { return nil }
+        // Where the river was read to, if it was this card: the next, so
+        // that the river is gone back to there, not to its top.
+        if river.scrolled?.spot == card.spot, let at = river.all.firstIndex(where: { $0.id == id }) {
+            let rest = river.all.filter { $0.id != id }
+            river.scrolled = rest.indices.contains(at) ? .init(spot: rest[at].spot, offset: 0) : rest.last.map { .init(spot: $0.spot, offset: 0) }
+        }
         move([id], from: river, to: .open(other.id))
         return other.cards.first { $0.spot == card.spot }?.id
     }
