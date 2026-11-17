@@ -22,6 +22,12 @@ public enum SharedPages {
         public var destination: Destination?
         /// Who said it, for a post on a social site: `Name (@who)`.
         public var author: String?
+        /// Pictures shared, in place of a page: the files, in the folder
+        /// beside this one, that hold them — left with it, and taken with it.
+        public var pictures: [String]?
+
+        /// Whether it is pictures shared, not a page.
+        public var isPictures: Bool { !(pictures ?? []).isEmpty }
 
         public init(url: String, title: String, description: String = "", selection: String = "", shared: Date = Date(), destination: Destination = .note) {
             self.url = url
@@ -61,6 +67,29 @@ public enum SharedPages {
         try encoder.encode(page).write(to: folder.appendingPathComponent(name), options: .atomic)
     }
 
+    /// Leaves pictures for the app — each its bytes and the kind they are
+    /// (`jpg`, `png`, `heic`…) — with what to call them, and where they go.
+    public static func leave(pictures: [(data: Data, fileExtension: String)], title: String, destination: Destination, shared: Date = Date()) throws {
+        guard let folder else { throw CocoaError(.fileNoSuchFile) }
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        let stem = String(format: "%.0f-%@", shared.timeIntervalSince1970 * 1000, UUID().uuidString)
+        var names: [String] = []
+        for (index, picture) in pictures.enumerated() {
+            let name = "\(stem)-\(index + 1).\(picture.fileExtension)"
+            try picture.data.write(to: folder.appendingPathComponent(name), options: .atomic)
+            names.append(name)
+        }
+        var page = Page(url: "", title: title, shared: shared, destination: destination)
+        page.pictures = names
+        // The page last, so the app never finds it before its pictures.
+        let encoder = JSONEncoder()
+        encoder.dateEncodingStrategy = .iso8601
+        try encoder.encode(page).write(to: folder.appendingPathComponent(stem + ".json"), options: .atomic)
+    }
+
+    /// A picture left with a page: its file.
+    public static func picture(_ name: String) -> URL? { folder?.appendingPathComponent(name) }
+
     /// The pages waiting, oldest first, each with the file it is in.
     public static func waiting() -> [(page: Page, file: URL)] {
         guard let folder, let files = try? FileManager.default.contentsOfDirectory(at: folder, includingPropertiesForKeys: nil) else { return [] }
@@ -74,4 +103,10 @@ public enum SharedPages {
 
     /// A page taken in: gone from those waiting.
     public static func taken(_ file: URL) { try? FileManager.default.removeItem(at: file) }
+
+    /// A page taken in, and the pictures left with it.
+    public static func taken(_ file: URL, page: Page) {
+        for name in page.pictures ?? [] { if let picture = picture(name) { try? FileManager.default.removeItem(at: picture) } }
+        taken(file)
+    }
 }

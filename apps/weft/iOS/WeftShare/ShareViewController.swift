@@ -19,6 +19,9 @@ final class ShareViewController: UIViewController {
     private let save = UIButton(type: .system)
     private let cancel = UIButton(type: .system)
     private var page: SharedPages.Page?
+    /// Pictures shared, in place of a page: each its bytes and its kind.
+    private var pictures: [(data: Data, fileExtension: String)] = []
+    private let preview = UIImageView()
 
     private static func color(_ light: UInt32, _ dark: UInt32) -> UIColor {
         UIColor { traits in
@@ -82,7 +85,14 @@ final class ShareViewController: UIViewController {
             describe()
         }, for: .valueChanged)
 
-        let stack = UIStackView(arrangedSubviews: [heading, titleField, address, about, destination, status, buttons])
+        preview.contentMode = .scaleAspectFill
+        preview.clipsToBounds = true
+        preview.layer.cornerRadius = 12
+        preview.layer.cornerCurve = .continuous
+        preview.isHidden = true
+        preview.heightAnchor.constraint(equalToConstant: 180).isActive = true
+
+        let stack = UIStackView(arrangedSubviews: [heading, preview, titleField, address, about, destination, status, buttons])
         stack.axis = .vertical
         stack.spacing = 10
         stack.setCustomSpacing(18, after: status)
@@ -127,6 +137,15 @@ final class ShareViewController: UIViewController {
                 }
             }
         }
+        // No page: the pictures shared — from Photos, a screenshot, Files.
+        if found == nil {
+            for item in items {
+                for provider in item.attachments ?? [] where provider.hasItemConformingToTypeIdentifier(UTType.image.identifier) {
+                    if let picture = await Self.picture(from: provider) { pictures.append(picture) }
+                }
+            }
+            if !pictures.isEmpty { return showPictures() }
+        }
         // A post on a social site, read from the site: its author and its words, not the page's "X".
         if var post = found, SocialPost.recognizes(post.url) {
             status.text = "Reading the post…"
@@ -153,7 +172,7 @@ final class ShareViewController: UIViewController {
     private func show(_ found: SharedPages.Page?) {
         page = found
         guard let found else {
-            status.text = "There is no web page here to save."
+            status.text = "There is no web page or picture here to save."
             titleField.isHidden = true
             address.isHidden = true
             about.isHidden = true
@@ -168,10 +187,41 @@ final class ShareViewController: UIViewController {
         save.isEnabled = true
     }
 
+    /// A picture's bytes, as they were kept: a file, data, or — from a
+    /// screenshot being marked up — an image, made a PNG.
+    private static func picture(from provider: NSItemProvider) async -> (data: Data, fileExtension: String)? {
+        let kind = provider.registeredTypeIdentifiers.compactMap(UTType.init).first { $0.conforms(to: .image) } ?? .image
+        let ext = kind.preferredFilenameExtension ?? "jpg"
+        guard let item = try? await provider.loadItem(forTypeIdentifier: kind.identifier) else { return nil }
+        if let url = item as? URL, let data = try? Data(contentsOf: url) {
+            return (data, url.pathExtension.isEmpty ? ext : url.pathExtension.lowercased())
+        }
+        if let data = item as? Data { return (data, ext) }
+        if let image = item as? UIImage, let data = image.pngData() { return (data, "png") }
+        return nil
+    }
+
+    private func showPictures() {
+        heading.text = pictures.count == 1 ? "Save Picture to Weft" : "Save \(pictures.count) Pictures to Weft"
+        preview.image = UIImage(data: pictures[0].data)
+        preview.isHidden = preview.image == nil
+        titleField.text = ""
+        titleField.placeholder = "Title (optional)"
+        address.isHidden = true
+        about.isHidden = true
+        describe()
+        save.isEnabled = true
+    }
+
     private var isToday: Bool { destination.selectedSegmentIndex == 1 }
 
     /// What saving will do, as chosen.
     private func describe() {
+        if !pictures.isEmpty {
+            let them = pictures.count == 1 ? "the picture" : "the pictures"
+            status.text = isToday ? "Added to the top of today, \(them) side by side." : "Kept as a note of \(them), stamped with today."
+            return
+        }
         guard let page else { return }
         if isToday {
             status.text = page.selection.isEmpty ? "Added to the top of today, as a link." : "Added to the top of today, as a link, this highlight under it."
@@ -183,6 +233,7 @@ final class ShareViewController: UIViewController {
     // MARK: Keeping it
 
     private func keep() {
+        if !pictures.isEmpty { return keepPictures() }
         guard var page else { return }
         page.title = titleField.text?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         page.shared = Date()
@@ -193,6 +244,20 @@ final class ShareViewController: UIViewController {
             status.text = "Couldn’t save: \(error.localizedDescription)"
             return
         }
+        saved()
+    }
+
+    private func keepPictures() {
+        do {
+            try SharedPages.leave(pictures: pictures, title: titleField.text?.trimmingCharacters(in: .whitespacesAndNewlines) ?? "", destination: isToday ? .today : .note)
+        } catch {
+            status.text = "Couldn’t save: \(error.localizedDescription)"
+            return
+        }
+        saved()
+    }
+
+    private func saved() {
         save.isEnabled = false
         status.text = "Saved. It will be in Weft when you next open it."
         UINotificationFeedbackGenerator().notificationOccurred(.success)

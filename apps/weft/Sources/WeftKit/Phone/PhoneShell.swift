@@ -922,11 +922,8 @@ struct PhoneBar: View {
                         if let card = store.newNote() { store.draft(path: card.path, title: card.title).setTask(.todo) }
                     }
                 }
-                Button("New Note from Pasteboard", systemImage: "doc.on.clipboard") {
-                    guard let text = UIPasteboard.general.string, let card = store.newNote() else { return }
-                    _ = try? store.engine.write(path: card.path, content: text.hasSuffix("\n") ? text : text + "\n")
-                }
-                .disabled(!UIPasteboard.general.hasStrings)
+                Button("New Note from Pasteboard", systemImage: "doc.on.clipboard") { store.newNoteFromPasteboard() }
+                    .disabled(!UIPasteboard.general.hasStrings && !UIPasteboard.general.hasImages)
                 if river.all.contains(where: { !$0.folded }) {
                     Button("Fold All", systemImage: "rectangle.compress.vertical") { withAnimation(.snappy(duration: 0.3)) { river.setAllFolded(true) }; store.rememberRivers() }
                 } else {

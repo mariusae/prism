@@ -592,12 +592,25 @@ extension NoteEditorView {
         /// where the caret is — or at a place: where they were let go.
         /// Says whether the app took them.
         @discardableResult
-        func insert(pictures: [EditorPastedPicture], at place: Int? = nil) -> Bool {
+        func insert(pictures: [EditorPastedPicture], at place: Int? = nil, asLine: Bool = false) -> Bool {
             guard let view, !view.isComposing, !pictures.isEmpty else { return false }
             let paths = parent.savePictures(pictures)
             guard !paths.isEmpty else { return false }
-            let written = paths.map { "![](\($0))" }.joined(separator: " ")
+            var written = paths.map { "![](\($0))" }.joined(separator: " ")
             let range = place.map { NSRange(location: $0, length: 0) } ?? view.caret
+            // A line of its own: after the words of the caret's line, if it has any.
+            if asLine {
+                let text = shown as NSString
+                let line = text.lineRange(for: NSRange(location: min(range.location, text.length), length: 0))
+                let words = text.substring(with: line).trimmingCharacters(in: .whitespacesAndNewlines)
+                if !words.isEmpty {
+                    var end = NSMaxRange(line)
+                    if end > line.location, text.character(at: end - 1) == 10 { end -= 1 }
+                    written = "\n" + written
+                    settle(editor.replace(start: UInt32(end), end: UInt32(end), replacement: written))
+                    return true
+                }
+            }
             settle(editor.replace(start: UInt32(range.location), end: UInt32(NSMaxRange(range)), replacement: written))
             return true
         }

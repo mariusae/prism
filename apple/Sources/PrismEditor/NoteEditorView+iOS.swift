@@ -665,6 +665,14 @@ public final class NoteTextView: UITextView {
                 guard let self else { return }
                 if NoteDictation.isGoing(in: self) { await NoteDictation.stop() } else { await NoteDictation.start(in: self) }
             }
+        case .picture(let source):
+            EditorPicturePicker.pick(source, from: self) { [weak self] pictures in
+                guard let self, let coordinator = self.coordinator else { return }
+                // Written in again, where it was: the camera took the keys away.
+                if !self.isFirstResponder { self.becomeFirstResponder() }
+                if !pictures.isEmpty { coordinator.insert(pictures: pictures, asLine: true) }
+                self.noteSettled()
+            }
         case .done:
             if NoteDictation.isGoing(in: self) { Task { @MainActor in await NoteDictation.stop() } }
             resignFirstResponder()

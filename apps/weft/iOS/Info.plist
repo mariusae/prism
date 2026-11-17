@@ -21,6 +21,8 @@
 	<string>$(GITHUB_CLIENT_SECRET)</string>
 	<key>SharesSignIn</key>
 	<true/>
+	<key>NSCameraUsageDescription</key>
+	<string>To take a photo, or scan a document, into a note.</string>
 	<key>NSMicrophoneUsageDescription</key>
 	<string>To hear what you say while dictating into a card.</string>
 	<key>NSSpeechRecognitionUsageDescription</key>

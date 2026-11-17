@@ -275,13 +275,10 @@ public struct WeftMacApp: App {
         let board = NSPasteboard.general
         var content: String?
         let files = (board.readObjects(forClasses: [NSURL.self], options: [.urlReadingFileURLsOnly: true]) as? [URL]) ?? []
-        if let words = board.string(forType: .string), files.isEmpty, !words.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-            // One line is a row; more are taken as they are written.
-            let trimmed = words.trimmingCharacters(in: .newlines)
-            content = trimmed.contains("\n") || trimmed.hasPrefix("- ") || trimmed.hasPrefix("#") ? trimmed + "\n" : "- \(trimmed)\n"
-        } else if let picture = NSImage(pasteboard: board), let tiff = picture.tiffRepresentation, let png = NSBitmapImageRep(data: tiff)?.representation(using: .png, properties: [:]),
-                  let path = store.savePicture(data: png, fileExtension: "png") {
-            content = "![](\(path))\n"
+        if let words = board.string(forType: .string), files.isEmpty, let note = GraphStore.pastedNote(words: words) {
+            content = note
+        } else if let picture = NSImage(pasteboard: board), let tiff = picture.tiffRepresentation, let png = NSBitmapImageRep(data: tiff)?.representation(using: .png, properties: [:]) {
+            content = store.pictureNote([(data: png, fileExtension: "png")])
         }
         guard let content else { return NSSound.beep() }
         withAnimation(.snappy(duration: 0.28)) { _ = store.newNote(written: content) }

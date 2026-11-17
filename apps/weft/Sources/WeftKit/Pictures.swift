@@ -3,6 +3,7 @@ import PrismEditor
 import SwiftUI
 import LinkPresentation
 import WeftShared
+import UniformTypeIdentifiers
 #if os(macOS)
 import AppKit
 public typealias PlatformImage = NSImage
@@ -116,6 +117,39 @@ extension GraphStore {
         }
         return nil
     }
+
+    /// What a note made of pasted words is written as: one line is a row;
+    /// more are taken as they are written.
+    nonisolated static func pastedNote(words: String) -> String? {
+        let trimmed = words.trimmingCharacters(in: .newlines)
+        guard !trimmed.trimmingCharacters(in: .whitespaces).isEmpty else { return nil }
+        return trimmed.contains("\n") || trimmed.hasPrefix("- ") || trimmed.hasPrefix("#") ? trimmed + "\n" : "- \(trimmed)\n"
+    }
+
+    /// Pictures kept in the graph, written as a note: one line of them.
+    func pictureNote(_ pictures: [(data: Data, fileExtension: String)]) -> String? {
+        let paths = pictures.compactMap { savePicture(data: $0.data, fileExtension: $0.fileExtension) }
+        return paths.isEmpty ? nil : paths.map { "![](\($0))" }.joined(separator: " ") + "\n"
+    }
+
+    #if os(iOS)
+    /// A new note of what was copied: its picture, kept in the graph — or its words, as they are.
+    @discardableResult
+    func newNoteFromPasteboard() -> Card? {
+        let board = UIPasteboard.general
+        var content: String?
+        if board.hasImages {
+            // The picture's own bytes, where the board has a kind kept as it is.
+            let kinds: [UTType] = [.png, .jpeg, .gif, .heic]
+            let own = kinds.lazy.compactMap { kind in board.data(forPasteboardType: kind.identifier).map { (data: $0, fileExtension: kind.preferredFilenameExtension ?? "png") } }.first
+            let picture = own ?? board.image?.pngData().map { (data: $0, fileExtension: "png") }
+            content = picture.flatMap { pictureNote([$0]) }
+        }
+        if content == nil, let words = board.string { content = Self.pastedNote(words: words) }
+        guard let content else { return nil }
+        return withAnimation(.snappy(duration: 0.28)) { newNote(written: content) }
+    }
+    #endif
 }
 
 extension Image {

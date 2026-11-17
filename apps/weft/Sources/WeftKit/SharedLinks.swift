@@ -16,6 +16,12 @@ extension GraphStore {
     public func takeSharedPages() -> Int {
         var taken = 0
         for (page, file) in SharedPages.waiting() {
+            if page.isPictures {
+                guard takePictures(page) else { continue }
+                SharedPages.taken(file, page: page)
+                taken += 1
+                continue
+            }
             // Left with no more than its address: told what it is when the page has been read.
             if WebPageInfo.isBare(title: page.title, url: page.url) { Task { await self.readBare(page) } }
             if page.destination == .today {
@@ -34,6 +40,33 @@ extension GraphStore {
         if taken > 0 { rememberRivers() }
         if taken > 0 { note("share", "Took in \(taken) shared page\(taken == 1 ? "" : "s")") }
         return taken
+    }
+
+    /// Pictures shared, kept in the graph: a note of them, stamped with the
+    /// day — titled, if they were given one — or a row of them at the top
+    /// of the day's note — opened in the river. Says whether they were kept.
+    private func takePictures(_ page: SharedPages.Page) -> Bool {
+        let kept = (page.pictures ?? []).compactMap { name -> (data: Data, fileExtension: String)? in
+            guard let file = SharedPages.picture(name), let data = try? Data(contentsOf: file) else { return nil }
+            return (data, file.pathExtension)
+        }
+        guard let line = pictureNote(kept)?.trimmingCharacters(in: .newlines) else { return false }
+        let day = Days.name(page.shared)
+        let title = page.title.components(separatedBy: .whitespacesAndNewlines).filter { !$0.isEmpty }.joined(separator: " ")
+        if page.destination == .today {
+            let path = engine.pathForTitle(title: day)
+            openDraft(path: path)?.saveNow()
+            let text = ((try? engine.read(path: path)) ?? nil) ?? ""
+            let rows = title.isEmpty ? "- \(line)\n" : "- \(title)\n  - \(line)\n"
+            guard (try? engine.write(path: path, content: LinkNote.atTop(rows, of: text))) != nil else { return false }
+            openDraft(path: path)?.fileChanged()
+            river.open(Card(path: path, title: day), after: river.selected)
+            return true
+        }
+        // Made, and opened, as a note pasted is.
+        let editor = NoteEditor.open(source: (title.isEmpty ? "" : "# \(title)\n\n") + line + "\n")
+        editor.setListField(key: "related", values: [day])
+        return newNote(written: editor.markdown()) != nil
     }
 
     /// A page shared to the day: a row linking to it at the top of the

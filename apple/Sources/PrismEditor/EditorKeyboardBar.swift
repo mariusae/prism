@@ -22,6 +22,8 @@ final class EditorKeyboardBar: UIInputView {
         case title
         /// What is said, written at the caret — or, being written, no more.
         case dictate
+        /// A picture put in at the caret: one taken, chosen, or a document scanned.
+        case picture(EditorPictureSource)
         /// The keys put away.
         case done
     }
@@ -108,6 +110,8 @@ final class EditorKeyboardBar: UIInputView {
         foldButton?.isEnabled = false
         titleButton = tools.arrangedSubviews.last as? UIButton
         titleButton?.isHidden = true
+        // Before Title: the ways a picture can come in, a menu of them.
+        tools.insertArrangedSubview(pictureButton(), at: tools.arrangedSubviews.count - 1)
         fill(formatting, [
             ("bold", .command(.bold), "Bold"),
             ("italic", .command(.italic), "Italic"),
@@ -181,6 +185,21 @@ final class EditorKeyboardBar: UIInputView {
         button.tintColor = .label
         button.accessibilityLabel = label
         button.addAction(UIAction { [weak self] _ in self?.press(tool) }, for: .touchUpInside)
+        return button
+    }
+
+    /// A picture: a menu of the ways one comes in, those this phone has dimmed when it has not.
+    private func pictureButton() -> UIButton {
+        let button = UIButton(type: .system)
+        button.setImage(UIImage(systemName: "photo", withConfiguration: UIImage.SymbolConfiguration(pointSize: 17, weight: .regular)), for: .normal)
+        button.tintColor = .label
+        button.accessibilityLabel = "Picture"
+        button.showsMenuAsPrimaryAction = true
+        button.menu = UIMenu(children: [UIDeferredMenuElement.uncached { [weak self] give in
+            give(EditorPictureSource.allCases.map { source in
+                UIAction(title: source.title, image: UIImage(systemName: source.symbol), attributes: source.isAvailable ? [] : .disabled) { _ in self?.press(.picture(source)) }
+            })
+        }])
         return button
     }
 
