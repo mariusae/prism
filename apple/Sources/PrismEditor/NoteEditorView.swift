@@ -534,7 +534,7 @@ public final class NoteTextView: NSTextView {
     }
 
     /// What the pointer is over, as far as its shape goes.
-    private enum Under { case text, link, box, block, elsewhere }
+    private enum Under { case text, link, handle, box, block, elsewhere }
     private var under: Under = .text
 
     /// Says what the pointer is over. The text view is told of every move
@@ -548,7 +548,8 @@ public final class NoteTextView: NSTextView {
         if hit !== self { return hit.isDescendant(of: self) ? .block : .elsewhere }
         guard let manager = layoutManager as? BodyLayoutManager, let container = textContainer else { return .text }
         let point = containerPoint(event)
-        if manager.isLead(at: point) || manager.task(at: point, in: container) != nil || manager.foldPill(at: point) != nil || manager.mark(at: point) != nil { return .box }
+        // What is clicked — a bullet, a box, a fold's pill: a hand, as over a link.
+        if manager.isLead(at: point) || manager.task(at: point, in: container) != nil || manager.foldPill(at: point) != nil || manager.mark(at: point) != nil { return .handle }
         // Rows chosen are taken hold of, not written in: an arrow.
         if let chosen = rowsChosen, let row = manager.row(at: point, in: container), (min(chosen.anchor, chosen.head)...max(chosen.anchor, chosen.head)).contains(row) { return .box }
         return manager.link(at: point, in: container) != nil ? .link : .text
@@ -565,7 +566,7 @@ public final class NoteTextView: NSTextView {
         case .text:
             NSCursor.iBeam.set()
             return true
-        case .link:
+        case .link, .handle:
             NSCursor.pointingHand.set()
         case .box:
             NSCursor.arrow.set()
@@ -614,7 +615,7 @@ public final class NoteTextView: NSTextView {
     public override func mouseExited(with event: NSEvent) {
         super.mouseExited(with: event)
         // Off the words: the pointer is no longer theirs to shape.
-        if under == .text || under == .link { NSCursor.arrow.set() }
+        if under == .text || under == .link || under == .handle { NSCursor.arrow.set() }
         under = .elsewhere
         hovered = nil
         // Onto the card, perhaps: it is over the text, and a window of its own.

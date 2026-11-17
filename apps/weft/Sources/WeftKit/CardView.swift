@@ -21,6 +21,7 @@ struct CardView: View {
     @State private var isRenaming = false
     @State private var choosesLook = false
     @State private var addsTag = false
+    @State private var stampsDay = false
     @State private var newTitle = ""
     @State private var backlinks: [Source] = []
     @State private var tags: [String] = []
@@ -114,6 +115,9 @@ struct CardView: View {
                 // Where a tag is added: here whether or not the card has a line of tags yet.
                 .popover(isPresented: $addsTag, arrowEdge: .bottom) {
                     TagAdder(store: store, draft: draft) { addsTag = false; refresh() }.frame(width: 300)
+                }
+                .popover(isPresented: $stampsDay, arrowEdge: .bottom) {
+                    DayStamper(draft: draft) { stampsDay = false; refresh() }.frame(width: 300)
                 }
                 .popover(isPresented: $choosesLook, arrowEdge: .bottom) {
                     EmblemPicker(
@@ -678,6 +682,7 @@ struct CardView: View {
             Button(draft.isStamped(today) ? "Stamped with Today" : "Stamp with Today", systemImage: "calendar.badge.plus") { draft.stamp(today) }
                 .keyboardShortcut("t", modifiers: [.command, .control])
                 .disabled(draft.isStamped(today))
+            Button("Stamp with Day…", systemImage: "calendar") { stampsDay = true }
         }
         Divider()
         if river.query == nil || !river.isFound(card.id) { MoveToRiverMenu(store: store, river: river, ids: [card.id]) }

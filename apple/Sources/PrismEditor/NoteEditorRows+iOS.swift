@@ -373,10 +373,21 @@ final class RowHands: NSObject, UIGestureRecognizerDelegate, @preconcurrency UIE
             }
         }
         var actions: [UIMenuElement] = []
+        // At the head, side by side, what is done most: fold it, focus on it.
+        var quick: [UIMenuElement] = []
         if info.isFolded {
-            actions.append(command("Unfold", "rectangle.expand.vertical", .unfold, true, false))
+            quick.append(command("Unfold", "rectangle.expand.vertical", .unfold, true, false))
         } else if info.hasChildren {
-            actions.append(command("Fold", "rectangle.compress.vertical", .fold, true, false))
+            quick.append(command("Fold", "rectangle.compress.vertical", .fold, true, false))
+        }
+        let focusable = coordinator.parent.onZoom != nil && coordinator.isListRow(row)
+        if focusable {
+            quick.append(action("Focus", "scope", []) { [weak self] in self?.coordinator?.zoom(row: row, apart: false) })
+        }
+        if !quick.isEmpty {
+            let strip = UIMenu(title: "", options: .displayInline, children: quick)
+            strip.preferredElementSize = .medium
+            actions.append(strip)
         }
         // Folded within, deeper down: all of it at once.
         if info.foldsInside { actions.append(command("Unfold Completely", "arrow.up.and.down", .unfoldCompletely, true, false)) }
@@ -398,8 +409,7 @@ final class RowHands: NSObject, UIGestureRecognizerDelegate, @preconcurrency UIE
             actions.append(action("Move to…", "arrow.right.doc.on.clipboard", []) { [weak self] in self?.coordinator?.moveElsewhere([row]) })
         }
         // A row of a list, shown as a note of its own: here, or in a card beside this one.
-        if coordinator.parent.onZoom != nil, coordinator.isListRow(row) {
-            actions.append(action("Focus", "scope", []) { [weak self] in self?.coordinator?.zoom(row: row, apart: false) })
+        if focusable {
             actions.append(action("Open as Card", "rectangle.stack.badge.plus", []) { [weak self] in self?.coordinator?.zoom(row: row, apart: true) })
         }
         // Beside Move to…: where among its own rows, or elsewhere.

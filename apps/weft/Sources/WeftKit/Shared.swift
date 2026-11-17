@@ -163,6 +163,35 @@ struct Syncing<Content: View>: View {
     }
 }
 
+/// Stamps a note with a day chosen from a calendar: linked to it in its
+/// frontmatter, so that the day's page lists it, as Stamp with Today does.
+struct DayStamper: View {
+    let draft: PageDraft
+    var done: () -> Void
+    @State private var day = Date()
+
+    var body: some View {
+        VStack(spacing: 10) {
+            DatePicker("Day", selection: $day, displayedComponents: .date)
+                .datePickerStyle(.graphical)
+                .labelsHidden()
+            HStack {
+                Text(Days.shown(Days.name(day))).font(.callout).foregroundStyle(Color.inkSecondary)
+                Spacer()
+                let stamped = draft.isStamped(Days.name(day))
+                Button(stamped ? "Stamped" : "Stamp") {
+                    draft.stamp(Days.name(day))
+                    done()
+                }
+                .disabled(stamped)
+                .keyboardShortcut(.defaultAction)
+            }
+        }
+        .padding(16)
+        .foregroundStyle(Color.inkText)
+    }
+}
+
 /// Gives a note a tag: one typed, or one of those the graph already
 /// has. The tag is written in the note's frontmatter.
 struct TagAdder: View {

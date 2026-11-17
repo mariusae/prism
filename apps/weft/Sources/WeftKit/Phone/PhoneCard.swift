@@ -104,6 +104,7 @@ struct PhoneCard: View {
     @State private var newTitle = ""
     @State private var choosesLook = false
     @State private var addsTag = false
+    @State private var stampsDay = false
     /// The link on the web whose card is shown.
     @State private var linkShown: PhoneLink?
     @State private var backlinks: [Source] = []
@@ -334,6 +335,9 @@ struct PhoneCard: View {
         }
         .fullScreenCover(isPresented: $addsTag) {
             BottomCard { TagAdder(store: store, draft: draft) { addsTag = false; refresh() } }
+        }
+        .fullScreenCover(isPresented: $stampsDay) {
+            BottomCard { DayStamper(draft: draft) { stampsDay = false; refresh() } }
         }
         .sheet(isPresented: $choosesLook) {
             EmblemPicker(
@@ -774,6 +778,7 @@ struct PhoneCard: View {
                 let today = Days.name(Date())
                 Button(draft.isStamped(today) ? "Stamped with Today" : "Stamp with Today", systemImage: "calendar.badge.plus") { draft.stamp(today) }
                     .disabled(draft.isStamped(today))
+                Button("Stamp with Day…", systemImage: "calendar") { stampsDay = true }
             }
         }
         // Where it is.

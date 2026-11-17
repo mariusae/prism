@@ -216,6 +216,8 @@ struct StartPage: View {
     var onQuickOpen: () -> Void
     @State private var recent: [PageInfo] = []
     @State private var pinned: [PageInfo] = []
+    /// The open river held and carried among the others, while it is.
+    @State private var carried: River.ID?
 
     var body: some View {
         VStack(alignment: .leading, spacing: 20) {
@@ -250,6 +252,7 @@ struct StartPage: View {
                                     if let index = tile.open { Button("Close River", systemImage: "xmark") { withAnimation(.snappy(duration: 0.2)) { store.closeRiver(at: index) } } }
                                     if let name = tile.saved { Button("Delete Saved River", systemImage: "trash", role: .destructive) { store.deleteSaved(name) } }
                                 }
+                                .modifier(Carried(store: store, river: tile.open.flatMap { store.rivers.indices.contains($0) ? store.rivers[$0] : nil }, carried: $carried))
                         }
                     }
                     .padding(.horizontal, 10)
@@ -263,9 +266,41 @@ struct StartPage: View {
         .padding(.bottom, 28)
         .frame(maxWidth: 720)
         .frame(maxWidth: .infinity)
+        .task(id: carried) {
+            // Let go of anywhere: no longer carried.
+            guard carried != nil else { return }
+            while !Task.isCancelled, NSEvent.pressedMouseButtons != 0 { try? await Task.sleep(for: .milliseconds(120)) }
+            if !Task.isCancelled {
+                carried = nil
+                store.rememberRivers()
+            }
+        }
         .task(id: store.indexRevision) {
             recent = (try? store.engine.runQuery(body: "sort: -modified\nlimit: 10", this: nil).pages) ?? []
             pinned = (try? store.engine.runQuery(body: "in: Pinned\nlimit: 8", this: nil).pages) ?? []
+        }
+    }
+
+    /// An open river's tile, held and carried among the others, as its
+    /// tab is along the bar: the rivers put in that order as it passes.
+    /// A saved river not open has no place among them to be carried to.
+    private struct Carried: ViewModifier {
+        let store: GraphStore
+        let river: River?
+        @Binding var carried: River.ID?
+
+        func body(content: Content) -> some View {
+            if let river {
+                content
+                    .opacity(carried == river.id ? 0.45 : 1)
+                    .onDrag {
+                        carried = river.id
+                        return NSItemProvider(object: river.id.uuidString as NSString)
+                    }
+                    .onDrop(of: [.text], delegate: RiverCarry(target: river.id, store: store, carried: $carried))
+            } else {
+                content
+            }
         }
     }
 

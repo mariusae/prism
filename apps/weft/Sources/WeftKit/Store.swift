@@ -994,7 +994,15 @@ public final class GraphStore {
     public func find(for river: River) {
         guard let query = river.query else { return }
         let outcome = try? engine.runQuery(body: Self.limited(query), this: nil)
-        river.take(found: (outcome?.pages ?? []).map { ($0.path, $0.title) }, total: Int(outcome?.total ?? 0))
+        river.take(found: (outcome?.pages ?? []).map { ($0.path, $0.title) }, total: Int(outcome?.total ?? 0), linkingTo: river.mentions ?? linkedTo(by: query))
+    }
+
+    /// The page a query asks for what links to, if it asks that: each
+    /// card it finds is shown where it speaks of it, as a backlink is.
+    func linkedTo(by query: String) -> String? {
+        let name = QuerySpec(body: query).linksTo.trimmingCharacters(in: CharacterSet(charactersIn: "[] "))
+        guard !name.isEmpty else { return nil }
+        return resolve(name)?.path
     }
 
     static func limited(_ query: String, to limit: Int = foundLimit) -> String {
@@ -1654,16 +1662,17 @@ public final class River: Identifiable {
     /// hand already and those taken out. A card keeps its identity from
     /// one finding to the next, so that nothing jumps when the list is
     /// found again.
-    func take(found pages: [(path: String, title: String)], total: Int) {
+    func take(found pages: [(path: String, title: String)], total: Int, linkingTo page: String? = nil) {
         let held = Set(cards.map(\.path))
         let out = Set(hidden)
         // How each was being shown — gone to by a backlink, say — is kept as it is found again.
         let shown = Dictionary(found.map { ($0.path, $0.lens) }, uniquingKeysWith: { first, _ in first })
+        let linked = page
         found = pages.filter { !held.contains($0.path) && !out.contains(Prism.linkName(path: $0.path) ?? $0.title) }.map { page in
-            var card = Card(path: page.path, title: page.title, lens: mentions.map { .mentions($0) })
+            var card = Card(path: page.path, title: page.title, lens: (linked ?? mentions).map { .mentions($0) })
             // A page come to speak of the one a river is of: shown open, to begin with.
             if mentions != nil, foundIDs[page.path] == nil { opened.insert(card.name) }
-            if let lens = shown[page.path] { card.lens = lens }
+            if card.lens == nil, let lens = shown[page.path] ?? nil { card.lens = lens }
             card.id = foundIDs[page.path] ?? card.id
             foundIDs[page.path] = card.id
             card.folded = !opened.contains(card.name)
