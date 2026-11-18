@@ -178,6 +178,10 @@ struct PictureView: View {
     /// The width it is being dragged to.
     @State private var dragged: CGFloat?
     @State private var isHovered = false
+    /// Whether its row is chosen, as a thing: then ringed.
+    @Environment(\.editorBlockChosen) private var isChosen
+    /// Chooses its row: a click on it.
+    @Environment(\.chooseEditorBlock) private var choose
 
     /// What it is taken hold of by, to be resized.
     private enum Grip { case side, foot, corner }
@@ -223,7 +227,11 @@ struct PictureView: View {
             }
             .frame(width: width, height: height)
             .clipShape(RoundedRectangle(cornerRadius: 5, style: .continuous))
-            .overlay(RoundedRectangle(cornerRadius: 5, style: .continuous).strokeBorder(dragged != nil ? Color.inkAccent : Color.inkRule, lineWidth: dragged != nil ? 1.5 : 0.5))
+            .overlay(RoundedRectangle(cornerRadius: 5, style: .continuous).strokeBorder(dragged != nil || isChosen ? Color.inkAccent : Color.inkRule, lineWidth: isChosen ? 2.5 : dragged != nil ? 1.5 : 0.5))
+            // Clicked, its row is chosen; clicked twice, it is opened.
+            .contentShape(Rectangle())
+            .onTapGesture { choose?() }
+            .simultaneousGesture(TapGesture(count: 2).onEnded { open() })
             // Taken out of the note, to wherever takes a picture: its file — or, on the web, its address.
             .onDrag {
                 if isRemote, let url = URL(string: picture.address) { return NSItemProvider(object: url as NSURL) }
@@ -281,6 +289,12 @@ struct PictureView: View {
                 }
             }
         }
+    }
+
+    /// Opened where pictures are looked at: its file — or, on the web, its address.
+    private func open() {
+        if isRemote, let url = URL(string: picture.address) { NSWorkspace.shared.open(url); return }
+        NSWorkspace.shared.open(store.root.appendingPathComponent(picture.address.removingPercentEncoding ?? picture.address))
     }
 
     /// A part of it that resizes it when dragged: the note is laid out

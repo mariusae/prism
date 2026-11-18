@@ -710,6 +710,10 @@ final class BodyLayoutManager: NSLayoutManager {
     /// shows the bullet its first row will have.
     var isWriting = false
 
+    /// The rows, by where they start, that an app's view is shown in place
+    /// of — a picture, a link's card: whose marks stand beside its top.
+    var pictured: Set<UInt32> = []
+
     /// Whether a point of the container is on the lead.
     func isLead(at point: CGPoint) -> Bool {
         lead != nil && leadBox?.contains(point) == true
@@ -731,6 +735,15 @@ final class BodyLayoutManager: NSLayoutManager {
         if start < storage.length {
             let glyph = glyphIndexForCharacter(at: start)
             let rect = lineFragmentRect(forGlyphAt: glyph, effectiveRange: nil)
+            // A row an app's view is shown in place of — a picture, a link's card —
+            // under its line, folded to nothing: its mark stands as a first line of
+            // words would, at the view's top.
+            if pictured.contains(row.start) {
+                // Its line's own height, not the room left under it for the picture.
+                let used = lineFragmentUsedRect(forGlyphAt: glyph, effectiveRange: nil)
+                let line = CGRect(x: rect.minX, y: used.maxY + 4, width: rect.width, height: (theme.body.ascender - theme.body.descender).rounded(.up))
+                return (line, line.minY + wordsBaseline)
+            }
             // A row with nothing in it has only its line's end to ask, which
             // sits lower than words would: its mark stands where words will.
             if row.end <= row.start { return (rect, rect.minY + wordsBaseline) }

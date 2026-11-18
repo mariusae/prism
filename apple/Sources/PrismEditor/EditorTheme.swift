@@ -323,6 +323,17 @@ public enum EditorLink: Hashable {
     case web(String)
 }
 
+public extension EnvironmentValues {
+    /// Whether the row a block stands in place of — a picture, a link's
+    /// card — is chosen, as a thing and not as words: what is drawn in its
+    /// place shows so, with a ring.
+    @Entry var editorBlockChosen = false
+    /// Chooses the row a block stands in place of: what a click on it does,
+    /// where the editor chooses such rows by a click (the Mac). `nil`
+    /// elsewhere, where a click on it is its own.
+    @Entry var chooseEditorBlock: (() -> Void)? = nil
+}
+
 /// A part of a note an app may draw something in place of: a fenced
 /// block — a query, shown as what it finds — or a line that is only
 /// pictures, shown as the picture, or as several to turn through.

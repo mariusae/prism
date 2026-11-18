@@ -762,6 +762,8 @@ public final class NoteTextView: NSTextView {
         }
         pressed = nil
         super.mouseDown(with: event)
+        // Clicked into the hidden line of a picture's row or a card's: that row, chosen.
+        chooseStandInAtCaret()
     }
 
     public override func mouseUp(with event: NSEvent) {
@@ -947,7 +949,14 @@ public final class NoteTextView: NSTextView {
         var rect = rect
         let font = (typingAttributes[.font] as? NSFont) ?? coordinator?.parent.theme.body ?? .systemFont(ofSize: NSFont.systemFontSize)
         let tall = (font.ascender - font.descender).rounded(.up) + 2
-        if rect.height > tall { rect.size.height = tall }
+        if rect.height > tall {
+            rect.size.height = tall
+            // Stood on the words' baseline, not hung from the line's top: a heading's
+            // line, or one with a taller pill in it, has room above its words.
+            if let baseline = baseline(at: selectedRange().location) {
+                rect.origin.y = (baseline - font.ascender - 1).rounded()
+            }
+        }
         // The system's caret stands where this one would have, centred on its line.
         let width = max(indicator.intrinsicContentSize.width, 2)
         let frame = NSRect(x: (rect.minX + rect.width / 2 - width / 2).rounded(), y: rect.minY, width: width, height: rect.height)
@@ -966,6 +975,20 @@ public final class NoteTextView: NSTextView {
             tail = wanted
             if let wanted { setNeedsDisplay(wanted) }
         }
+    }
+
+    /// Where the words at a place in the text stand, in the view: the
+    /// baseline of the line it is on — `nil` past the last line.
+    private func baseline(at location: Int) -> CGFloat? {
+        guard let manager = layoutManager, let storage = textStorage, storage.length > 0 else { return nil }
+        let text = storage.string as NSString
+        // At a line's end, the line it ends: its last character's.
+        var at = location
+        if at >= text.length || text.character(at: at) == 10 { at -= 1 }
+        guard at >= 0, at < text.length, text.character(at: at) != 10 else { return nil }
+        let glyph = manager.glyphIndexForCharacter(at: at)
+        let fragment = manager.lineFragmentRect(forGlyphAt: glyph, effectiveRange: nil)
+        return fragment.minY + manager.location(forGlyphAt: glyph).y + textContainerOrigin.y
     }
 
     public override func setNeedsDisplay(_ rect: NSRect, avoidAdditionalLayout flag: Bool) {
@@ -1256,8 +1279,47 @@ public final class NoteTextView: NSTextView {
         selectedTextAttributes = [:]
         insertionPointColor = .clear
         (layoutManager as? BodyLayoutManager)?.chosen = Int(first.start)...Int(last.end)
+        coordinator?.blockChoice.row = anchor == head && standIns.contains(anchor) ? anchor : nil
         scrollRangeToVisible(NSRange(location: Int(lines[head].start), length: 0))
         needsDisplay = true
+    }
+
+    /// The rows a picture or a link's card stands in place of.
+    private var standIns: Set<Int> { coordinator?.standIns ?? [] }
+
+    /// The row a picture or a card stands in place of, when it is chosen alone.
+    private var standInChosen: Int? {
+        guard let chosen = rowsChosen, chosen.anchor == chosen.head, standIns.contains(chosen.anchor) else { return nil }
+        return chosen.anchor
+    }
+
+    /// A picture's row, or a card's, chosen as a thing: clicked, or gone to by
+    /// a key. Its line is never written in — nothing of it is seen.
+    func chooseStandIn(_ row: Int) {
+        guard outlineLines.indices.contains(row) else { return }
+        if window?.firstResponder !== self { window?.makeFirstResponder(self) }
+        caretBeforeRows = nil
+        chooseRows(anchor: row, head: row)
+    }
+
+    /// The caret come to rest in a line that a picture or a card stands in
+    /// place of — clicked, or moved there — chooses that row instead.
+    private func chooseStandInAtCaret() {
+        let selection = selectedRange()
+        guard rowsChosen == nil, selection.length == 0, let index = row(at: selection.location), standIns.contains(index) else { return }
+        let line = outlineLines[index]
+        guard selection.location >= Int(line.start), selection.location <= Int(line.end) else { return }
+        chooseStandIn(index)
+    }
+
+    /// From a picture's or a card's row, chosen, to the row before or after:
+    /// written in at its near end — or, standing in for one too, chosen.
+    private func leaveStandIn(_ row: Int, by step: Int) {
+        let lines = outlineLines
+        let to = row + step
+        guard lines.indices.contains(to) else { return }
+        if standIns.contains(to) { return chooseStandIn(to) }
+        leaveRows(caretAt: step < 0 ? Int(lines[to].end) : Int(lines[to].content))
     }
 
     /// The rows the selection covers now, chosen: after something was done to them.
@@ -1272,6 +1334,7 @@ public final class NoteTextView: NSTextView {
         guard rowsChosen != nil else { return }
         rowsChosen = nil
         caretBeforeRows = nil
+        coordinator?.blockChoice.row = nil
         (layoutManager as? BodyLayoutManager)?.chosen = nil
         selectedTextAttributes = [.backgroundColor: NSColor.selectedTextBackgroundColor]
         insertionPointColor = coordinator?.parent.theme.accent ?? .controlAccentColor
@@ -1352,8 +1415,14 @@ public final class NoteTextView: NSTextView {
         leaveRows(caretAt: atStart ? Int(lines[first].content) : Int(lines[last].end))
     }
 
-    public override func moveLeft(_ sender: Any?) { if isChoosingRows { leaveRows(atStart: true) } else { super.moveLeft(sender) } }
-    public override func moveRight(_ sender: Any?) { if isChoosingRows { leaveRows(atStart: false) } else { super.moveRight(sender) } }
+    public override func moveLeft(_ sender: Any?) {
+        if let row = standInChosen { return leaveStandIn(row, by: -1) }
+        if isChoosingRows { leaveRows(atStart: true) } else { super.moveLeft(sender); chooseStandInAtCaret() }
+    }
+    public override func moveRight(_ sender: Any?) {
+        if let row = standInChosen { return leaveStandIn(row, by: 1) }
+        if isChoosingRows { leaveRows(atStart: false) } else { super.moveRight(sender); chooseStandInAtCaret() }
+    }
     public override func moveWordLeft(_ sender: Any?) { if isChoosingRows { leaveRows(atStart: true) } else { super.moveWordLeft(sender) } }
     public override func moveWordRight(_ sender: Any?) { if isChoosingRows { leaveRows(atStart: false) } else { super.moveWordRight(sender) } }
     public override func moveToBeginningOfParagraph(_ sender: Any?) { if isChoosingRows { leaveRows(atStart: true) } else { super.moveToBeginningOfParagraph(sender) } }
@@ -1490,6 +1559,20 @@ public final class NoteTextView: NSTextView {
     }
 
     public override func insertText(_ string: Any, replacementRange: NSRange) {
+        // Typed with a picture's row or a card's chosen: a new row after it, begun with what
+        // was typed — but Space, on a to-do's, ticks its box.
+        if let row = standInChosen, let typed = (string as? String) ?? (string as? NSAttributedString)?.string {
+            let lines = outlineLines
+            var isTask = false
+            if case .item(_, let done, _) = lines[row].kind { isTask = done != nil }
+            // Space alone begins nothing: on a to-do's row it ticks the box; on any other, nothing.
+            if typed == " ", !isTask { return }
+            if !(typed == " " && isTask) {
+                leaveRows(caretAt: Int(lines[row].end))
+                guard coordinator?.perform(.newline) == true else { return NSSound.beep() }
+                return super.insertText(typed, replacementRange: NSRange(location: NSNotFound, length: 0))
+            }
+        }
         // Typed with rows chosen: Space checks the tasks among them off, or opens them again; nothing else is typed.
         if let chosen = rowsChosen {
             guard (string as? String) == " " || (string as? NSAttributedString)?.string == " " else { return }
@@ -1580,17 +1663,29 @@ public final class NoteTextView: NSTextView {
     }
 
     public override func moveUp(_ sender: Any?) {
+        if let row = standInChosen { return leaveStandIn(row, by: -1) }
         if isChoosingRows { return stepRows(-1, extending: false) }
-        if coordinator?.isOffering == true { coordinator?.moveOffer(by: -1) } else { super.moveUp(sender) }
+        if coordinator?.isOffering == true { coordinator?.moveOffer(by: -1) } else { super.moveUp(sender); chooseStandInAtCaret() }
     }
 
     public override func moveDown(_ sender: Any?) {
+        if let row = standInChosen { return leaveStandIn(row, by: 1) }
         if isChoosingRows { return stepRows(1, extending: false) }
-        if coordinator?.isOffering == true { coordinator?.moveOffer(by: 1) } else { super.moveDown(sender) }
+        if coordinator?.isOffering == true { coordinator?.moveOffer(by: 1) } else { super.moveDown(sender); chooseStandInAtCaret() }
     }
 
     public override func deleteBackward(_ sender: Any?) {
         // Rows chosen are deleted whole; the row that takes their place is chosen.
+        // A picture's row or a card's, deleted: the caret at the end of the row before —
+        // or, the first, at the start of the one after; or that row chosen, if it is one too.
+        if let row = standInChosen {
+            guard coordinator?.perform(.deleteRows) == true else { return }
+            let lines = outlineLines
+            guard !lines.isEmpty else { return leaveRows(caretAt: 0) }
+            let to = row > 0 ? row - 1 : 0
+            if standIns.contains(to) { return chooseStandIn(to) }
+            return leaveRows(caretAt: row > 0 ? Int(lines[to].end) : Int(lines[to].content))
+        }
         if let chosen = rowsChosen {
             let at = min(chosen.anchor, chosen.head)
             if coordinator?.perform(.deleteRows) == true {
@@ -1700,6 +1795,12 @@ public final class NoteTextView: NSTextView {
         let lines = outlineLines
         // As text, a note has no rows: Esc leaves it.
         guard !lines.isEmpty, !hasMarkedText() else {
+            leaveRows()
+            window?.makeFirstResponder(nil)
+            return
+        }
+        // A picture or a card chosen has no words to go back to: Esc leaves the note.
+        if standInChosen != nil {
             leaveRows()
             window?.makeFirstResponder(nil)
             return

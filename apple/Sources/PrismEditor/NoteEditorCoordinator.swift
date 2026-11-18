@@ -28,6 +28,12 @@ extension NoteEditorView {
 
         init(_ parent: NoteEditorView) { self.parent = parent }
 
+        /// The rows a picture or a link's card stands in place of, whole:
+        /// chosen as things, by a click or a key, never written in.
+        private(set) var standIns = Set<Int>()
+        /// Which of them is chosen, if one is: what draws its ring.
+        let blockChoice = BlockChoice()
+
         var editor: NoteEditor { parent.editor }
 
         /// Whether the view shows something the note has yet to take: so
@@ -179,9 +185,16 @@ extension NoteEditorView {
             }
             styler.style(storage, layout: layout, revealed: revealed)
             let replaced = placeBlocks(in: view, storage: storage)
-            // A row an app's view stands in place of has no mark of its own to draw.
+            // A row an app's view stands in place of keeps its mark — its bullet, its
+            // box — only when it is a row of a list: a picture, a link's card, is one row
+            // of it, and its mark stands beside the view's top. A query, a fence, has none.
             // …nor a typed row with nothing in it, while the note is only read.
-            manager.rows = layout.lines.enumerated().filter { !replaced.contains($0.offset) && (writing || !BodyStyler.isEmptyTyped($0.element)) }.map(\.element)
+            let isItem = { (line: BodyLine) -> Bool in
+                if case .item = line.kind { return true }
+                return false
+            }
+            manager.rows = layout.lines.enumerated().filter { (!replaced.contains($0.offset) || isItem($0.element)) && (writing || !BodyStyler.isEmptyTyped($0.element)) }.map(\.element)
+            manager.pictured = Set(layout.lines.enumerated().filter { replaced.contains($0.offset) && isItem($0.element) }.map(\.element.start))
             view.typingAttributes = typingAttributes(styler)
             isApplying = false
             view.redraw()
@@ -303,6 +316,8 @@ extension NoteEditorView {
         private func placeBlocks(in view: NoteTextView, storage: NSTextStorage) -> Set<Int> {
             guard let manager = view.noteLayout, let container = view.noteContainer else { return [] }
             var replaced = Set<Int>()
+            var standing = Set<Int>()
+            defer { standIns = standing }
             var used = Set<String>()
             var placed: [(host: BlockHost, range: NSRange, indent: CGFloat)] = []
             let width = max(view.bounds.width - view.sideInset * 2, 120)
@@ -329,7 +344,20 @@ extension NoteEditorView {
                     hosts[key] = host
                     return host
                 }()
-                let height = host.show(AnyView(content.frame(width: width, alignment: .leading)), width: width)
+                // A picture's row, or a card's, alone: chosen whole, as a thing, and shown so.
+                let row = found.lines.lowerBound
+                let standsIn = (found.block.info == EditorBlock.picture || found.block.info == EditorBlock.card) && among[row] == nil && found.lines.count == 1
+                var shown = AnyView(content.frame(width: width, alignment: .leading))
+                if standsIn {
+                    standing.insert(row)
+                    #if os(macOS)
+                    let choose: (() -> Void)? = { [weak self] in self?.view?.chooseStandIn(row) }
+                    #else
+                    let choose: (() -> Void)? = nil
+                    #endif
+                    shown = AnyView(ChosenBlock(choice: blockChoice, row: row, choose: choose, content: shown))
+                }
+                let height = host.show(shown, width: width)
                 if let written = among[found.lines.lowerBound], found.range.length > 0 {
                     // The line's words stay as they are; what writes its pictures is
                     // not shown, and the room they take is left under the line.
@@ -727,5 +755,27 @@ extension NoteEditorView {
         func redo() {
             if let edit = editor.redo() { settle(edit) }
         }
+    }
+}
+
+/// Which row standing in for a picture or a card is chosen: watched by
+/// what is drawn in their places.
+@Observable
+final class BlockChoice {
+    var row: Int?
+}
+
+/// What is drawn in a row's place, told whether that row is chosen, and
+/// how to choose it.
+struct ChosenBlock: View {
+    let choice: BlockChoice
+    let row: Int
+    let choose: (() -> Void)?
+    let content: AnyView
+
+    var body: some View {
+        content
+            .environment(\.editorBlockChosen, choice.row == row)
+            .environment(\.chooseEditorBlock, choose)
     }
 }

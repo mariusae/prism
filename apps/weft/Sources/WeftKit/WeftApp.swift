@@ -468,6 +468,12 @@ enum RiverKeys {
                 return true
             }
         }
+        // ⇧⌘L: the row made a checkbox, or not — heard here, ahead of every menu: the
+        // Services' Search With Google has the same keys, and where it is on, its menu wins.
+        if pressed == [.command, .shift], event.charactersIgnoringModifiers?.lowercased() == "l", let note = NoteTextView.writing, note.window === window {
+            _ = note.run(.cycleChecklist)
+            return true
+        }
         // ⌘F: finds in the river, as in a document; ⌘G and ⇧⌘G go from one place found to the next.
         if pressed == .command, event.charactersIgnoringModifiers == "f", isRiverWindow(window) {
             store.finding.show()

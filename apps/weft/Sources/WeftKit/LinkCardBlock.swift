@@ -6,8 +6,9 @@ import SwiftUI
 /// A link alone on its row, shown as the card of what it links to
 /// (`<!-- card -->` in the note): a page on the web — its picture, its
 /// title, a line of what it is, its site — or a note of the graph — its
-/// icon, its title, its first lines. Clicked, it is gone to; its menu
-/// shows it as its words again.
+/// icon, its title, its first lines. Clicked, its row is chosen, and
+/// clicked twice it is gone to (on the phone, tapped, it is gone to); its
+/// menu shows it as its words again.
 struct LinkCardBlock: View {
     let store: GraphStore
     /// What it links to, as the editor says it: `web:` and an address, `page:` and a name.
@@ -15,6 +16,10 @@ struct LinkCardBlock: View {
     /// Gone to: the page opened, or the address in the browser.
     var open: (EditorLink) -> Void
     var showAsLink: (() -> Void)?
+    /// Whether its row is chosen, as a thing: then ringed.
+    @Environment(\.editorBlockChosen) private var isChosen
+    /// Chooses its row: where there is this, a click chooses it, and two open it.
+    @Environment(\.chooseEditorBlock) private var choose
 
     private var link: EditorLink? {
         if source.hasPrefix("web:") { return .web(String(source.dropFirst(4))) }
@@ -34,16 +39,15 @@ struct LinkCardBlock: View {
             .padding(10)
             .frame(maxWidth: 560, alignment: .leading)
             .background(RoundedRectangle(cornerRadius: 12, style: .continuous).fill(Color.inkText.opacity(0.04)))
-            .overlay(RoundedRectangle(cornerRadius: 12, style: .continuous).strokeBorder(Color.inkRule))
+            .overlay(RoundedRectangle(cornerRadius: 12, style: .continuous).strokeBorder(isChosen ? Color.inkAccent : Color.inkRule, lineWidth: isChosen ? 2.5 : 1))
             .contentShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
-            .onTapGesture { open(link) }
+            // Where its row is chosen by a click: chosen by one, gone to by two. Else gone to at once.
+            .onTapGesture { if let choose { choose() } else { open(link) } }
+            .simultaneousGesture(TapGesture(count: 2).onEnded { if choose != nil { open(link) } })
             .contextMenu {
                 Button("Open", systemImage: "arrow.up.right") { open(link) }
                 if let showAsLink { Button("Show as Link", systemImage: "link") { showAsLink() } }
             }
-            #if os(macOS)
-            .pointerStyle(.link)
-            #endif
         }
     }
 
