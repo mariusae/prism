@@ -68,6 +68,8 @@ extension NSAttributedString.Key {
     static let prismBullet = NSAttributedString.Key("prism.bullet")
     static let prismTask = NSAttributedString.Key("prism.task")
     static let prismQuote = NSAttributedString.Key("prism.quote")
+    /// Highlighted words: drawn behind them, on each line no wider than they are.
+    static let prismHighlight = NSAttributedString.Key("prism.highlight")
     /// Markdown that is never seen: the caret steps over it, Delete leaves it be.
     static let prismMarkup = NSAttributedString.Key("prism.markup")
 }
@@ -380,7 +382,7 @@ struct BodyStyler {
             case .strikethrough:
                 storage.addAttribute(.strikethroughStyle, value: NSUnderlineStyle.single.rawValue, range: range)
             case .highlight:
-                storage.addAttribute(.backgroundColor, value: theme.highlight, range: range)
+                storage.addAttribute(.prismHighlight, value: theme.highlight, range: range)
             case .code:
                 // Monospaced, and nothing behind it — as Bike's code in words.
                 storage.addAttributes([.font: theme.mono(size * 0.92)], range: range)
@@ -764,6 +766,33 @@ final class BodyLayoutManager: NSLayoutManager {
         return CGRect(x: CGFloat(Int(row.depth) - 1 - (prose ? 1 : 0)) * step, y: line.rect.minY, width: step, height: line.rect.height)
     }
 
+    /// Where words stand, a box for each line they are on: no further than
+    /// they go — not out into the margin a wrapped line is set in from, nor
+    /// on to the line's end.
+    func wordRects(forCharacterRange range: NSRange) -> [CGRect] {
+        guard let container = textContainers.first, let storage = textStorage else { return [] }
+        let range = NSIntersectionRange(range, NSRange(location: 0, length: storage.length))
+        guard range.length > 0 else { return [] }
+        let glyphs = glyphRange(forCharacterRange: range, actualCharacterRange: nil)
+        var rects: [CGRect] = []
+        enumerateLineFragments(forGlyphRange: glyphs) { fragment, used, _, lineGlyphs, _ in
+            var onLine = NSIntersectionRange(glyphs, lineGlyphs)
+            // A line's end — the newline, the space it broke at — is not words.
+            let text = storage.string as NSString
+            while onLine.length > 0 {
+                let character = self.characterIndexForGlyph(at: NSMaxRange(onLine) - 1)
+                guard character < text.length, let scalar = Unicode.Scalar(text.character(at: character)), CharacterSet.whitespacesAndNewlines.contains(scalar) else { break }
+                onLine.length -= 1
+            }
+            guard onLine.length > 0 else { return }
+            let rect = self.boundingRect(forGlyphRange: onLine, in: container)
+            let (left, right) = (max(rect.minX, used.minX), min(rect.maxX, used.maxX))
+            guard right > left else { return }
+            rects.append(CGRect(x: left, y: fragment.minY, width: right - left, height: fragment.height))
+        }
+        return rects
+    }
+
     override func drawBackground(forGlyphRange glyphsToShow: NSRange, at origin: CGPoint) {
         super.drawBackground(forGlyphRange: glyphsToShow, at: origin)
         guard let storage = textStorage, let container = textContainers.first else { return }
@@ -784,12 +813,19 @@ final class BodyLayoutManager: NSLayoutManager {
                 Self.roundedPath(rect.offsetBy(dx: origin.x, dy: origin.y), radius: 3).fill()
             }
         }
+        // Highlighted words: their yellow behind them on each line, and no wider.
+        storage.enumerateAttribute(.prismHighlight, in: characters) { value, range, _ in
+            guard let color = value as? EditorColor else { return }
+            color.setFill()
+            for rect in self.wordRects(forCharacterRange: range) {
+                Self.roundedPath(rect.offsetBy(dx: origin.x, dy: origin.y), radius: 0).fill()
+            }
+        }
         // What a find found: a highlighter's yellow behind each, the one gone to brighter.
         for range in found where range.location <= NSMaxRange(characters) && NSMaxRange(range) >= characters.location {
-            let glyphs = glyphRange(forCharacterRange: range, actualCharacterRange: nil)
             let current = range == foundAt
-            enumerateEnclosingRects(forGlyphRange: glyphs, withinSelectedGlyphRange: NSRange(location: NSNotFound, length: 0), in: container) { rect, _ in
-                EditorColor.systemYellow.withAlphaComponent(current ? 0.75 : 0.32).setFill()
+            EditorColor.systemYellow.withAlphaComponent(current ? 0.75 : 0.32).setFill()
+            for rect in wordRects(forCharacterRange: range) {
                 Self.roundedPath(rect.insetBy(dx: -1.5, dy: 0).offsetBy(dx: origin.x, dy: origin.y), radius: 3).fill()
             }
         }
