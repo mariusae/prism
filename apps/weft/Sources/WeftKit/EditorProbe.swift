@@ -74,6 +74,36 @@ enum EditorProbe {
                 }
             }
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) { place(20) }
+        case "carry":
+            // A card carried onto another's note, held still over a row, and let go of:
+            // {"cmd": "carry", "from": "notes/a.md", "onto": "notes/b.md", "row": "words", "copy": false}
+            let from = Card(path: ask["from"] as? String ?? "", title: "from")
+            let onto = Card(path: ask["onto"] as? String ?? "", title: "onto")
+            store.river.cards = [from, onto]
+            store.river.selected = nil
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.8) {
+                let name = ask["row"] as? String ?? ""
+                guard let view = editors().first(where: { ($0.probeState["rows"] as? [[String: Any]] ?? []).contains { $0["name"] as? String == name } }),
+                      let row = (view.probeState["rows"] as? [[String: Any]] ?? []).first(where: { $0["name"] as? String == name }),
+                      let content = row["content"] as? Int else { return reply(["error": "no row"]) }
+                var shown = NSRange()
+                let rect = view.firstRect(forCharacterRange: NSRange(location: content, length: 1), actualRange: &shown)
+                let point = NSPoint(x: rect.minX + 2, y: rect.maxY - 3)
+                let carry = CardIntoNote.shared
+                carry.begin(from, in: store.river)
+                carry.moved(over: onto, at: point)
+                let found = NoteTextView.at(screen: point) === view
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.7) {
+                    let warped = carry.isRow
+                    let put = carry.put(on: onto, at: point, copying: ask["copy"] as? Bool ?? false, store: store)
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) {
+                        store.saveAll()
+                        let written = ((try? store.engine.read(path: onto.path)) ?? nil) ?? ""
+                        let left = ((try? store.engine.read(path: from.path)) ?? nil) != nil
+                        reply(["found": found, "warped": warped, "put": put, "written": written, "fromStays": left])
+                    }
+                }
+            }
         case "keys":
             // Pressed here, in this app's own window: never anywhere else on the screen.
             let keys = ask["keys"] as? [String] ?? []

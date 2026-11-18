@@ -96,6 +96,7 @@ struct RiverView: View {
                                 // carried: the others make room as it passes over them.
                                 .onDrag {
                                     carried = card.id
+                                    CardIntoNote.shared.begin(card, in: river)
                                     let provider = NSItemProvider()
                                     provider.registerDataRepresentation(forTypeIdentifier: CardMove.type.identifier, visibility: .ownProcess) { done in
                                         done(Data(card.id.uuidString.utf8), nil)
@@ -472,19 +473,28 @@ struct CardMove: DropDelegate {
     @Binding var carried: Card.ID?
 
     func dropEntered(info: DropInfo) {
+        // Become a row of a note, it is carried over the cards, not among them.
+        guard !CardIntoNote.shared.isRow else { return CardIntoNote.shared.moved(over: river.card(target), at: NSEvent.mouseLocation) }
         guard let carried, carried != target, let place = river.all.firstIndex(where: { $0.id == target }) else { return }
         withAnimation(.snappy(duration: 0.22)) { river.move(carried, toPlace: place) }
     }
 
-    func dropUpdated(info: DropInfo) -> DropProposal? { DropProposal(operation: .move) }
+    func dropUpdated(info: DropInfo) -> DropProposal? {
+        CardIntoNote.shared.moved(over: river.card(target), at: NSEvent.mouseLocation)
+        return DropProposal(operation: CardIntoNote.shared.isRow && NSEvent.modifierFlags.contains(.option) ? .copy : .move)
+    }
 
     func performDrop(info: DropInfo) -> Bool {
         carried = nil
+        if CardIntoNote.shared.isRow {
+            _ = CardIntoNote.shared.put(on: river.card(target), at: NSEvent.mouseLocation, copying: NSEvent.modifierFlags.contains(.option), store: store)
+        }
+        CardIntoNote.shared.end()
         store.rememberRivers()
         return true
     }
 
-    func dropExited(info: DropInfo) {}
+    func dropExited(info: DropInfo) { CardIntoNote.shared.left() }
 }
 /// Each card's place in the window, and a watch on the window's clicks:
 /// one anywhere on a card — its words, a link, a box, a button, its menu —

@@ -38,6 +38,8 @@ final class CardCarry {
     /// in the shell's space: what a carried card is over, found by where
     /// the finger is — never by a view that may be gone when the river turns.
     @ObservationIgnored var frames: [Card.ID: CGRect] = [:]
+    /// Where that space is in the window: what a card over a note is put there by.
+    @ObservationIgnored var origin: CGPoint = .zero
 
     func pick(_ id: Card.ID, in river: River) {
         held = Held(id: id, river: river)
@@ -63,6 +65,7 @@ final class CardCarry {
         held = nil
         last = nil
         moving = false
+        CardIntoNote.shared.end()
     }
 
     /// Nothing heard of it for a while: no longer drawn as carried.
@@ -873,6 +876,7 @@ struct PhoneCard: View {
 
     private func carry() -> NSItemProvider {
         carrying?.pick(card.id, in: river)
+        CardIntoNote.shared.begin(card, in: river)
         UIImpactFeedbackGenerator(style: .medium).impactOccurred()
         let provider = NSItemProvider()
         provider.registerDataRepresentation(forTypeIdentifier: PhoneCardMove.type.identifier, visibility: .ownProcess) { done in
@@ -919,6 +923,14 @@ struct PhoneCardMove: DropDelegate {
     }
 
     func performDrop(info: DropInfo) -> Bool {
+        // Become a row of a note: put in it, where the line shows.
+        if CardIntoNote.shared.isRow {
+            let over = card(at: info)
+            _ = CardIntoNote.shared.put(on: over, at: inWindow(info), copying: false, store: store)
+            carry.end()
+            store.rememberRivers()
+            return true
+        }
         place(info)
         // Let go of: the card chosen, where it now is.
         if let held = carry.current(info) { held.river.selected = held.id }
@@ -927,8 +939,22 @@ struct PhoneCardMove: DropDelegate {
         return true
     }
 
+    func dropExited(info: DropInfo) { CardIntoNote.shared.left() }
+
+    /// The card of the river shown under the finger, if any.
+    private func card(at info: DropInfo) -> Card? {
+        carry.frames.first { $0.value.contains(info.location) }.flatMap { store.river.card($0.key) }
+    }
+
+    private func inWindow(_ info: DropInfo) -> CGPoint {
+        CGPoint(x: info.location.x + carry.origin.x, y: info.location.y + carry.origin.y)
+    }
+
     private func place(_ info: DropInfo) {
         guard var held = carry.current(info) else { return }
+        // Held still over another's note, the card becomes a row of it — carried over the cards, not among them.
+        CardIntoNote.shared.moved(over: card(at: info), at: inWindow(info))
+        if CardIntoNote.shared.isRow { return }
         let river = store.river
         var entering = false
         if held.river !== river {

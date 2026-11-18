@@ -742,3 +742,10 @@ mod tests {
         assert_eq!(document.toggle_task(vec![2]), TaskState::None);
     }
 }
+
+/// A note as one row of another's outline, as Markdown: its title with
+/// all it says under it — what a card let go of on a note becomes there.
+#[uniffi::export]
+pub fn note_as_row(source: String, path: String) -> String {
+    Note::parse(&source).as_row(&path)
+}

@@ -1195,7 +1195,7 @@ public final class GraphStore {
 
     /// Deletes a card's note, and closes the card. The note is kept, as
     /// it was written, for as long as the offer to undo stands.
-    public func delete(_ id: Card.ID, in river: River) {
+    public func delete(_ id: Card.ID, in river: River, saying: String? = nil) {
         guard let card = river.card(id) else { return }
         let before = stood(river)
         let draft = draft(path: card.path, title: card.title)
@@ -1209,7 +1209,7 @@ public final class GraphStore {
         // Not taken out of what a query finds: it is gone, and will not be found.
         river.hidden = before.hidden
         rememberRivers()
-        undoable("Deleted “\(said)”") { [weak self, weak river] in
+        undoable(saying ?? "Deleted “\(said)”") { [weak self, weak river] in
             guard let self else { return }
             self.shut.removeAll { $0.action == action }
             if let written { _ = try? self.engine.write(path: card.path, content: written) }

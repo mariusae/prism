@@ -448,6 +448,34 @@ impl Note {
         self.frontmatter.as_ref().map(FieldSpec::of).unwrap_or_default()
     }
 
+    /// The note as one row of another's outline, written as Markdown: its
+    /// title — or, untitled, its first words — with all it says under it.
+    /// What a card let go of on a note becomes there. An untitled note of
+    /// one row is that row.
+    pub fn as_row(&self, path: &str) -> String {
+        if self.is_untitled(path) && self.body.blocks.len() == 1 && self.body.blocks[0].item().is_some() {
+            let mut row = self.body.blocks[0].clone();
+            row.layout.gap.clear();
+            row.layout.extra_indent = 0;
+            return Document { blocks: vec![row], final_newline: true, line_ending: self.body.line_ending, ..Document::default() }.to_markdown();
+        }
+        let title = match self.title_heading() {
+            Some(heading) => heading.text.trim_end_matches('#').trim().to_owned(),
+            None => self.label(path),
+        };
+        let mut row = Block::bullet(title);
+        row.children = self.body.blocks.iter().skip(usize::from(self.title_heading().is_some())).cloned().collect();
+        let mut walk = row.children.iter_mut().collect::<Vec<_>>();
+        while let Some(block) = walk.pop() {
+            block.layout.extra_indent = 0;
+            walk.extend(block.children.iter_mut());
+        }
+        if let Some(first) = row.children.first_mut() {
+            first.layout.gap.clear();
+        }
+        Document { blocks: vec![row], final_newline: true, line_ending: self.body.line_ending, ..Document::default() }.to_markdown()
+    }
+
     /// Retitles the note: its first `# Heading`, which is made when the
     /// note has none.
     pub fn set_title(&mut self, title: &str) {
@@ -625,6 +653,22 @@ mod tests {
     use crate::date::Timestamp;
 
     const ATLAS: &str = "---\nid: 01jbxk3t6y8q2zp4m9v7c5r0wd\naliases: [Atlas]\ntags: [Projects, \"#Work\"]\nwiki: true\nstatus: active\nmodified: 2026-10-31T10:41:12Z\nrelated:\n  - Ada Lovelace\n  - \"[[Grace Hopper|Grace]]\"\n---\n# Project Atlas\n\n- Kick-off with [[Ada Lovelace]] on [[2026-10-31]] #planning #projects\n  + [ ] Book a room\n  + [x] Send invites to <https://cal.example/atlas>\n- ![[Embedded Page]] and ![diagram](assets/atlas.png)<!-- {\"width\":425} -->\n\n```\n[[not a link]] #nottag\n```\n";
+
+    #[test]
+    fn a_note_as_a_row_holds_all_it_says() {
+        let row = Note::parse(ATLAS).as_row("notes/project-atlas.md");
+        let lines: Vec<&str> = row.lines().collect();
+        assert_eq!(lines[0], "- Project Atlas");
+        assert_eq!(lines[1], "  - Kick-off with [[Ada Lovelace]] on [[2026-10-31]] #planning #projects");
+        assert_eq!(lines[2], "    + [ ] Book a room");
+        assert!(row.contains("\n  ```\n  [[not a link]] #nottag\n  ```\n"), "{row}");
+        let reread = Document::parse(&row);
+        assert_eq!(reread.blocks.len(), 1);
+        assert_eq!(reread.blocks[0].children.len(), 3);
+        // Untitled: one row is that row; more are under its first words.
+        assert_eq!(Note::parse("- just this\n  - and this\n").as_row("notes/2026-11-15-114230.md"), "- just this\n  - and this\n");
+        assert_eq!(Note::parse("- one\n- two\n").as_row("notes/2026-11-15-114230.md"), "- one\n  - one\n  - two\n");
+    }
 
     #[test]
     fn kinds_come_from_paths() {

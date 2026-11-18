@@ -61,16 +61,22 @@ final class RowHands: NSObject, UIGestureRecognizerDelegate, @preconcurrency UIE
     private var menuRow = 0
     private var menuPoint = CGPoint.zero
 
-    /// A row being carried, with the rows under it.
+    /// The line showing where what is carried over this note would go.
+    private let line = UIView()
+
+    /// A row being carried, with the rows under it: over its own note,
+    /// or another's.
     @MainActor
     private final class Carried {
         let rows: ClosedRange<Int>
+        /// Lifted out of the note, into the window: carried over the others too.
         let lifted: UIView
-        let line = UIView()
         var drop: (index: Int, depth: Int)?
+        /// The note it is over, if any: where the line is shown.
+        weak var target: NoteTextView?
         /// Where in what is lifted the finger has hold of it.
         let grab: CGPoint
-        /// Where the finger was when the row was picked up, and where it is.
+        /// Where the finger was when the row was picked up, and where it is: in the window.
         let start: CGPoint
         var last: CGPoint
         var autoscroll: CADisplayLink?
@@ -166,17 +172,17 @@ final class RowHands: NSObject, UIGestureRecognizerDelegate, @preconcurrency UIE
 
     @objc private func held(_ gesture: UILongPressGestureRecognizer) {
         guard let view else { return }
-        let point = gesture.location(in: view)
+        let point = gesture.location(in: nil)
         switch gesture.state {
         case .began:
-            if !pickUp(at: point) { cancel(gesture) }
+            if !pickUp(at: gesture.location(in: view)) { cancel(gesture) }
         case .changed:
             follow(to: point)
         case .ended:
             // Let go where it was picked up: what can be done to the row, not a move.
             if let state = carried, hypot(point.x - state.start.x, point.y - state.start.y) < 10 {
                 finishCarrying(dropping: false)
-                showMenu(forRow: state.rows.lowerBound, at: point)
+                showMenu(forRow: state.rows.lowerBound, at: gesture.location(in: view))
                 return
             }
             finishCarrying(dropping: true)
@@ -192,8 +198,9 @@ final class RowHands: NSObject, UIGestureRecognizerDelegate, @preconcurrency UIE
         guard let row = view.row(at: point), let info = coordinator?.editor.rowInfo(row: UInt32(row)) else { return false }
         let rows = row...(row + Int(info.shown))
         let frame = view.frame(ofRows: rows)
-        guard frame.width > 0, frame.height > 0, let picture = view.resizableSnapshotView(from: frame, afterScreenUpdates: false, withCapInsets: .zero) else { return false }
-        let lifted = UIView(frame: frame)
+        guard frame.width > 0, frame.height > 0, let window = view.window,
+              let picture = view.resizableSnapshotView(from: frame, afterScreenUpdates: false, withCapInsets: .zero) else { return false }
+        let lifted = UIView(frame: view.convert(frame, to: nil))
         lifted.isUserInteractionEnabled = false
         lifted.backgroundColor = coordinator?.parent.theme.background
         lifted.layer.cornerRadius = 8
@@ -203,18 +210,13 @@ final class RowHands: NSObject, UIGestureRecognizerDelegate, @preconcurrency UIE
         lifted.layer.shadowOffset = CGSize(width: 0, height: 4)
         picture.frame = lifted.bounds
         lifted.addSubview(picture)
-        view.addSubview(lifted)
-        let state = Carried(rows: rows, lifted: lifted, grab: CGPoint(x: point.x - frame.minX, y: point.y - frame.minY), start: point)
-        state.line.isUserInteractionEnabled = false
-        state.line.backgroundColor = coordinator?.parent.theme.accent
-        state.line.layer.cornerRadius = 1.5
-        state.line.isHidden = true
-        view.addSubview(state.line)
+        window.addSubview(lifted)
+        let state = Carried(rows: rows, lifted: lifted, grab: CGPoint(x: point.x - frame.minX, y: point.y - frame.minY), start: view.convert(point, to: nil))
         carried = state
         UIImpactFeedbackGenerator(style: .medium).impactOccurred()
         UIView.animate(withDuration: 0.15) { lifted.transform = CGAffineTransform(scaleX: 1.03, y: 1.03) }
         if view.isFirstResponder { _ = view.resignFirstResponder() }
-        follow(to: point)
+        follow(to: state.start)
         let link = CADisplayLink(target: self, selector: #selector(autoscroll))
         link.add(to: .main, forMode: .common)
         state.autoscroll = link
@@ -240,7 +242,7 @@ final class RowHands: NSObject, UIGestureRecognizerDelegate, @preconcurrency UIE
     /// past the last for the end — and how deep, which is where their
     /// bullet is, across, held to what can be there. `nil` among the rows
     /// carried themselves.
-    private func place(at point: CGPoint, left: CGFloat, carrying rows: ClosedRange<Int>) -> (index: Int, depth: Int)? {
+    private func place(at point: CGPoint, left: CGFloat, carrying rows: [Int]) -> (index: Int, depth: Int)? {
         guard let view, let manager, let editor = coordinator?.editor, !manager.lines.isEmpty else { return nil }
         let count = manager.lines.count
         let bottom = view.frame(ofRows: (count - 1)...(count - 1)).maxY
@@ -249,31 +251,58 @@ final class RowHands: NSObject, UIGestureRecognizerDelegate, @preconcurrency UIE
         var index = point.y > view.frame(ofRows: under...under).midY ? under + 1 : under
         if point.y > bottom { index = count }
         let pointed = max(Int((left / step).rounded()), 0)
-        guard let depth = editor.dropDepth(rows: [UInt32(rows.lowerBound)], before: UInt32(index), depth: UInt32(pointed)) else { return nil }
+        guard let depth = editor.dropDepth(rows: rows.map { UInt32($0) }, before: UInt32(index), depth: UInt32(pointed)) else { return nil }
         return (index, Int(depth))
     }
 
-    /// The row carried, taken to where the finger is; the line shows where it would go.
+    /// The row carried, taken to where the finger is, in the window; the
+    /// line shows where it would go — in its own note, or another's.
     func follow(to point: CGPoint) {
         guard let view, let state = carried else { return }
         state.last = point
         let size = state.lifted.bounds.size
         state.lifted.center = CGPoint(x: point.x - state.grab.x + size.width / 2, y: point.y - state.grab.y + size.height / 2)
-        let left = point.x - state.grab.x - view.textContainerInset.left
-        guard let drop = place(at: point, left: left, carrying: state.rows) else {
-            // Within what is carried: nowhere to go.
+        let target = NoteTextView.at(point) ?? (view.window.map { view.bounds.contains(view.convert(point, from: $0)) } == true ? view : nil)
+        if target !== state.target { state.target?.hands?.hideDrop() }
+        state.target = target
+        guard let target, let hands = target.hands else {
             state.drop = nil
-            state.line.isHidden = true
             return
         }
-        if state.drop.map({ $0 != drop }) ?? true { UISelectionFeedbackGenerator().selectionChanged() }
+        let local = target.convert(point, from: nil)
+        let left = local.x - state.grab.x - target.textContainerInset.left
+        let drop = hands.showDrop(at: local, left: left, own: target === view ? [state.rows.lowerBound] : [])
+        if let drop, state.drop.map({ $0 != drop }) ?? true { UISelectionFeedbackGenerator().selectionChanged() }
         state.drop = drop
+    }
+
+    /// Shows where rows would go, let go at a point of the view, with the
+    /// bullet of the first at `left`: rows of this note's own, or none —
+    /// rows from elsewhere. Says where, if anywhere.
+    @discardableResult
+    func showDrop(at point: CGPoint, left: CGFloat, own: [Int]) -> (index: Int, depth: Int)? {
+        guard let view, let drop = place(at: point, left: left, carrying: own) else {
+            hideDrop()
+            return nil
+        }
+        if line.superview !== view {
+            line.isUserInteractionEnabled = false
+            line.backgroundColor = coordinator?.parent.theme.accent
+            line.layer.cornerRadius = 1.5
+            view.addSubview(line)
+        }
         let count = (manager?.lines.count ?? 1)
         let y = drop.index < count ? view.frame(ofRows: drop.index...drop.index).minY : view.frame(ofRows: (count - 1)...(count - 1)).maxY
         let x = view.textContainerInset.left + step * CGFloat(drop.depth) + step / 2
-        state.line.frame = CGRect(x: x, y: y - 1.5, width: max(20, view.bounds.width - x - 8), height: 3)
-        state.line.isHidden = false
-        view.bringSubviewToFront(state.lifted)
+        line.frame = CGRect(x: x, y: y - 1.5, width: max(20, view.bounds.width - x - 8), height: 3)
+        line.isHidden = false
+        view.bringSubviewToFront(line)
+        return drop
+    }
+
+    func hideDrop() {
+        line.isHidden = true
+        line.removeFromSuperview()
     }
 
     /// The page the view is on: what scrolls.
@@ -296,13 +325,14 @@ final class RowHands: NSObject, UIGestureRecognizerDelegate, @preconcurrency UIE
         let moved = y - page.contentOffset.y
         guard moved != 0 else { return }
         page.contentOffset.y = y
-        follow(to: CGPoint(x: state.last.x, y: state.last.y + moved))
+        // The finger stays where it is on the screen; what is under it has moved.
+        follow(to: state.last)
     }
 
     /// Near the top or bottom of the screen: the page scrolls along.
     @objc private func autoscroll() {
-        guard let view, let state = carried, let page else { return }
-        let inPage = view.convert(state.last, to: page)
+        guard let state = carried, let page else { return }
+        let inPage = page.convert(state.last, from: nil)
         let visible = page.bounds.inset(by: page.adjustedContentInset)
         let edge: CGFloat = 70
         var delta: CGFloat = 0
@@ -325,11 +355,21 @@ final class RowHands: NSObject, UIGestureRecognizerDelegate, @preconcurrency UIE
         carried = nil
         dragScroll.view?.removeGestureRecognizer(dragScroll)
         state.autoscroll?.invalidate()
-        state.line.removeFromSuperview()
+        state.target?.hands?.hideDrop()
         UIView.animate(withDuration: 0.15, animations: { state.lifted.alpha = 0 }) { _ in state.lifted.removeFromSuperview() }
-        guard dropping, let drop = state.drop else { return }
-        if coordinator?.moveRows([state.rows.lowerBound], before: drop.index, depth: drop.depth) == true {
-            UIImpactFeedbackGenerator(style: .light).impactOccurred()
+        guard dropping, let drop = state.drop, let target = state.target, let coordinator else { return }
+        let rows = [state.rows.lowerBound]
+        if target === view {
+            if coordinator.moveRows(rows, before: drop.index, depth: drop.depth) { UIImpactFeedbackGenerator(style: .light).impactOccurred() }
+            return
+        }
+        // To another note: written there, then taken out here — if still what was carried.
+        let markdown = coordinator.editor.markdownOf(rows: rows.map { UInt32($0) })
+        guard !markdown.isEmpty, target.coordinator?.insertRows(markdown, before: drop.index, depth: drop.depth) == true else { return }
+        UIImpactFeedbackGenerator(style: .light).impactOccurred()
+        DispatchQueue.main.async { [weak coordinator] in
+            guard let coordinator, coordinator.editor.markdownOf(rows: rows.map { UInt32($0) }) == markdown else { return }
+            coordinator.perform(.deleteRows, onRows: rows)
         }
     }
 

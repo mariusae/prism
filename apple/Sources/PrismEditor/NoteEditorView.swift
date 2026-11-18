@@ -1072,9 +1072,14 @@ public final class NoteTextView: NSTextView {
     /// row, how deep, and where the line that says so is drawn. Nothing,
     /// when none are carried.
     private func rowsDrop(_ sender: any NSDraggingInfo) -> (before: Int, depth: Int, y: CGFloat, x: CGFloat)? {
-        guard sender.draggingPasteboard.availableType(from: [Self.rowsType]) != nil, let carried = Self.carried, let coordinator,
-              let manager = layoutManager as? BodyLayoutManager else { return nil }
-        let place = convert(sender.draggingLocation, from: nil)
+        guard sender.draggingPasteboard.availableType(from: [Self.rowsType]) != nil, let carried = Self.carried else { return nil }
+        return rowsDrop(at: convert(sender.draggingLocation, from: nil), own: Self.carriedFrom === self ? carried.rows : [])
+    }
+
+    /// Where rows let go of at a place in this view would be put down —
+    /// rows of its own, carried within it, or none: rows from elsewhere.
+    private func rowsDrop(at place: CGPoint, own: [Int]) -> (before: Int, depth: Int, y: CGFloat, x: CGFloat)? {
+        guard let coordinator, let manager = layoutManager as? BodyLayoutManager else { return nil }
         let point = CGPoint(x: place.x - textContainerOrigin.x, y: place.y - textContainerOrigin.y)
         let lines = manager.lines
         let step = max(manager.theme.step, 1)
@@ -1086,9 +1091,8 @@ public final class NoteTextView: NSTextView {
         let (above, beside) = (depthOf(before - 1), before < lines.count ? depthOf(before) : depthOf(before - 1))
         let column = max(Int(point.x / step), 0)
         var depth = column <= beside || (before > 0 && column == above + 1) ? column : beside
-        let own = Self.carriedFrom === self
         if lines.isEmpty { depth = 0 } else {
-            guard let held = coordinator.editor.dropDepth(rows: own ? carried.rows.map { UInt32($0) } : [], before: UInt32(before), depth: UInt32(depth)) else { return nil }
+            guard let held = coordinator.editor.dropDepth(rows: own.map { UInt32($0) }, before: UInt32(before), depth: UInt32(depth)) else { return nil }
             depth = Int(held)
         }
         let y = before < lines.count ? manager.rect(ofRow: before).minY : (lines.isEmpty ? 0 : manager.rect(ofRow: lines.count - 1).maxY)
@@ -1174,6 +1178,64 @@ public final class NoteTextView: NSTextView {
             source?.leaveRows()
             from.perform(.deleteRows, onRows: rows)
         }
+        window?.makeFirstResponder(self)
+        return true
+    }
+
+    // MARK: Rows carried from elsewhere
+    //
+    // What the app carries that becomes rows when let go of on a note —
+    // a card, carried onto another — is put down as rows are: the line
+    // shows where, as the pointer moves over the note.
+
+    /// The note whose outline is at a place on the screen, if one is.
+    public static func at(screen point: NSPoint) -> NoteTextView? {
+        let number = NSWindow.windowNumber(at: point, belowWindowWithWindowNumber: 0)
+        guard let window = NSApp.window(withWindowNumber: number) ?? NSApp.keyWindow, let content = window.contentView else { return nil }
+        let place = window.convertPoint(fromScreen: point)
+        var view = content.hitTest(content.superview?.convert(place, from: nil) ?? place)
+        while let seen = view, !(seen is NoteTextView) { view = seen.superview }
+        guard let note = view as? NoteTextView, note.coordinator != nil, note.visibleRect.contains(note.convert(place, from: nil)) else { return nil }
+        return note
+    }
+
+    /// Where, in the view, the bullet of what is carried from elsewhere is,
+    /// under the pointer at a place on the screen: held by its words, a
+    /// step to the left of them.
+    private func place(ofScreen point: NSPoint) -> CGPoint? {
+        guard let window else { return nil }
+        let place = convert(window.convertPoint(fromScreen: point), from: nil)
+        return CGPoint(x: place.x - ((layoutManager as? BodyLayoutManager)?.theme.step ?? 24), y: place.y)
+    }
+
+    /// Shows where rows let go of at a place on the screen would go.
+    /// Says whether they could go there.
+    @discardableResult
+    public func showRowsDrop(atScreen point: NSPoint) -> Bool {
+        guard let manager = layoutManager as? BodyLayoutManager else { return false }
+        let drop = place(ofScreen: point).flatMap { rowsDrop(at: $0, own: []) }
+        let line = drop.map { ($0.y, $0.x) }
+        if manager.dropLine?.0 != line?.0 || manager.dropLine?.1 != line?.1 {
+            manager.dropLine = line
+            needsDisplay = true
+        }
+        return drop != nil
+    }
+
+    public func hideRowsDrop() {
+        guard let manager = layoutManager as? BodyLayoutManager, manager.dropLine != nil else { return }
+        manager.dropLine = nil
+        needsDisplay = true
+    }
+
+    /// Puts rows, written as Markdown, where the line shows for a place on
+    /// the screen. Says whether they were put.
+    @discardableResult
+    public func put(rows markdown: String, atScreen point: NSPoint) -> Bool {
+        hideRowsDrop()
+        guard let coordinator, let drop = place(ofScreen: point).flatMap({ rowsDrop(at: $0, own: []) }) else { return false }
+        leaveRows()
+        guard coordinator.insertRows(markdown, before: drop.before, depth: drop.depth) else { return false }
         window?.makeFirstResponder(self)
         return true
     }

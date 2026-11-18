@@ -112,6 +112,10 @@ struct PhoneShell: View {
                 }
             }
             // A card carried anywhere over the river shown: one place for all of it, whichever river that is.
+            .onGeometryChange(for: CGPoint.self) { $0.frame(in: .global).origin } action: { state.carry.origin = $0 }
+            #if DEBUG
+            .task { await PhoneProbe.run(store) }
+            #endif
             .coordinateSpace(.named(PhoneCardMove.room))
             .onDrop(of: [PhoneCardMove.type], delegate: PhoneCardMove(store: store, carry: state.carry))
             // In from the left edge, as anywhere on the phone: back to where the reader was.

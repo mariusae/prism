@@ -389,6 +389,66 @@ public final class NoteTextView: UITextView {
 
     private static let live = NSHashTable<NoteTextView>.weakObjects()
 
+    #if DEBUG
+    /// The notes on screen: a harness's, testing.
+    public static var onScreen: [NoteTextView] { live.allObjects.filter { $0.window != nil } }
+
+    /// Where some words of the note are, in the window: a harness's, testing.
+    public func windowPoint(of words: String) -> CGPoint? {
+        let range = (text as NSString).range(of: words)
+        guard range.location != NSNotFound, let start = position(from: beginningOfDocument, offset: range.location),
+              let end = position(from: start, offset: range.length), let span = textRange(from: start, to: end) else { return nil }
+        let rect = firstRect(for: span)
+        return convert(CGPoint(x: rect.minX + 4, y: rect.midY), to: nil)
+    }
+
+    /// A row picked up at a place in the window, carried to another and let go of: a harness's, testing.
+    public func probeCarry(from: CGPoint, to: CGPoint) -> Bool {
+        guard let hands, hands.pickUp(at: convert(from, from: nil)) else { return false }
+        hands.follow(to: to)
+        hands.finishCarrying(dropping: true)
+        return true
+    }
+    #endif
+
+    /// The note shown at a point of the window — in sight, not scrolled
+    /// away under what holds it: what rows, or a card, carried are over.
+    public static func at(_ point: CGPoint) -> NoteTextView? {
+        live.allObjects.first { view in
+            guard view.window != nil, view.coordinator != nil, !view.isHidden, view.bounds.contains(view.convert(point, from: nil)) else { return false }
+            var holder = view.superview
+            while let now = holder {
+                if now.clipsToBounds, !now.bounds.contains(now.convert(point, from: nil)) { return false }
+                holder = now.superview
+            }
+            return true
+        }
+    }
+
+    /// Shows where rows let go of at a point of the window would go. Says whether they could go there.
+    @discardableResult
+    public func showRowsDrop(at point: CGPoint) -> Bool {
+        let local = convert(point, from: nil)
+        return hands?.showDrop(at: local, left: carriedBullet(local), own: []) != nil
+    }
+
+    public func hideRowsDrop() { hands?.hideDrop() }
+
+    /// Where the bullet of what is carried from elsewhere is, under a finger
+    /// at a point: held by its words, a step to the left of them.
+    private func carriedBullet(_ point: CGPoint) -> CGFloat {
+        point.x - textContainerInset.left - (coordinator?.parent.theme.step ?? 24)
+    }
+
+    /// Puts rows, written as Markdown, where the line shows for a point of the window. Says whether they were put.
+    @discardableResult
+    public func put(rows markdown: String, at point: CGPoint) -> Bool {
+        let local = convert(point, from: nil)
+        guard let coordinator, let drop = hands?.showDrop(at: local, left: carriedBullet(local), own: []) else { return false }
+        hands?.hideDrop()
+        return coordinator.insertRows(markdown, before: drop.index, depth: drop.depth)
+    }
+
     /// Told once the view is the coordinator's: it is on screen from then.
     func enlist() { Self.live.add(self) }
 
