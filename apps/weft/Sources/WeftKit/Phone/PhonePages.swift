@@ -68,7 +68,7 @@ struct StartPage: View {
         .task(id: "\(store.indexRevision)|\(tab)") { load() }
         .onChange(of: typed) { _, _ in find() }
         .onAppear {
-            guard mode == .add else { return }
+            guard mode != .browse else { return }
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) { typing = true }
         }
     }

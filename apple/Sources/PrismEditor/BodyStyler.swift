@@ -95,6 +95,9 @@ struct BodyStyler {
     /// Whether the note is shown as prose: every row a step further out,
     /// so its top-level rows stand at the margin, as paragraphs, apart.
     var prose = false
+    /// Where the row with a lead at its head starts, if one has: its words a
+    /// step further in, as a task's — its handle, then the lead, then them.
+    var leadStart: Int?
     /// A row's own Markdown, by its place among the lines: the view shows
     /// its words only.
     var rowMarkdown: (Int) -> String? = { _ in nil }
@@ -260,7 +263,7 @@ struct BodyStyler {
             let range = NSRange(location: Int(line.start), length: Int(line.end - line.start))
             guard NSMaxRange(range) <= storage.length else { continue }
             let paragraph = NSMutableParagraphStyle()
-            let indent = Self.wordsIndent(of: line, step: theme.step, prose: prose)
+            let indent = Self.wordsIndent(of: line, step: theme.step, prose: prose) + (leadStart == Int(line.start) ? theme.step : 0)
             paragraph.firstLineHeadIndent = indent
             paragraph.headIndent = indent
             paragraph.paragraphSpacing = (size * (prose && line.depth <= 1 ? 0.7 : Self.outlineGap)).rounded()
@@ -810,8 +813,10 @@ final class BodyLayoutManager: NSLayoutManager {
             let baseline = line.baseline + origin.y
             var number: UInt32?, done: Bool?, bullet = "-"
             if case .item(let n, let d, let b) = row.kind { (number, done, bullet) = (n, d, b) }
+            // The note's lead — its ring, its icon — stands where a task's box would, after the row's handle.
             if let lead, leadStart == Int(row.start), done == nil, number == nil {
-                drawLead(lead, midX: box.midX, baseline: baseline, origin: origin)
+                if hasHandle(row) { drawHandle(midX: box.midX, midY: baseline - font.xHeight / 2, expanded: row.hasChildren && !row.isFolded, dark: row.hasChildren && row.isFolded) }
+                drawLead(lead, midX: box.midX + theme.step, baseline: baseline, origin: origin)
                 continue
             }
             // A plain row with nothing in it and nothing under it has no handle, as Bike's.

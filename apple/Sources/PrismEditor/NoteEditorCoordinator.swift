@@ -183,6 +183,7 @@ extension NoteEditorView {
             } else {
                 manager.leadStart = nil
             }
+            styler.leadStart = parent.lead == nil ? nil : manager.leadStart
             styler.style(storage, layout: layout, revealed: revealed)
             let replaced = placeBlocks(in: view, storage: storage)
             // A row an app's view stands in place of keeps its mark — its bullet, its
@@ -422,6 +423,12 @@ extension NoteEditorView {
                     paragraph.headIndent = paragraph.firstLineHeadIndent
                     attributes[.paragraphStyle] = paragraph
                 }
+            } else if layout.lines.isEmpty, storage.length == 0, !parent.prose {
+                // No row at all yet — a note just made: the caret waits after the bullet its first row will have (see `drawEmptyRow`).
+                let paragraph = NSMutableParagraphStyle()
+                paragraph.firstLineHeadIndent = parent.theme.step
+                paragraph.headIndent = parent.theme.step
+                attributes[.paragraphStyle] = paragraph
             }
             return attributes
         }

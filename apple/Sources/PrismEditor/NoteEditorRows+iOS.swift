@@ -262,7 +262,8 @@ final class RowHands: NSObject, UIGestureRecognizerDelegate, @preconcurrency UIE
         state.last = point
         let size = state.lifted.bounds.size
         state.lifted.center = CGPoint(x: point.x - state.grab.x + size.width / 2, y: point.y - state.grab.y + size.height / 2)
-        let target = NoteTextView.at(point) ?? (view.window.map { view.bounds.contains(view.convert(point, from: $0)) } == true ? view : nil)
+        // Over its own note, it is its own; only else another's.
+        let target = view.bounds.contains(view.convert(point, from: nil)) ? view : NoteTextView.at(point)
         if target !== state.target { state.target?.hands?.hideDrop() }
         state.target = target
         guard let target, let hands = target.hands else {

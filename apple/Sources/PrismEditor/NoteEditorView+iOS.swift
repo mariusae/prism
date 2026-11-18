@@ -414,15 +414,14 @@ public final class NoteTextView: UITextView {
     /// The note shown at a point of the window — in sight, not scrolled
     /// away under what holds it: what rows, or a card, carried are over.
     public static func at(_ point: CGPoint) -> NoteTextView? {
-        live.allObjects.first { view in
-            guard view.window != nil, view.coordinator != nil, !view.isHidden, view.bounds.contains(view.convert(point, from: nil)) else { return false }
-            var holder = view.superview
-            while let now = holder {
-                if now.clipsToBounds, !now.bounds.contains(now.convert(point, from: nil)) { return false }
-                holder = now.superview
-            }
-            return true
+        // What a touch there would reach: a note under another page, or behind what covers it, is not it.
+        for view in live.allObjects {
+            guard let window = view.window, view.coordinator != nil else { continue }
+            var hit = window.hitTest(point, with: nil)
+            while let seen = hit, seen !== view { hit = seen.superview }
+            if hit === view { return view }
         }
+        return nil
     }
 
     /// Shows where rows let go of at a point of the window would go. Says whether they could go there.

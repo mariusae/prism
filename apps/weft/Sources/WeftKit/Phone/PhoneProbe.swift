@@ -15,10 +15,19 @@ enum PhoneProbe {
               let out = arguments.firstIndex(of: "-ProbeOut").map({ arguments[$0 + 1] }) else { return }
         let mode = arguments[at + 1]
         try? await Task.sleep(for: .seconds(2))
+        let notes = NoteTextView.onScreen
+        if mode == "within" {
+            guard let target = notes.first(where: { $0.windowPoint(of: "Third row here") != nil }),
+                  let first = target.windowPoint(of: "First row here"), let third = target.windowPoint(of: "Third row here") else { return write(out, "rows not found") }
+            let carried = target.probeCarry(from: third, to: CGPoint(x: first.x, y: first.y - 8))
+            try? await Task.sleep(for: .seconds(1.5))
+            store.saveAll()
+            try? await Task.sleep(for: .milliseconds(500))
+            return write(out, "carried=\(carried)\n" + target.text)
+        }
         let cards = store.river.all
         guard cards.count >= 2 else { return write(out, "fewer than two cards") }
         let (from, onto) = (cards[0], cards[1])
-        let notes = NoteTextView.onScreen
         guard let source = notes.first(where: { $0.windowPoint(of: "Beta point") != nil }),
               let target = notes.first(where: { $0.windowPoint(of: "Third row here") != nil }),
               let grab = source.windowPoint(of: "Beta point"), var place = target.windowPoint(of: "Third row here")

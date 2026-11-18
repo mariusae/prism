@@ -576,7 +576,7 @@ struct PhoneCard: View {
 
     /// The pages that link here: one line of quiet text, each name a way there.
     private var mentions: some View {
-        MentionLine(titles: backlinks.map(\.title), open: { index in
+        MentionLine(titles: backlinks.map(\.title), icons: backlinks.map { store.mentionIcon(path: $0.path) }, open: { index in
             let source = backlinks[index]
             withAnimation(.snappy(duration: 0.28)) { store.openMention(in: source.path, title: source.name, of: card.path, after: card.id, in: river) }
         }, openAll: {

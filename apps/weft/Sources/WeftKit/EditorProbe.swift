@@ -41,9 +41,9 @@ enum EditorProbe {
         case "load":
             let markdown = ask["markdown"] as? String ?? ""
             count += 1
-            let path = "notes/probe-\(ProcessInfo.processInfo.processIdentifier)-\(count).md"
+            let path = ask["path"] as? String ?? "notes/probe-\(ProcessInfo.processInfo.processIdentifier)-\(count).md"
             _ = try? store.engine.write(path: path, content: markdown)
-            store.river.cards = [Card(path: path, title: "probe")]
+            store.river.cards = [Card(path: path, title: ask["title"] as? String ?? "probe")]
             store.river.selected = store.river.cards.first?.id
             // Drawn — the editor showing this note, not the last — then the caret put where it was asked for.
             let words = ask["names"] as? [String] ?? []
@@ -108,6 +108,14 @@ enum EditorProbe {
             // Pressed here, in this app's own window: never anywhere else on the screen.
             let keys = ask["keys"] as? [String] ?? []
             press(keys) { reply(["ok": true]) }
+        case "drag":
+            // A row carried by its handle to before another, in the note shown: {"cmd": "drag", "row": 2, "before": 0}
+            guard let view = editor() else { return reply(["error": "no editor"]) }
+            var said = view.probeDrag(row: ask["row"] as? Int ?? 0, before: ask["before"] as? Int ?? 0)
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) {
+                said["markdown"] = view.probeState["markdown"]
+                reply(said)
+            }
         case "dump":
             guard let view = editor() else { return reply(["error": "no editor"]) }
             reply(view.probeState)

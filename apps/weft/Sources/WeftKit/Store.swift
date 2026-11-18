@@ -601,6 +601,8 @@ public final class GraphStore {
 
     /// A page that speaks of another, opened after a card, showing where it does.
     public func openMention(in path: String, title: String, of page: String, after card: Card.ID?, in river: River? = nil) {
+        // A river that names it — in its query, its pinned cards — is opened as the river it is.
+        if let name = Self.riverName(path) { return openSaved(name) }
         let river = river ?? self.river
         river.open(Card(path: path, title: title, lens: .mentions(page)), after: card)
         rememberRivers()
@@ -642,6 +644,13 @@ public final class GraphStore {
     /// The river a file is, if it is one: `rivers/On Deck.md` is On Deck.
     static func riverName(_ path: String) -> String? {
         path.hasPrefix("rivers/") && path.hasSuffix(".md") ? String(path.dropFirst(7).dropLast(3)) : nil
+    }
+
+    /// The icon a page that links to a note is shown with among them: a
+    /// river's own, or the one rivers have; a note, none.
+    func mentionIcon(path: String) -> String? {
+        guard let name = Self.riverName(path) else { return nil }
+        return savedRivers.first(where: { $0.name == name })?.icon ?? "water.waves"
     }
 
     /// The saved river a name leads to, when no note answers to it.

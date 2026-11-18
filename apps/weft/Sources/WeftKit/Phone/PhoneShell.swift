@@ -13,7 +13,15 @@ final class PhoneState {
         case browse
         /// To find a note or name a new one, the keyboard up at once.
         case add
-        var id: Int { self == .browse ? 0 : 1 }
+        /// To look around, the keyboard up at once: finding, from the river's name.
+        case find
+        var id: Int {
+            switch self {
+            case .browse: 0
+            case .add: 1
+            case .find: 2
+            }
+        }
     }
 
     var start: Start?
@@ -734,7 +742,7 @@ struct PhoneBar: View {
                     .highPriorityGesture(turning) }
                     HStack(spacing: 0) {
                         if !nameOnly { more }
-                        Button { if !wasJumping { state.start = .browse } } label: {
+                        Button { if !wasJumping { state.start = .find } } label: {
                             HStack(spacing: 6) {
                                 let emblem = Emblem(title: store.title(of: river), icon: river.icon, color: river.color, letter: false)
                                 if emblem.isShown { EmblemView(emblem, size: 15, style: .plain, quiet: Color.inkSecondary) }

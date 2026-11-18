@@ -736,7 +736,7 @@ public final class NoteTextView: NSTextView {
         // On rows chosen: they are taken hold of, to carry — or, let go where they are, let be.
         if let chosen = rowsChosen, let row = manager.row(at: point, in: container), (min(chosen.anchor, chosen.head)...max(chosen.anchor, chosen.head)).contains(row) {
             rowPress = (row, point, true)
-            return
+            return followPress()
         }
         leaveRows()
         if manager.isLead(at: point) {
@@ -746,7 +746,7 @@ public final class NoteTextView: NSTextView {
         // A row's bullet: clicked, it folds the row or unfolds it; dragged, it carries the row.
         if let row = manager.mark(at: point) {
             rowPress = (row, point, false)
-            return
+            return followPress()
         }
         // A folded row's pill: unfolded.
         if let row = manager.foldPill(at: point) {
@@ -758,12 +758,24 @@ public final class NoteTextView: NSTextView {
         if task != nil || link != nil {
             // Followed on the way up, if the pointer has not gone anywhere.
             pressed = (point, link, task)
-            return
+            return followPress()
         }
         pressed = nil
         super.mouseDown(with: event)
         // Clicked into the hidden line of a picture's row or a card's: that row, chosen.
         chooseStandInAtCaret()
+    }
+
+    /// A press on a handle, a box, a link, or rows chosen, followed here
+    /// until it is let go of or becomes a carry — not through the window,
+    /// where the card around the note would take a drag as its own, and
+    /// carry the card.
+    private func followPress() {
+        guard let window else { return }
+        while rowPress != nil || pressed != nil, let next = window.nextEvent(matching: [.leftMouseDragged, .leftMouseUp]) {
+            if next.type == .leftMouseUp { return mouseUp(with: next) }
+            mouseDragged(with: next)
+        }
     }
 
     public override func mouseUp(with event: NSEvent) {
@@ -949,13 +961,14 @@ public final class NoteTextView: NSTextView {
         var rect = rect
         let font = (typingAttributes[.font] as? NSFont) ?? coordinator?.parent.theme.body ?? .systemFont(ofSize: NSFont.systemFontSize)
         let tall = (font.ascender - font.descender).rounded(.up) + 2
-        if rect.height > tall {
+        // Stood on the words' baseline, not hung from the line's top: a heading's
+        // line, or one with a taller pill in it, has room above its words — and an
+        // empty row's line, a font's leading, which the words' own caret never reaches.
+        if let baseline = baseline(at: selectedRange().location, font: font) {
             rect.size.height = tall
-            // Stood on the words' baseline, not hung from the line's top: a heading's
-            // line, or one with a taller pill in it, has room above its words.
-            if let baseline = baseline(at: selectedRange().location) {
-                rect.origin.y = (baseline - font.ascender - 1).rounded()
-            }
+            rect.origin.y = (baseline - font.ascender - 1).rounded()
+        } else if rect.height > tall {
+            rect.size.height = tall
         }
         // The system's caret stands where this one would have, centred on its line.
         let width = max(indicator.intrinsicContentSize.width, 2)
@@ -979,15 +992,28 @@ public final class NoteTextView: NSTextView {
 
     /// Where the words at a place in the text stand, in the view: the
     /// baseline of the line it is on — `nil` past the last line.
-    private func baseline(at location: Int) -> CGFloat? {
-        guard let manager = layoutManager, let storage = textStorage, storage.length > 0 else { return nil }
+    private func baseline(at location: Int, font: NSFont? = nil) -> CGFloat? {
+        guard let manager = layoutManager, let storage = textStorage else { return nil }
         let text = storage.string as NSString
-        // At a line's end, the line it ends: its last character's.
+        // Past the last line — an empty last row, or no text at all: the line the caret waits on,
+        // its words standing where the text system would set them.
+        let onLast = location >= text.length && (text.length == 0 || text.character(at: text.length - 1) == 10)
+        if onLast {
+            let extra = manager.extraLineFragmentRect
+            guard extra.height > 0, let font else { return nil }
+            return extra.minY + manager.defaultBaselineOffset(for: font) + textContainerOrigin.y
+        }
+        // At a line's end, the line it ends: its last character's — or, an empty line, its own end's.
         var at = location
         if at >= text.length || text.character(at: at) == 10 { at -= 1 }
-        guard at >= 0, at < text.length, text.character(at: at) != 10 else { return nil }
+        if at < 0 || text.character(at: at) == 10 { at += 1 }
+        guard at >= 0, at < text.length else { return nil }
         let glyph = manager.glyphIndexForCharacter(at: at)
         let fragment = manager.lineFragmentRect(forGlyphAt: glyph, effectiveRange: nil)
+        if text.character(at: at) == 10, let font {
+            // An empty line: its words would stand where the text system sets them.
+            return fragment.minY + manager.defaultBaselineOffset(for: font) + textContainerOrigin.y
+        }
         return fragment.minY + manager.location(forGlyphAt: glyph).y + textContainerOrigin.y
     }
 
@@ -2192,7 +2218,50 @@ extension NoteTextView {
         state["focused"] = window?.firstResponder === self
         state["view"] = String(UInt(bitPattern: ObjectIdentifier(self).hashValue), radix: 16)
         state["responder"] = window?.firstResponder.map { String(describing: type(of: $0)) } ?? "none"
+        if range.length == 0, let manager = layoutManager, let container = textContainer {
+            var count = 0
+            if let rects = manager.rectArray(forCharacterRange: range, withinSelectedCharacterRange: range, in: container, rectCount: &count), count > 0 {
+                let r = rects[0]
+                state["caretSystem"] = [r.minX, r.minY + textContainerOrigin.y, r.width, r.height]
+            }
+            state["caretBaseline"] = baseline(at: range.location, font: (typingAttributes[.font] as? NSFont) ?? .systemFont(ofSize: 14)) ?? -1
+            state["caretBar"] = caretBar(at: range.location).map { [$0.minX, $0.minY, $0.width, $0.height] } ?? []
+            if let manager = layoutManager as? BodyLayoutManager, let line = outlineLines.last, let glyph = Optional(manager.glyphIndexForCharacter(at: max(Int(line.start), 0))) {
+                let fragment = manager.lineFragmentRect(forGlyphAt: glyph, effectiveRange: nil)
+                state["lastLine"] = [fragment.minX, fragment.minY + textContainerOrigin.y, fragment.width, fragment.height, manager.location(forGlyphAt: glyph).y]
+                state["extra"] = [manager.extraLineFragmentRect.minY, manager.extraLineFragmentRect.height]
+            }
+        }
         return state
+    }
+
+    /// A row carried within the note, by its handle, to just above another
+    /// row's words and let go of: as the drag would, but for the session.
+    /// Says what each step answered.
+    public func probeDrag(row: Int, before target: Int) -> [String: Any] {
+        guard let coordinator, let manager = layoutManager as? BodyLayoutManager, outlineLines.indices.contains(row), outlineLines.indices.contains(target) else { return ["error": "no rows"] }
+        var said: [String: Any] = [:]
+        let markdown = coordinator.editor.markdownOf(rows: [UInt32(row)])
+        Self.carried = ([row], markdown)
+        Self.carriedFrom = self
+        let box = manager.rect(ofRow: target)
+        let line = outlineLines[target]
+        let place = CGPoint(x: textContainerOrigin.x + CGFloat(Int(line.depth) - 1) * manager.theme.step + 4, y: textContainerOrigin.y + box.minY + 2)
+        let board = NSPasteboard(name: NSPasteboard.Name("org.mutable.prism.probe"))
+        board.clearContents()
+        let item = NSPasteboardItem()
+        item.setString(markdown, forType: .string)
+        item.setString("rows", forType: Self.rowsType)
+        board.writeObjects([item])
+        let info = ProbeDragging(board: board, location: convert(place, to: nil), window: window)
+        said["entered"] = draggingEntered(info).rawValue
+        said["updated"] = draggingUpdated(info).rawValue
+        said["prepared"] = prepareForDragOperation(info)
+        said["performed"] = performDragOperation(info)
+        concludeDragOperation(info)
+        Self.carried = nil
+        Self.carriedFrom = nil
+        return said
     }
 
     /// The caret put at a place of the text, writing.
@@ -2201,6 +2270,33 @@ extension NoteTextView {
         leaveRows()
         setSelectedRange(NSRange(location: min(location, (string as NSString).length), length: 0))
     }
+}
+
+/// What a drag tells where it is over, made up: a harness's.
+final class ProbeDragging: NSObject, NSDraggingInfo {
+    let board: NSPasteboard
+    let location: NSPoint
+    weak var window: NSWindow?
+    init(board: NSPasteboard, location: NSPoint, window: NSWindow?) {
+        self.board = board
+        self.location = location
+        self.window = window
+    }
+    var draggingDestinationWindow: NSWindow? { window }
+    var draggingSourceOperationMask: NSDragOperation { [.move, .copy] }
+    var draggingLocation: NSPoint { location }
+    var draggedImageLocation: NSPoint { location }
+    var draggedImage: NSImage? { nil }
+    var draggingPasteboard: NSPasteboard { board }
+    var draggingSource: Any? { nil }
+    var draggingSequenceNumber: Int { 1 }
+    func slideDraggedImage(to screenPoint: NSPoint) {}
+    var draggingFormation: NSDraggingFormation = .default
+    var animatesToDestination = false
+    var numberOfValidItemsForDrop = 1
+    func enumerateDraggingItems(options enumOpts: NSDraggingItemEnumerationOptions = [], for view: NSView?, classes classArray: [AnyClass], searchOptions: [NSPasteboard.ReadingOptionKey: Any] = [:], using block: (NSDraggingItem, Int, UnsafeMutablePointer<ObjCBool>) -> Void) {}
+    var springLoadingHighlight: NSSpringLoadingHighlight { .none }
+    func resetSpringLoading() {}
 }
 #endif
 

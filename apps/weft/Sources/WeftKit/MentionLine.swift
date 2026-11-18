@@ -11,6 +11,8 @@ import UIKit
 /// the rest, listed.
 struct MentionLine: View {
     let titles: [String]
+    /// Beside each name, the icon it is shown with, if any: a river's.
+    var icons: [String?] = []
     var open: (Int) -> Void
     var openAll: () -> Void
     /// What a name held shows, on the phone: its note's card, as a link held does.
@@ -36,13 +38,15 @@ struct MentionLine: View {
         var used = Self.measure("Linked from ") + 14
         for (index, title) in titles.enumerated() {
             let left = titles.count - index - 1
-            let next = used + Self.measure(title + (left > 0 ? ", " : ""))
+            let next = used + Self.measure(title + (left > 0 ? ", " : "")) + (icon(index) == nil ? 0 : Self.size + 3)
             let more = left > 0 ? Self.measure(" and \(left) more") : 0
             if next + more > width { return max(index, 1) }
             used = next
         }
         return titles.count
     }
+
+    private func icon(_ index: Int) -> String? { icons.indices.contains(index) ? icons[index] : nil }
 
     var body: some View {
         let shown = min(fitting(), titles.count)
@@ -51,7 +55,12 @@ struct MentionLine: View {
                 .buttonStyle(.plain)
                 .help("Every Mention, as a River")
             ForEach(Array(titles.prefix(shown).enumerated()), id: \.offset) { index, title in
-                let name = Button { open(index) } label: { Text(title).foregroundStyle(Color.inkSecondary).lineLimit(1) }
+                let name = Button { open(index) } label: {
+                    HStack(spacing: 3) {
+                        if let icon = icon(index) { Image(systemName: icon).font(.system(size: Self.size * 0.85)).foregroundStyle(Color.inkFaint) }
+                        Text(title).foregroundStyle(Color.inkSecondary).lineLimit(1)
+                    }
+                }
                     .buttonStyle(.plain)
                 #if os(macOS)
                 name.pointerStyle(.link)

@@ -588,7 +588,7 @@ struct CardView: View {
     /// The pages that link here: one line of quiet text, each name a way there.
     private var mentions: some View {
         row {
-            MentionLine(titles: backlinks.map(\.title), open: { openMention(backlinks[$0]) }, openAll: {
+            MentionLine(titles: backlinks.map(\.title), icons: backlinks.map { store.mentionIcon(path: $0.path) }, open: { openMention(backlinks[$0]) }, openAll: {
                 withAnimation(.snappy(duration: 0.24)) { store.openMentions(of: card.path) }
             })
             .padding(.top, tags.isEmpty && draft.related.isEmpty ? 4 : 0)
