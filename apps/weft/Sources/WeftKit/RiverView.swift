@@ -104,12 +104,18 @@ struct RiverView: View {
                                     }
                                     return provider
                                 } preview: {
+                                    // Under the pointer, where it took hold: the preview is the card's size —
+                                    // laid where the card is — with its title where the pointer is.
+                                    let held = touches.hold(card.id)
                                     Text(store.label(path: card.path, title: card.title))
                                         .font(.system(size: 15, weight: .semibold)).lineLimit(1)
                                         .padding(.horizontal, 16).padding(.vertical, 10)
                                         .frame(maxWidth: 320, alignment: .leading)
                                         .background(RoundedRectangle(cornerRadius: 10, style: .continuous).fill(Color.inkCard))
                                         .foregroundStyle(Color.inkText)
+                                        .fixedSize()
+                                        .offset(x: held.at.x - 24, y: held.at.y - 20)
+                                        .frame(width: held.size.width, height: held.size.height, alignment: .topLeading)
                                 }
                                 .onDrop(of: [CardMove.type], delegate: CardMove(target: card.id, river: river, store: store, carried: $carried))
                                 .padding(.bottom, card.folded ? Measures.foldedGap : Measures.cardGap)
@@ -507,6 +513,16 @@ final class CardTouches {
     var bar: CGFloat = 0
     weak var window: NSWindow?
     private var monitor: Any?
+
+    /// A card taken hold of: its size, and where in it the pointer is.
+    func hold(_ id: Card.ID) -> (size: CGSize, at: CGPoint) {
+        guard let frame = frames[id], let window, let content = window.contentView else { return (CGSize(width: 320, height: 44), CGPoint(x: 24, y: 20)) }
+        let local = window.convertPoint(fromScreen: NSEvent.mouseLocation)
+        let point = CGPoint(x: local.x - frame.minX, y: content.bounds.height - local.y - frame.minY)
+        // The card's whole size, so that the preview stands where the card does however it is laid.
+        let size = frame.size
+        return (size, CGPoint(x: min(max(point.x, 24), max(frame.width - 24, 24)), y: min(max(point.y, 20), size.height)))
+    }
 
     func start(_ choose: @escaping (Card.ID) -> Void) {
         stop()

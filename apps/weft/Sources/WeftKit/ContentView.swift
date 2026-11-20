@@ -472,6 +472,63 @@ struct RiverBar: View {
         .animation(.snappy(duration: 0.2), value: store.rivers.count)
         .animation(.easeOut(duration: 0.12), value: CommandKey.shared.isHeld)
         .onChange(of: saves) { _, _ in styling = store.river.id }
+        // A tab right-clicked: its menu. The bar is in the window's toolbar, which keeps a
+        // right-click for itself — a tab's own context menu is never asked for — so it is watched for here.
+        .onAppear {
+            rightClicks.start { event in
+                guard let id = hovered, let index = store.rivers.firstIndex(where: { $0.id == id }), let view = event.window?.contentView else { return false }
+                tabMenu(store.rivers[index], at: index).popUp(positioning: nil, at: view.convert(event.locationInWindow, from: nil), in: view)
+                return true
+            }
+        }
+        .onDisappear { rightClicks.stop() }
+    }
+
+    @State private var rightClicks = RightClicks()
+
+    /// What can be done with a river from its tab.
+    private func tabMenu(_ river: River, at index: Int) -> NSMenu {
+        let menu = ClosureMenu()
+        menu.add(river.name == nil ? "Name and Save…" : "Rename…", symbol: "character.cursor.ibeam") { styling = river.id }
+        menu.add("Icon and Colour…", symbol: "paintpalette") { styling = river.id }
+        menu.add(river.query == nil ? "Fill from a Query…" : "Edit River Query…", symbol: "slider.horizontal.3") { store.queryAsk = .edit(river) }
+        if let name = river.name { menu.add("Delete Saved River", symbol: "trash") { store.deleteSaved(name) } }
+        menu.addItem(.separator())
+        menu.add("Close River", symbol: "xmark") { withAnimation(.snappy(duration: 0.2)) { store.closeRiver(at: index) } }
+        return menu
+    }
+}
+
+/// A watch on the window's right-clicks, for what the toolbar would take as its own.
+@MainActor
+final class RightClicks {
+    private var monitor: Any?
+
+    /// `take` says whether it took the click: then nothing else has it.
+    func start(_ take: @escaping (NSEvent) -> Bool) {
+        stop()
+        monitor = NSEvent.addLocalMonitorForEvents(matching: [.rightMouseDown]) { event in take(event) ? nil : event }
+    }
+
+    func stop() {
+        if let monitor { NSEvent.removeMonitor(monitor) }
+        monitor = nil
+    }
+}
+
+/// A menu whose items each do what they were given.
+final class ClosureMenu: NSMenu {
+    private final class Item: NSMenuItem {
+        var run: () -> Void = {}
+        @objc func fire() { run() }
+    }
+
+    func add(_ title: String, symbol: String? = nil, _ run: @escaping () -> Void) {
+        let item = Item(title: title, action: #selector(Item.fire), keyEquivalent: "")
+        item.target = item
+        item.run = run
+        if let symbol { item.image = NSImage(systemSymbolName: symbol, accessibilityDescription: nil) }
+        addItem(item)
     }
 }
 
@@ -494,12 +551,21 @@ struct RiverLook: View {
             .padding(.top, 14)
             EmblemPicker(
                 title: name.isEmpty ? river.title : name,
-                icon: Binding(get: { river.icon }, set: { river.icon = $0; store.rememberRivers() }),
-                color: Binding(get: { river.color }, set: { river.color = $0; store.rememberRivers() })
+                icon: Binding(get: { river.icon }, set: { river.icon = $0; keep() }),
+                color: Binding(get: { river.color }, set: { river.color = $0; keep() })
             )
         }
         .onAppear { name = river.name ?? "" }
         .onDisappear { store.rename(river, to: name) }
+    }
+
+    /// A river given an icon or a colour is saved: called, until named, what it is called now.
+    private func keep() {
+        if river.name == nil {
+            if name.trimmingCharacters(in: .whitespaces).isEmpty { name = store.title(of: river) }
+            store.rename(river, to: name)
+        }
+        store.rememberRivers()
     }
 }
 

@@ -583,7 +583,7 @@ struct PhoneCard: View {
             withAnimation(.snappy(duration: 0.24)) { store.openMentions(of: card.path) }
         }, preview: { index in
             let source = backlinks[index]
-            return AnyView(LinkCard(store: store, link: .page(Prism.linkName(path: source.path) ?? source.title)).background(Color.inkCard))
+            return AnyView(LinkCard(store: store, link: .page(Prism.linkName(path: source.path) ?? source.title), mentioning: card.path).background(Color.inkCard))
         })
         .padding(.top, tags.isEmpty && draft.related.isEmpty ? 4 : 0)
     }

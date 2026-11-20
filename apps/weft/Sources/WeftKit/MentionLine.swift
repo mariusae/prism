@@ -1,6 +1,7 @@
 import SwiftUI
 #if os(macOS)
 import AppKit
+import PrismEditor
 #else
 import UIKit
 #endif
@@ -15,9 +16,13 @@ struct MentionLine: View {
     var icons: [String?] = []
     var open: (Int) -> Void
     var openAll: () -> Void
-    /// What a name held shows, on the phone: its note's card, as a link held does.
-    var preview: ((Int) -> AnyView)?
+    /// What a name shows of its note — under the pointer a moment, on the
+    /// Mac; held, on the phone — as a link does: where it speaks of this one.
+    var preview: ((Int) -> AnyView?)?
     @State private var width: CGFloat = 320
+    #if os(macOS)
+    @State private var hover = MentionHover()
+    #endif
 
     private static let size: CGFloat = {
         #if os(macOS)
@@ -64,12 +69,16 @@ struct MentionLine: View {
                     .buttonStyle(.plain)
                 #if os(macOS)
                 name.pointerStyle(.link)
+                    .onHover { inside in
+                        if inside, let card = preview?(index) { hover.enter(index, showing: card) } else { hover.leave(index) }
+                    }
+                    .simultaneousGesture(TapGesture().onEnded { hover.close() })
                 #else
-                if let preview {
+                if let shown = preview?(index) {
                     name.contextMenu {
                         Button("Open", systemImage: "arrow.up.forward") { open(index) }
                     } preview: {
-                        preview(index).frame(width: 300)
+                        shown.frame(width: 300)
                     }
                 } else {
                     name
@@ -102,3 +111,52 @@ struct MentionLine: View {
         .onGeometryChange(for: CGFloat.self) { $0.size.width.rounded() } action: { width = $0 }
     }
 }
+
+#if os(macOS)
+/// A name's card, by the pointer once it has rested on the name a moment —
+/// as a link's in a note is — and gone once the pointer is off both.
+@MainActor
+final class MentionHover {
+    private var on: Int?
+    private var card: HoverCard?
+    private var wait: Task<Void, Never>?
+
+    func enter(_ index: Int, showing content: AnyView) {
+        guard on != index else { return }
+        on = index
+        close()
+        wait = Task { [weak self] in
+            // Long enough that passing over a name shows nothing.
+            try? await Task.sleep(for: .milliseconds(450))
+            guard !Task.isCancelled, let self, self.on == index, let window = NSApp.keyWindow ?? NSApp.mainWindow else { return }
+            let card = HoverCard(content: content, at: NSEvent.mouseLocation, over: window)
+            card.onLeave = { [weak self] in self?.leaveSoon() }
+            self.card = card
+        }
+    }
+
+    func leave(_ index: Int) {
+        guard on == index else { return }
+        on = nil
+        leaveSoon()
+    }
+
+    /// Gone unless, a moment on, the pointer is on the card — or back on a name.
+    private func leaveSoon() {
+        wait?.cancel()
+        guard card != nil else { return }
+        wait = Task { [weak self] in
+            try? await Task.sleep(for: .milliseconds(350))
+            guard !Task.isCancelled, let self, let card = self.card, !card.isPointed, self.on == nil else { return }
+            self.close()
+        }
+    }
+
+    func close() {
+        wait?.cancel()
+        wait = nil
+        card?.close()
+        card = nil
+    }
+}
+#endif

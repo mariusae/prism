@@ -224,6 +224,10 @@ extension GraphStore {
         guard river !== other else { return }
         let sent = ids.compactMap { river.card($0) }
         for card in sent.reversed() {
+            // Moved out of its home — or having none — into a saved river: that river is its home now.
+            if !copying, let to = other.name, card.focus == nil, home(of: card.path) == nil || home(of: card.path) == river.name {
+                setHome(to, of: card.path, title: card.title)
+            }
             draft(path: card.path, title: card.title).saveNow()
             if !copying { river.close(card.id) }
             if !other.cards.contains(where: { $0.spot == card.spot }) {

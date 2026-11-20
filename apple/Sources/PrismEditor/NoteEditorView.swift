@@ -306,17 +306,17 @@ extension NoteEditorView {
     public static let hoverCardDone = Notification.Name("prism.editor.hoverCardDone")
 }
 
-final class HoverCard {
+public final class HoverCard {
     private let panel: NSPanel
     private weak var parent: NSWindow?
     /// Where the pointer was, on the screen.
     private let pointer: CGPoint
     /// Whether the pointer is on the card: it stays while it is.
-    private(set) var isPointed = false
+    public private(set) var isPointed = false
     /// The pointer left the card.
-    var onLeave: () -> Void = {}
+    public var onLeave: () -> Void = {}
 
-    init(content: AnyView, at pointer: CGPoint, over parent: NSWindow) {
+    public init(content: AnyView, at pointer: CGPoint, over parent: NSWindow) {
         self.pointer = pointer
         self.parent = parent
         let shape = RoundedRectangle(cornerRadius: 12, style: .continuous)
@@ -372,7 +372,7 @@ final class HoverCard {
         if panel.frame.origin != origin { panel.setFrameOrigin(origin) }
     }
 
-    func close() {
+    public func close() {
         parent?.removeChildWindow(panel)
         panel.orderOut(nil)
     }
@@ -798,8 +798,8 @@ public final class NoteTextView: NSTextView {
         if let task = pressed.task {
             coordinator?.perform(.toggleCheckbox, at: task)
         } else if let link = pressed.link {
-            // A link on the web is asked about; with ⌘ held, opened.
-            if case .web(let address) = link, !event.modifierFlags.contains(.command), coordinator?.parent.webTitle != nil, editLink(address, at: pressed.point) { return }
+            // A link is followed: a click goes where it leads. Its words and address are
+            // changed from its menu — a right-click — never by clicking it.
             coordinator?.parent.onFollow(link)
         }
     }
@@ -857,6 +857,10 @@ public final class NoteTextView: NSTextView {
            let command = Self.command(flags: flags, key: event.charactersIgnoringModifiers?.lowercased() ?? "", special: event.specialKey) {
             if !perform(keyed: command) { NSSound.beep() }
             return
+        }
+        // ⇧↩: a line break within the row — the text system takes it for ↩.
+        if flags == [.shift], event.keyCode == 36 || event.keyCode == 76, !outlineLines.isEmpty, !hasMarkedText() {
+            return insertLineBreak(nil)
         }
         if event.keyCode == 49, flags == [.control, .option] {
             if !event.isARepeat, !holdsToTalk {
@@ -1335,6 +1339,20 @@ public final class NoteTextView: NSTextView {
         let menu = super.menu(for: event) ?? NSMenu()
         let point = convert(event.locationInWindow, from: nil)
         let at = characterIndexForInsertion(at: point)
+        // On a link on the web: its words and address, to change — and the way there.
+        if let manager = layoutManager as? BodyLayoutManager, let container = textContainer, case .web(let address)? = manager.link(at: containerPoint(event), in: container), coordinator?.parent.webTitle != nil {
+            let edit = NSMenuItem(title: "Edit Link…", action: #selector(editLinkFromMenu(_:)), keyEquivalent: "")
+            edit.target = self
+            edit.representedObject = LinkAt(address: address, point: containerPoint(event))
+            edit.image = NSImage(systemSymbolName: "pencil", accessibilityDescription: nil)
+            let open = NSMenuItem(title: "Open Link", action: #selector(openLinkFromMenu(_:)), keyEquivalent: "")
+            open.target = self
+            open.representedObject = address
+            open.image = NSImage(systemSymbolName: "safari", accessibilityDescription: nil)
+            menu.insertItem(open, at: 0)
+            menu.insertItem(edit, at: 1)
+            menu.insertItem(.separator(), at: 2)
+        }
         guard let row = row(at: at), let isCard = coordinator?.linkRowIsCard(row) else { return menu }
         let item = NSMenuItem(title: isCard ? "Show as Link" : "Show as Card", action: #selector(toggleCardFromMenu(_:)), keyEquivalent: "")
         item.target = self
@@ -1343,6 +1361,22 @@ public final class NoteTextView: NSTextView {
         menu.insertItem(item, at: 0)
         menu.insertItem(.separator(), at: 1)
         return menu
+    }
+
+    private final class LinkAt: NSObject {
+        let address: String
+        let point: CGPoint
+        init(address: String, point: CGPoint) { self.address = address; self.point = point }
+    }
+
+    @objc private func editLinkFromMenu(_ item: NSMenuItem) {
+        guard let at = item.representedObject as? LinkAt else { return }
+        _ = editLink(at.address, at: at.point)
+    }
+
+    @objc private func openLinkFromMenu(_ item: NSMenuItem) {
+        guard let address = item.representedObject as? String else { return }
+        coordinator?.parent.onFollow(.web(address))
     }
 
     @objc private func toggleCardFromMenu(_ item: NSMenuItem) {
@@ -1741,9 +1775,18 @@ public final class NoteTextView: NSTextView {
         chooseSelectedRows()
     }
 
-    /// ⇧↩ and ⌥↩ split a row as ↩ does — in an outline, which has no line breaks within rows.
+    /// ⇧↩: a line break within the row — a quote of several lines, a
+    /// bullet's second line. In a heading, a table, a rule, a new row, as ↩.
     public override func insertLineBreak(_ sender: Any?) {
-        if outlineLines.isEmpty { super.insertLineBreak(sender) } else { insertNewline(sender) }
+        guard !outlineLines.isEmpty else { return super.insertLineBreak(sender) }
+        if coordinator?.isOffering != true, !isChoosingRows, let index = row(at: selectedRange().location), outlineLines.indices.contains(index) {
+            switch outlineLines[index].kind {
+            case .item, .quote, .paragraph, .code:
+                return insertText("\u{2028}", replacementRange: selectedRange())
+            default: break
+            }
+        }
+        insertNewline(sender)
     }
 
     public override func insertNewlineIgnoringFieldEditor(_ sender: Any?) {

@@ -339,6 +339,8 @@ struct LinkCard: View {
     let link: EditorLink
     /// The note the link is written in: where its address can be given its title.
     var draft: PageDraft?
+    /// The page a note is shown linking to: only where it does is shown, as its card in the river would.
+    var mentioning: String?
 
     var body: some View {
         Group {
@@ -418,16 +420,17 @@ struct LinkCard: View {
         if let path = store.resolve(name)?.path, let source = (try? store.engine.read(path: path)) ?? nil {
             let editor = NoteEditor.open(source: source)
             let label = editor.label(path: path)
-            if let address = Self.address(in: source), editor.field(key: "icon") == "link" || editor.field(key: "cover") != nil {
+            let focused = mentioning.map { editor.focusOnLinks(names: store.names(of: $0)) } ?? false
+            if !focused, let address = Self.address(in: source), editor.field(key: "icon") == "link" || editor.field(key: "cover") != nil {
                 web(address, title: label, cover: editor.field(key: "cover").flatMap { Pictures.image(at: $0, in: store) }, written: .page(name))
             } else {
                 let lines = editor.text().split(whereSeparator: { $0 == "\n" || $0 == "\u{2028}" }).map { inlinePlainText(text: String($0).replacingOccurrences(of: "\u{FFFC}", with: "")).trimmingCharacters(in: .whitespaces) }.filter { !$0.isEmpty && $0 != label }
                 VStack(alignment: .leading, spacing: 5) {
                     Text(label).font(.system(size: 13, weight: .semibold)).lineLimit(2)
                     if !lines.isEmpty {
-                        Text(lines.prefix(6).joined(separator: "\n")).font(.system(size: 12)).foregroundStyle(Color.inkSecondary).lineLimit(7)
+                        Text(lines.prefix(focused ? 8 : 6).joined(separator: "\n")).font(.system(size: 12)).foregroundStyle(Color.inkSecondary).lineLimit(focused ? 9 : 7)
                     }
-                    showAsCard(.page(name))
+                    if mentioning == nil { showAsCard(.page(name)) }
                 }
                 .padding(12)
             }

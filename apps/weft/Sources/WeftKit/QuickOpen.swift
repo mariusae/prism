@@ -51,6 +51,8 @@ struct QuickOpen: View {
         /// For a page: what stands for it, in place of the symbol.
         var emblem: Emblem?
         var open: @MainActor (GraphStore) -> Void
+        /// With ⌘: to the note where it already is, in an open river.
+        var goTo: (@MainActor (GraphStore) -> Void)?
     }
 
     struct Section: Identifiable {
@@ -77,6 +79,12 @@ struct QuickOpen: View {
                     .font(.system(size: 20))
                     .foregroundStyle(Color.inkText)
                     .focused($focused)
+                    // ⌘↩: to the note where it is already open, not opened anew.
+                    .onKeyPress(.return, phases: .down) { press in
+                        guard press.modifiers.contains(.command) else { return .ignored }
+                        go(toOpen: true)
+                        return .handled
+                    }
                     .onSubmit { go() }
                     .onKeyPress(.downArrow) { move(1) }
                     .onKeyPress(.upArrow) { move(-1) }
@@ -181,7 +189,7 @@ struct QuickOpen: View {
         .onHover { if $0, NSEvent.mouseLocation != still { chosen = index } }
         .onTapGesture {
             chosen = index
-            go()
+            go(toOpen: NSEvent.modifierFlags.contains(.command))
         }
     }
 
@@ -198,19 +206,26 @@ struct QuickOpen: View {
         return .handled
     }
 
-    private func go() {
+    private func go(toOpen: Bool = false) {
         let rows = rows
         guard rows.indices.contains(chosen) else { return }
         isShown = false
-        withAnimation(.snappy(duration: 0.28)) { rows[chosen].open(store) }
+        let row = rows[chosen]
+        withAnimation(.snappy(duration: 0.28)) { (toOpen ? row.goTo ?? row.open : row.open)(store) }
     }
 
     // MARK: What it finds
 
     private func page(_ page: PageInfo, detail: String? = nil, snippet: String? = nil) -> Row {
-        Row(id: "page:\(page.path)\(snippet == nil ? "" : ":text")", symbol: symbol(forKind: page.kind), name: page.label, detail: detail ?? when(page), snippet: snippet, emblem: snippet == nil ? store.emblem(page) : nil) {
+        // In a river — open already, else its home — said so; and ⌘ goes there.
+        let place = store.openPlace(of: page.path)
+        let river = place.map { store.title(of: store.rivers[$0.river]) } ?? store.home(of: page.path)
+        let shown = river.map { "In \($0)  ⌘↩" }
+        var row = Row(id: "page:\(page.path)\(snippet == nil ? "" : ":text")", symbol: symbol(forKind: page.kind), name: page.label, detail: shown ?? detail ?? when(page), snippet: snippet, emblem: snippet == nil ? store.emblem(page) : nil) {
             $0.open(page: page, after: $0.river.selected)
         }
+        if river != nil { row.goTo = { $0.goToNote(path: page.path, title: page.title) } }
+        return row
     }
 
     private func when(_ page: PageInfo) -> String {

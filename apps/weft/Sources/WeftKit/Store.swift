@@ -141,6 +141,8 @@ public final class GraphStore {
     /// a list of any length draws each row's emblem without a read a row.
     public private(set) var icons: [String: String] = [:]
     public private(set) var colors: [String: String] = [:]
+    /// Each note's home: the saved river it belongs in, `river:` in its frontmatter.
+    @ObservationIgnored private var homes: [String: String] = [:]
     /// The rivers saved in the graph, as the sidebar lists them.
     public private(set) var savedRivers: [SavedRiverInfo] = []
     /// The notes archived, by path: read with the index.
@@ -434,6 +436,7 @@ public final class GraphStore {
         conflicted = (try? engine.conflictedPages()) ?? []
         icons = (try? engine.fieldValues(key: "icon")) ?? icons
         colors = (try? engine.fieldValues(key: "color")) ?? colors
+        homes = (try? engine.fieldValues(key: "river")) ?? homes
         archived = Set(((try? engine.fieldValues(key: "archived")) ?? [:]).filter { !["", "false", "no", "off", "0", "n"].contains($0.value.lowercased().trimmingCharacters(in: .whitespaces)) }.keys)
         refreshSavedRivers()
     }
@@ -795,6 +798,74 @@ public final class GraphStore {
         show(path: page.path, title: page.title, after: card)
     }
 
+    /// Where a note already is among the open rivers: the river shown
+    /// first, then the others in their order along the bar.
+    public func openPlace(of path: String) -> (river: Int, card: Card.ID)? {
+        let order = [currentRiver] + rivers.indices.filter { $0 != currentRiver }
+        for index in order where rivers.indices.contains(index) {
+            if let card = rivers[index].all.first(where: { $0.path == path && $0.focus == nil }) ?? rivers[index].all.first(where: { $0.path == path }) {
+                return (index, card.id)
+            }
+        }
+        return nil
+    }
+
+    /// Goes to a note where it already is — its river shown, its card
+    /// chosen — rather than opening it anew. Says whether it was anywhere.
+    @discardableResult
+    public func goToOpen(path: String) -> Bool {
+        guard let place = openPlace(of: path) else { return false }
+        leaving()
+        currentRiver = place.river
+        rivers[place.river].reveal(place.card)
+        rememberRivers()
+        return true
+    }
+
+    // MARK: - Home rivers
+
+    /// The saved river a note belongs in — `river:` in its frontmatter —
+    /// if that river is still there. Given it when it is made in a saved
+    /// river, or when the river it is in is named and it had none; moved
+    /// with it from river to river.
+    public func home(of path: String) -> String? {
+        let named = openDraft(path: path).map { $0.home } ?? homes[path]
+        guard let name = named?.trimmingCharacters(in: .whitespaces), !name.isEmpty, savedRivers.contains(where: { $0.name == name }) || rivers.contains(where: { $0.name == name }) else { return nil }
+        return name
+    }
+
+    /// Whether a note is one to have a home: not a day's or a week's page, nor a river's own file.
+    private func homes(_ path: String) -> Bool {
+        NotePath.isNote(path) && !path.hasPrefix("daily/") && !path.hasPrefix("weekly/") && Self.riverName(path) == nil
+    }
+
+    /// Gives a note a home, or — with none — takes it away.
+    func setHome(_ name: String?, of path: String, title: String) {
+        guard homes(path) else { return }
+        let draft = draft(path: path, title: title)
+        guard draft.home != name else { return }
+        draft.home = name
+        if let name { homes[path] = name } else { homes[path] = nil }
+    }
+
+    /// Goes to a note in its river: where it is already open, else in its
+    /// home river, opened. Says whether it had anywhere to go.
+    @discardableResult
+    public func goToNote(path: String, title: String) -> Bool {
+        if goToOpen(path: path) { return true }
+        guard let home = home(of: path) else { return false }
+        leaving()
+        openSaved(home)
+        guard river.name == home else { return false }
+        if let card = river.all.first(where: { $0.path == path }) {
+            river.reveal(card.id)
+        } else {
+            river.open(Card(path: path, title: title), after: nil)
+        }
+        rememberRivers()
+        return true
+    }
+
     /// Shows what a path is: a note as a card in the river — and a river
     /// as the river it is, never as the file it is kept in.
     public func show(path: String, title: String, after card: Card.ID? = nil, in river: River? = nil) {
@@ -826,6 +897,8 @@ public final class GraphStore {
         // Or it is written already — pasted — and is as it was written.
         guard (try? engine.write(path: path, content: written ?? said.map { "- \($0)\n" } ?? "")) != nil else { return nil }
         let card = Card(path: path, title: name)
+        // Made in a saved river: that river is its home.
+        if let home = river.name { setHome(home, of: path, title: name) }
         river.open(card, after: river.selected)
         if said == nil, written == nil { river.writing = card.id }
         rememberRivers()
@@ -959,8 +1032,17 @@ public final class GraphStore {
             if let new, let kept = (try? engine.river(name: old)) ?? nil { _ = try? engine.saveRiver(name: new, river: kept) }
             _ = try? engine.deleteRiver(name: old)
             savedRivers.removeAll { $0.name == old }
+            // Its notes' home is called by its new name — or, unsaved, they have none.
+            let at = Set(homes.filter { $0.value == old }.keys).union(river.cards.filter { openDraft(path: $0.path)?.home == old }.map(\.path))
+            for path in at { setHome(new, of: path, title: river.cards.first { $0.path == path }?.title ?? Prism.linkName(path: path) ?? path) }
         }
         river.name = new
+        // Named, and so saved: its notes that have no home have it as theirs.
+        if let new {
+            for card in river.cards where card.focus == nil && home(of: card.path) == nil {
+                setHome(new, of: card.path, title: card.title)
+            }
+        }
         rememberRivers()
     }
 
@@ -2248,6 +2330,18 @@ public final class PageDraft {
             editor.setField(key: key, value: values[0])
         }
         changed()
+    }
+
+    /// The saved river the note belongs in: `river:`.
+    public var home: String? {
+        get {
+            _ = revision
+            return editor.field(key: "river")
+        }
+        set {
+            setField("river", values: newValue.map { [$0] } ?? [])
+            saveNow()
+        }
     }
 
     /// What the page was given to be shown by: `icon:`, `color:`.

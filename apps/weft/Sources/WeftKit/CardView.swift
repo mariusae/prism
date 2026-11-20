@@ -590,6 +590,11 @@ struct CardView: View {
         row {
             MentionLine(titles: backlinks.map(\.title), icons: backlinks.map { store.mentionIcon(path: $0.path) }, open: { openMention(backlinks[$0]) }, openAll: {
                 withAnimation(.snappy(duration: 0.24)) { store.openMentions(of: card.path) }
+            }, preview: { index in
+                // Under the pointer a moment: where that note speaks of this one.
+                let source = backlinks[index]
+                guard GraphStore.riverName(source.path) == nil else { return nil }
+                return AnyView(LinkCard(store: store, link: .page(Prism.linkName(path: source.path) ?? source.title), mentioning: card.path))
             })
             .padding(.top, tags.isEmpty && draft.related.isEmpty ? 4 : 0)
         }
@@ -780,6 +785,14 @@ struct CardView: View {
     private func follow(_ target: EditorLink) {
         switch target {
         case .page(let name), .tag(let name):
+            #if os(macOS)
+            // ⌘-clicked: to the note in its river — where it is open, else its home river.
+            if NSEvent.modifierFlags.contains(.command), case .page = target, let found = store.resolve(name), found.exists,
+               store.openPlace(of: found.path) != nil || store.home(of: found.path) != nil {
+                withAnimation(.snappy(duration: 0.28)) { _ = store.goToNote(path: found.path, title: name) }
+                return
+            }
+            #endif
             withAnimation(.snappy(duration: 0.28)) { store.open(name: name, after: card.id, in: river) }
         case .web(let address):
             guard let url = URL(string: address) else { return }

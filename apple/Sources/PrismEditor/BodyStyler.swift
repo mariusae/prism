@@ -970,7 +970,7 @@ final class BodyLayoutManager: NSLayoutManager {
             Self.draw(symbol: name, in: box, pointSize: side, weight: .regular, colors: task.isDone ? [.white, theme.secondary] : [theme.secondary])
         }
 
-        // A quote's bar beside it: one for quotes that follow one another, as one quote is.
+        // A quote's bar beside it, the height of all its lines.
         var bars: [CGRect] = []
         storage.enumerateAttribute(.prismQuote, in: characters) { value, range, _ in
             guard value != nil else { return }
@@ -993,11 +993,8 @@ final class BodyLayoutManager: NSLayoutManager {
             let reach = (size * 0.2).rounded()
             let start = max((top ?? whole.minY) - reach, whole.minY)
             let bar = CGRect(x: max(left - theme.step / 2 - 2, 0), y: start, width: 4, height: bottom + reach - start)
-            if let last = bars.last, abs(last.minX - bar.minX) < 1, bar.minY - last.maxY < size * 1.2 {
-                bars[bars.count - 1] = last.union(bar)
-            } else {
-                bars.append(bar)
-            }
+            // Each quote its own: rows of quotes are quotes apart. A quote of several lines is one row.
+            bars.append(bar)
         }
         for bar in bars {
             // A quote: a thin rule at its left, and nothing behind it — its words, and that line, say enough.
