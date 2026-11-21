@@ -18,11 +18,12 @@ struct Sidebar: View {
     @FocusState private var searching: Bool
 
     enum Lens: String, CaseIterable {
-        case recent, inbox, tasks, tags, rivers
+        case recent, inbox, topics, tasks, tags, rivers
         var symbol: String {
             switch self {
             case .recent: return "clock"
             case .inbox: return "tray"
+            case .topics: return "books.vertical"
             case .tasks: return "checklist"
             case .tags: return "tag"
             case .rivers: return "square.stack"
@@ -32,6 +33,7 @@ struct Sidebar: View {
             switch self {
             case .recent: return "Recent"
             case .inbox: return "Inbox and Pinned"
+            case .topics: return "Topics"
             case .tasks: return "Tasks"
             case .tags: return "Tags"
             case .rivers: return "Saved Rivers"
@@ -67,6 +69,7 @@ struct Sidebar: View {
         case .inbox:
             pinned = query("in: \(GraphStore.pinnedRiver)")
             pages = query("in: \(GraphStore.inboxRiver)")
+        case .topics: pages = query("is: \(GraphStore.topicKey)\nsort: title")
         case .tasks: tasks = (try? store.engine.openTasks()) ?? []
         case .tags: tags = (try? store.engine.tags()) ?? []
         case .rivers: break
@@ -127,6 +130,12 @@ struct Sidebar: View {
             ForEach(pinned, id: \.path) { page in titleRow(page.label, store.emblem(page)) { open(path: page.path, title: page.title) } }
             riverHeading(GraphStore.inboxRiver)
             ForEach(pages, id: \.path) { page in titleRow(page.label, store.emblem(page)) { open(path: page.path, title: page.title) } }
+        case .topics:
+            // Each opens as its river: the topic, and what links to it.
+            ForEach(pages, id: \.path) { page in titleRow(page.label, store.emblem(page)) { open(path: page.path, title: page.title) } }
+            if pages.isEmpty {
+                Text("Make a note a topic — from its menu — and it gathers the notes that link to it, as a river of them.").font(.callout).foregroundStyle(Color.inkSecondary)
+            }
         case .rivers:
             ForEach(store.savedRivers) { saved in
                 titleRow(saved.name, saved.emblem, detail: "\(saved.cards)") { withAnimation(.snappy(duration: 0.2)) { store.openSaved(saved.name) } }

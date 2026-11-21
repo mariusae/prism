@@ -397,7 +397,7 @@ struct RiverColumn: View {
                             Button { store.queryAsk = .edit(river) } label: {
                                 HStack(spacing: 8) {
                                     Image(systemName: "line.3.horizontal.decrease.circle").foregroundStyle(river.emblem.color?.color ?? Color.inkSecondary)
-                                    Text(QuerySpec(body: query).summary).font(.footnote).foregroundStyle(Color.inkSecondary).lineLimit(1)
+                                    Text(store.querySummary(of: river)).font(.footnote).foregroundStyle(Color.inkSecondary).lineLimit(1)
                                     Spacer(minLength: 6)
                                     Text("Edit").font(.footnote.weight(.medium)).foregroundStyle(Color.inkAccent)
                                 }

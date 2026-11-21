@@ -24,12 +24,13 @@ struct StartPage: View {
     @FocusState private var typing: Bool
 
     enum Tab: String, CaseIterable {
-        case rivers, recent, inbox, reading, tasks
+        case rivers, recent, inbox, topics, reading, tasks
         var symbol: String {
             switch self {
             case .rivers: return "square.stack.3d.up"
             case .recent: return "clock"
             case .inbox: return "tray"
+            case .topics: return "books.vertical"
             case .reading: return "eyeglasses"
             case .tasks: return "checklist"
             }
@@ -39,6 +40,7 @@ struct StartPage: View {
             case .rivers: return "Rivers"
             case .recent: return "Recent"
             case .inbox: return "Inbox and Pinned"
+            case .topics: return "Topics"
             case .reading: return "Reading"
             case .tasks: return "Tasks"
             }
@@ -122,7 +124,7 @@ struct StartPage: View {
     @ViewBuilder private var browsing: some View {
         switch chosen {
         case .rivers: rivers
-        case .recent, .inbox:
+        case .recent, .inbox, .topics:
             ForEach(pages, id: \.path) { page in pageRow(page) }
             if pages.isEmpty { empty("Nothing here yet") }
         case .reading:
@@ -320,6 +322,7 @@ struct StartPage: View {
         case .rivers: break
         case .recent: pages = query("sort: -modified\nlimit: 40")
         case .inbox: pages = query("in: Pinned") + query("in: Inbox")
+        case .topics: pages = query("is: \(GraphStore.topicKey)\nsort: title")
         case .reading: (pages, nextToRead) = store.readingQueue()
         case .tasks: tasks = (try? store.engine.openTasks()) ?? []
         }

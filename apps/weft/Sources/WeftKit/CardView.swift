@@ -79,7 +79,8 @@ struct CardView: View {
                 if draft.isConflicted { conflict }
                 editor(draft.editor, isFocus: false)
                 if !tags.isEmpty || !draft.related.isEmpty { foot }
-                if !backlinks.isEmpty { mentions }
+                // In its own river, what links to a topic is the river: not said again under it.
+                if !backlinks.isEmpty, store.topic(of: river) != card.path { mentions }
             }
         }
         // Archived: kept as it is, out of the way — dimmed.
@@ -683,6 +684,10 @@ struct CardView: View {
             Button(store.isPinned(card.path) ? "Unpin" : "Pin", systemImage: store.isPinned(card.path) ? "pin.slash" : "pin") { store.togglePinned(path: card.path, title: draft.title) }
             Button(store.isInInbox(card.path) ? "Out of the Inbox" : "Add to Inbox", systemImage: store.isInInbox(card.path) ? "tray.and.arrow.up" : "tray.and.arrow.down") { store.toggleInbox(path: card.path, title: draft.title) }
             Button(store.isArchived(card.path) ? "Unarchive" : "Archive", systemImage: store.isArchived(card.path) ? "archivebox.fill" : "archivebox") { withAnimation(.snappy(duration: 0.2)) { store.toggleArchived(path: card.path, title: draft.title, closing: card.id, in: river) } }
+            Button(store.isTopic(card.path) ? "No Longer a Topic" : "Make Topic", systemImage: store.isTopic(card.path) ? "books.vertical.fill" : "books.vertical") { withAnimation(.snappy(duration: 0.28)) { store.toggleTopic(path: card.path, title: draft.title) } }
+            if store.isTopic(card.path), store.topic(of: river) != card.path {
+                Button("Go to Topic", systemImage: "arrow.up.right") { withAnimation(.snappy(duration: 0.28)) { store.openTopic(path: card.path, title: draft.title) } }
+            }
             Divider()
         }
         ShowAsMenu(draft: draft)

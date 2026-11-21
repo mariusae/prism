@@ -285,6 +285,8 @@ is a plain field. The engine gives none of them special treatment; a query
 asks about any of them the same way (`is: topic`, `has: cover`, `sort: topic`).
 `pinned`, `inbox` and `wiki`, as Reflect marked notes, are read by the apps
 only to make the Pinned and Inbox rivers of them, once.
+Weft goes to a page marked `topic` as a river: the page kept at its
+top, and under it a query of what `links to:` it.
 
 A saved river's frontmatter has keys of its own
 ([§11](#11-saved-rivers)).

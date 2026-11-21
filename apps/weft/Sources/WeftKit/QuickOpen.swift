@@ -220,7 +220,7 @@ struct QuickOpen: View {
         // In a river — open already, else its home — said so; and ⌘ goes there.
         let place = store.openPlace(of: page.path)
         let river = place.map { store.title(of: store.rivers[$0.river]) } ?? store.home(of: page.path)
-        let shown = river.map { "In \($0)  ⌘↩" }
+        let shown = river.map { "In \($0)  ⌘↩" } ?? (store.isTopic(page.path) ? "Topic" : nil)
         var row = Row(id: "page:\(page.path)\(snippet == nil ? "" : ":text")", symbol: symbol(forKind: page.kind), name: page.label, detail: shown ?? detail ?? when(page), snippet: snippet, emblem: snippet == nil ? store.emblem(page) : nil) {
             $0.open(page: page, after: $0.river.selected)
         }

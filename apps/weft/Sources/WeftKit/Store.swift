@@ -147,6 +147,8 @@ public final class GraphStore {
     public private(set) var savedRivers: [SavedRiverInfo] = []
     /// The notes archived, by path: read with the index.
     var archived: Set<String> = []
+    /// The topic notes, by path — `topic:` in their frontmatter: read with the index.
+    var topics: Set<String> = []
     /// Moved on when a note is pinned, put in the inbox, or archived.
     public var collectionsRevision = 0
 
@@ -438,6 +440,7 @@ public final class GraphStore {
         colors = (try? engine.fieldValues(key: "color")) ?? colors
         homes = (try? engine.fieldValues(key: "river")) ?? homes
         archived = Set(((try? engine.fieldValues(key: "archived")) ?? [:]).filter { !["", "false", "no", "off", "0", "n"].contains($0.value.lowercased().trimmingCharacters(in: .whitespaces)) }.keys)
+        topics = Set(((try? engine.fieldValues(key: Self.topicKey)) ?? [:]).filter { !["", "false", "no", "off", "0", "n"].contains($0.value.lowercased().trimmingCharacters(in: .whitespaces)) }.keys)
         refreshSavedRivers()
     }
 
@@ -464,7 +467,8 @@ public final class GraphStore {
     public func emblem(path: String, title: String) -> Emblem {
         // A river is shown by its own icon, or a letter of its name.
         if let name = Self.riverName(path) { return savedRivers.first(where: { $0.name == name })?.emblem ?? Emblem(title: name) }
-        let kind: String? = path.hasPrefix("daily/") || path.hasPrefix("weekly/") ? "calendar" : nil
+        // A topic with no icon of its own is shown as one.
+        let kind: String? = path.hasPrefix("daily/") || path.hasPrefix("weekly/") ? "calendar" : topics.contains(path) ? "books.vertical" : nil
         // A note is given no letter: with no icon of its own, it has none.
         return Emblem(title: title, icon: icons[path], color: colors[path], kindSymbol: kind, letter: false)
     }
@@ -591,6 +595,7 @@ public final class GraphStore {
     /// What a river is called on its tab: its name — or, having none,
     /// what its first card is shown as called.
     public func title(of river: River) -> String {
+        if river.name == nil, let page = river.mentions, isTopic(page) { return label(path: page, title: river.cards.first { $0.path == page }?.title ?? Prism.linkName(path: page) ?? page) }
         if river.name == nil, let page = river.mentions { return "Linking to \(label(path: page, title: Prism.linkName(path: page) ?? page))" }
         return river.name ?? river.cards.first.map { label(path: $0.path, title: $0.title) } ?? "New River"
     }
@@ -606,6 +611,8 @@ public final class GraphStore {
     public func openMention(in path: String, title: String, of page: String, after card: Card.ID?, in river: River? = nil) {
         // A river that names it — in its query, its pinned cards — is opened as the river it is.
         if let name = Self.riverName(path) { return openSaved(name) }
+        // A topic that speaks of it is gone to as a topic is: its river.
+        if isTopic(path) { return openTopic(path: path, title: title) }
         let river = river ?? self.river
         river.open(Card(path: path, title: title, lens: .mentions(page)), after: card)
         rememberRivers()
@@ -614,6 +621,8 @@ public final class GraphStore {
     /// A river of every page that speaks of one, each card showing where:
     /// the one already open, if there is one.
     public func openMentions(of page: String) {
+        // A topic's are its river.
+        if isTopic(page) { return openTopic(path: page, title: (try? engine.page(path: page))??.title ?? Prism.linkName(path: page) ?? page) }
         if let index = rivers.firstIndex(where: { $0.mentions == page }) {
             currentRiver = index
             return
@@ -789,6 +798,10 @@ public final class GraphStore {
     public func open(name: String, after card: Card.ID? = nil, in river: River? = nil) {
         leaving()
         let target = resolve(name)
+        // A topic's name leads to its river.
+        if let target, target.exists, isTopic(target.path) {
+            return openTopic(path: target.path, title: (try? engine.page(path: target.path))??.title ?? name)
+        }
         // A river's name leads to the river — never to the file it is kept in.
         if target?.exists != true, let saved = riverNamed(name) { return openSaved(saved) }
         let river = river ?? self.river
@@ -856,6 +869,11 @@ public final class GraphStore {
     /// home river, opened. Says whether it had anywhere to go.
     @discardableResult
     public func goToNote(path: String, title: String) -> Bool {
+        // A topic's place is its river.
+        if isTopic(path) {
+            openTopic(path: path, title: title)
+            return true
+        }
         if goToOpen(path: path) { return true }
         guard let home = home(of: path) else { return false }
         leaving()
@@ -875,6 +893,8 @@ public final class GraphStore {
     public func show(path: String, title: String, after card: Card.ID? = nil, in river: River? = nil) {
         leaving()
         if let name = Self.riverName(path) { return openSaved(name) }
+        // A topic is shown in its river — unless asked to be shown in a river of its own choosing, as a card closed there is brought back.
+        if river == nil, isTopic(path) { return openTopic(path: path, title: title) }
         (river ?? self.river).open(Card(path: path, title: title), after: card)
         rememberRivers()
     }
@@ -903,6 +923,8 @@ public final class GraphStore {
         let card = Card(path: path, title: name)
         // Made in a saved river: that river is its home.
         if let home = river.name { setHome(home, of: path, title: name) }
+        // Made in a topic's river: it is of the topic, and so stays in its river.
+        if let topic = topic(of: river) { draft(path: path, title: name).relate(Prism.linkName(path: topic) ?? topic) }
         river.open(card, after: river.selected)
         if said == nil, written == nil { river.writing = card.id }
         rememberRivers()

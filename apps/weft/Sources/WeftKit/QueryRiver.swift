@@ -132,7 +132,7 @@ struct QueryRiverHeader: View {
         Button { store.queryAsk = .edit(river) } label: {
             HStack(spacing: 8) {
                 Image(systemName: "line.3.horizontal.decrease.circle").font(.system(size: 13, weight: .medium)).foregroundStyle(river.emblem.color?.color ?? Color.inkSecondary)
-                Text(QuerySpec(body: river.query ?? "").summary).font(.callout).foregroundStyle(Color.inkSecondary).lineLimit(1)
+                Text(store.querySummary(of: river)).font(.callout).foregroundStyle(Color.inkSecondary).lineLimit(1)
                 Spacer(minLength: 8)
                 if river.foundTotal > river.found.count + river.hidden.count {
                     Text("\(river.found.count) of \(river.foundTotal)").font(.caption).monospacedDigit().foregroundStyle(Color.inkFaint)
