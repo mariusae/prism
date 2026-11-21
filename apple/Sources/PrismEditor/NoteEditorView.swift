@@ -1988,6 +1988,12 @@ public final class NoteTextView: NSTextView {
             askLink()
             return true
         }
+        // ⇧⌘L: the row a checkbox, ticked, or none — taken here, in the window, before any menu:
+        // Safari's Search With Google service has the same keys, and in the Services menu it would win.
+        if key == "l", flags == [.command, .shift] {
+            if !run(.cycleChecklist) { NSSound.beep() }
+            return true
+        }
         // ⌥⌘→ shows the caret's row as a note of its own — Bike's focus in; with ⇧, in a card of its
         // own. ⌥⌘← shows more again. (⌘[ ⌘] are the app's: back and forward.)
         if event.specialKey == .rightArrow, flags == [.command, .option] || flags == [.command, .option, .shift], coordinator?.parent.onZoom != nil {
