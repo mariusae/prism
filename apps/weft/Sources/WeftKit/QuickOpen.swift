@@ -23,11 +23,12 @@ struct QuickOpen: View {
     @State private var still = NSEvent.mouseLocation
 
     enum Lens: String, CaseIterable {
-        case recent, pinned, tasks, tags
+        case recent, pinned, topics, tasks, tags
         var symbol: String {
             switch self {
             case .recent: return "clock"
             case .pinned: return "tray"
+            case .topics: return GraphStore.topicSymbol
             case .tasks: return "checklist"
             case .tags: return "number"
             }
@@ -36,6 +37,7 @@ struct QuickOpen: View {
             switch self {
             case .recent: return "Recent"
             case .pinned: return "Pinned and Inbox"
+            case .topics: return "Topics"
             case .tasks: return "Tasks"
             case .tags: return "Tags"
             }
@@ -328,6 +330,9 @@ struct QuickOpen: View {
                 let inbox = query("in: Inbox")
                 if !pinned.isEmpty { found.append(Section(id: "pinned", title: "Pinned", rows: pinned.map { page($0) })) }
                 if !inbox.isEmpty { found.append(Section(id: "inbox", title: "Inbox", rows: inbox.map { page($0, detail: "Inbox") })) }
+            case .topics:
+                // Each gone to as its river.
+                found.append(Section(id: "topics", title: nil, rows: query("is: \(GraphStore.topicKey)\nsort: title").map { page($0) }))
             case .tasks:
                 let pages = query("is: task\nsort: -modified").filter { ((try? store.engine.fields(path: $0.path)) ?? []).contains { $0.key == "task" && $0.values.first == "todo" } }
                 if !pages.isEmpty { found.append(Section(id: "todo", title: "To-Do Notes", rows: pages.map { page($0, detail: "To do") })) }
@@ -358,7 +363,9 @@ struct QuickOpen: View {
             // Rivers called so: the tab that has one, or a saved one opened in a tab of its own.
             top += rivers(named: name)
             let open = Set(here.map(\.path))
-            let pages = ((try? store.engine.complete(typed: name, limit: 8)) ?? []).filter { !open.contains($0.path) }
+            let completed = ((try? store.engine.complete(typed: name, limit: 8)) ?? []).filter { !open.contains($0.path) }
+            // Topics first among the notes called so.
+            let pages = completed.filter { store.isTopic($0.path) } + completed.filter { !store.isTopic($0.path) }
             // Notes of one title are told apart by their files' names.
             let shared = store.sharedLabels(among: pages)
             top += pages.map { found in
@@ -376,6 +383,8 @@ struct QuickOpen: View {
                 found.append(Section(id: "text", title: "In Text", rows: hits.map { hit in
                     Row(id: "text:\(hit.path)", symbol: "text.magnifyingglass", name: hit.title, snippet: hit.snippet.replacingOccurrences(of: "\n", with: " ")) { store in
                         // Found by what it says: shown narrowed to where it says it, the words marked.
+                        // A topic is gone to as its river, whatever found it.
+                        if store.isTopic(hit.path) { return store.openTopic(path: hit.path, title: hit.title) }
                         let words = name.split(whereSeparator: { !$0.isLetter && !$0.isNumber }).map(String.init)
                         let river = store.river
                         river.open(Card(path: hit.path, title: hit.title, lens: .words(words)), after: river.selected)

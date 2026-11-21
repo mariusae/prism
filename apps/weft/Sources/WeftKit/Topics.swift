@@ -11,6 +11,9 @@ import Prism
 extension GraphStore {
     /// The frontmatter field that makes a note a topic.
     static let topicKey = "topic"
+    /// What a topic is shown by, given no icon of its own: wherever it is
+    /// shown small — a link to it, a list, a tab.
+    public static let topicSymbol = "books.vertical"
 
     /// Whether a note is a topic.
     public func isTopic(_ path: String) -> Bool {

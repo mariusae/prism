@@ -468,7 +468,7 @@ public final class GraphStore {
         // A river is shown by its own icon, or a letter of its name.
         if let name = Self.riverName(path) { return savedRivers.first(where: { $0.name == name })?.emblem ?? Emblem(title: name) }
         // A topic with no icon of its own is shown as one.
-        let kind: String? = path.hasPrefix("daily/") || path.hasPrefix("weekly/") ? "calendar" : topics.contains(path) ? "books.vertical" : nil
+        let kind: String? = path.hasPrefix("daily/") || path.hasPrefix("weekly/") ? "calendar" : topics.contains(path) ? Self.topicSymbol : nil
         // A note is given no letter: with no icon of its own, it has none.
         return Emblem(title: title, icon: icons[path], color: colors[path], kindSymbol: kind, letter: false)
     }
@@ -558,8 +558,9 @@ public final class GraphStore {
         let named = (try? engine.complete(typed: typed, limit: 6)) ?? []
         // Notes of one title are told apart by their files' names.
         let shared = sharedLabels(among: named)
-        for page in named where seen.insert(page.path).inserted {
-            offers.append(offer(page, detail: shared.contains(page.label) ? Prism.linkName(path: page.path) : nil))
+        // Topics first: what a thought is most often linked to.
+        for page in named.filter({ topics.contains($0.path) }) + named.filter({ !topics.contains($0.path) }) where seen.insert(page.path).inserted {
+            offers.append(offer(page, detail: shared.contains(page.label) ? Prism.linkName(path: page.path) : topics.contains(page.path) ? "Topic" : nil))
         }
         for hit in (try? engine.search(typed: typed, limit: 8)) ?? [] where seen.insert(hit.path).inserted && offers.count < 7 {
             guard let page = (try? engine.page(path: hit.path)) ?? nil else { continue }
@@ -661,6 +662,8 @@ public final class GraphStore {
     /// The icon a page that links to a note is shown with among them: a
     /// river's own, or the one rivers have; a note, none.
     func mentionIcon(path: String) -> String? {
+        // A topic that links to it: its icon, or the one topics have.
+        if topics.contains(path) { return icons[path] ?? Self.topicSymbol }
         guard let name = Self.riverName(path) else { return nil }
         return savedRivers.first(where: { $0.name == name })?.icon ?? "water.waves"
     }
@@ -732,7 +735,8 @@ public final class GraphStore {
             guard let river = riverNamed(name) else { return nil }
             return savedRivers.first { $0.name == river }?.icon ?? "square.stack"
         }
-        return icons[found.path]
+        // A topic, with no icon of its own: the one topics have.
+        return icons[found.path] ?? (topics.contains(found.path) ? Self.topicSymbol : nil)
     }
 
     /// A row's words as a title shows them: as they read (`plain`), each

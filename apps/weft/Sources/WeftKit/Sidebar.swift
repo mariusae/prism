@@ -23,7 +23,7 @@ struct Sidebar: View {
             switch self {
             case .recent: return "clock"
             case .inbox: return "tray"
-            case .topics: return "books.vertical"
+            case .topics: return GraphStore.topicSymbol
             case .tasks: return "checklist"
             case .tags: return "tag"
             case .rivers: return "square.stack"

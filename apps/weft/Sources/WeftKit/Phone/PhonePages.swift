@@ -30,7 +30,7 @@ struct StartPage: View {
             case .rivers: return "square.stack.3d.up"
             case .recent: return "clock"
             case .inbox: return "tray"
-            case .topics: return "books.vertical"
+            case .topics: return GraphStore.topicSymbol
             case .reading: return "eyeglasses"
             case .tasks: return "checklist"
             }
