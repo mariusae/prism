@@ -684,7 +684,7 @@ extension NoteEditorView {
                 return hideOffers()
             }
             guard putAway != found.start else { return hideOffers() }
-            let offers = Array(parent.offers(found).prefix(8))
+            let offers = found.kind == .command ? Self.commandOffers(found.typed) : Array(parent.offers(found).prefix(8))
             guard !offers.isEmpty else { return hideOffers() }
             // The same one stays chosen while the list is the same.
             let chosen = offering.flatMap { was in was.offers == offers ? was.chosen : nil } ?? 0
@@ -715,9 +715,50 @@ extension NoteEditorView {
         func acceptOffer() -> Bool {
             guard let now = offering, now.offers.indices.contains(now.chosen) else { return false }
             hideOffers()
+            // A command: what was typed for it goes, and it is done to the row.
+            if now.found.kind == .command {
+                guard let chosen = Self.commands.first(where: { $0.id == now.offers[now.chosen].name }) else { return false }
+                // The space it was typed after goes with it, where nothing follows but the line's end or another space.
+                let shown = editor.text() as NSString
+                var start = Int(now.found.start)
+                let end = Int(now.found.end)
+                let after = end < shown.length ? shown.character(at: end) : 10
+                if start > 0, shown.character(at: start - 1) == 32, after == 10 || after == 32 { start -= 1 }
+                settle(editor.replace(start: UInt32(start), end: now.found.end, replacement: ""))
+                perform(chosen.command)
+                return true
+            }
             let link = (now.found.kind == .embed ? "![[" : "[[") + now.offers[now.chosen].name + "]]"
             settle(editor.replace(start: now.found.start, end: now.found.end, replacement: link))
             return true
+        }
+
+        /// What `/` offers, by name: the row made another kind, and what is
+        /// done to a row most — a way to each without its keys.
+        static let commands: [(id: String, title: String, keys: String, symbol: String, words: String, command: EditCommand)] = [
+            ("checkbox", "Checkbox", "⇧⌘L", "checkmark.square", "checkbox checklist todo to-do box", .turnCheckbox),
+            ("task", "Task", "", "circle", "task todo to-do", .turnTask),
+            ("bullet", "Bullet", "⇧⌘8", "list.bullet", "bullet list", .turnBullet),
+            ("numbered", "Numbered", "", "list.number", "numbered number ordered list", .turnNumbered),
+            ("heading1", "Heading 1", "", "textformat.size.larger", "heading 1 h1 title", .turnHeading1),
+            ("heading2", "Heading 2", "", "textformat.size", "heading 2 h2", .turnHeading2),
+            ("heading3", "Heading 3", "", "textformat.size.smaller", "heading 3 h3", .turnHeading3),
+            ("quote", "Quote", "", "text.quote", "quote blockquote", .turnQuote),
+            ("text", "Plain Text", "", "text.alignleft", "plain text paragraph body", .turnParagraph),
+            ("duplicate", "Duplicate Row", "⌘D", "plus.square.on.square", "duplicate copy row", .duplicateRows),
+            ("top", "Move to Top", "", "arrow.up.to.line", "move top row", .moveToTop),
+            ("bottom", "Move to Bottom", "", "arrow.down.to.line", "move bottom row", .moveToBottom),
+            ("delete", "Delete Row", "⇧⌘K", "trash", "delete remove row", .deleteRows),
+        ]
+
+        /// The commands named by what was typed after `/`: each word the start of a word of one's name.
+        static func commandOffers(_ typed: String) -> [EditorOffer] {
+            let asked = typed.lowercased().split(separator: " ")
+            return commands.filter { command in
+                let words = (command.title.lowercased() + " " + command.words).split(separator: " ")
+                return asked.allSatisfy { word in words.contains { $0.hasPrefix(word) } }
+            }
+            .map { EditorOffer(name: $0.id, title: $0.title, detail: $0.keys.isEmpty ? nil : $0.keys, symbol: $0.symbol) }
         }
 
         /// Puts the list away, until another link is begun.

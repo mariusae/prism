@@ -972,6 +972,8 @@ pub enum BodyCompletionKind {
     Tag,
     /// `@typed`: a page looked for, by name or by what it says, to link to.
     Mention,
+    /// `/typed`: a command looked for by its name.
+    Command,
 }
 
 /// A name half-typed at the caret. Offsets are UTF-16.
@@ -996,6 +998,7 @@ pub fn completion_at(body: String, caret: u32) -> Option<BodyCompletion> {
             CompletionKind::Embed => BodyCompletionKind::Embed,
             CompletionKind::Tag => BodyCompletionKind::Tag,
             CompletionKind::Mention => BodyCompletionKind::Mention,
+            CompletionKind::Command => BodyCompletionKind::Command,
         },
         typed: found.typed,
         start: offsets.to16(found.range.start),

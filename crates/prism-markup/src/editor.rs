@@ -500,6 +500,9 @@ pub enum CompletionKind {
     /// `@typed`: a page looked for, by its name or by what it says, to
     /// link to. What is chosen is written as a link; the `@` goes.
     Mention,
+    /// `/typed`: a command looked for — the row made a task, a heading —
+    /// by its name. What is chosen is done; the `/` and what follows go.
+    Command,
 }
 
 /// A name half-typed.
@@ -541,6 +544,19 @@ pub fn completion(body: &str, caret: usize) -> Option<Completion> {
             return Some(Completion { kind: CompletionKind::Mention, typed: typed.to_owned(), range: line_start + at..caret });
         }
     }
+    // A command looked for: `/` starting a word, then a few words of its
+    // name, to the caret. Not in code, and not an address's or a path's.
+    if let Some(slash) = before.rfind('/') {
+        let typed = &before[slash + 1..];
+        let starts_word = before[..slash].chars().next_back().is_none_or(char::is_whitespace);
+        let is_name = typed.chars().count() <= 24
+            && !typed.starts_with(' ')
+            && !typed.contains("  ")
+            && typed.chars().all(|c| c.is_alphanumeric() || c == ' ');
+        if starts_word && is_name && before[..slash].matches('`').count() % 2 == 0 {
+            return Some(Completion { kind: CompletionKind::Command, typed: typed.to_owned(), range: line_start + slash..caret });
+        }
+    }
     // A tag: `#` starting a word, then letters, to the caret.
     let hash = before.rfind('#')?;
     let typed = &before[hash + 1..];
@@ -555,6 +571,20 @@ pub fn completion(body: &str, caret: usize) -> Option<Completion> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_command_is_looked_for_after_a_slash() {
+        let at = |text: &str| completion(text, text.len()).filter(|found| found.kind == CompletionKind::Command).map(|found| (found.typed, found.range));
+        assert_eq!(at("/"), Some((String::new(), 0..1)));
+        assert_eq!(at("- buy milk /che"), Some(("che".to_owned(), 11..15)));
+        assert_eq!(at("/heading 2"), Some(("heading 2".to_owned(), 0..10)));
+        // An address, a path, a fraction, code: no command.
+        assert_eq!(at("see https://"), None);
+        assert_eq!(at("and/or"), None);
+        assert_eq!(at("1/2"), None);
+        assert_eq!(at("`/usr"), None);
+        assert_eq!(at("/a  b"), None);
+    }
 
     #[test]
     fn a_page_is_looked_for_after_an_at() {
