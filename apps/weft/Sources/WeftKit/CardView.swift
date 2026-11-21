@@ -552,6 +552,7 @@ struct CardView: View {
                     },
                     onFollow: { follow($0) }
                 )
+                .onMakeLinkPage { address in withAnimation(.snappy(duration: 0.28)) { _ = store.makeLinkPage(address: address, in: draft) } }
                 // Its height is the text's own, asked of it as it is laid
                 // out — not a number that arrives a frame later and moves
                 // everything under it.

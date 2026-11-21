@@ -45,6 +45,15 @@ public struct NoteEditorView: NSViewRepresentable {
     /// them, or it opened — and one clicked with ⌘ held is opened at once.
     /// `nil`, and a click opens it.
     var webTitle: ((String) -> String?)?
+    /// A link on the web made a page of its own — a link note — in the app's way: offered on its menu.
+    var makeLinkPage: ((String) -> Void)?
+
+    /// Offers, on a web link's menu, to make it a page of its own.
+    public func onMakeLinkPage(_ make: @escaping (String) -> Void) -> Self {
+        var made = self
+        made.makeLinkPage = make
+        return made
+    }
     /// What stands at the head of the note's first line in place of its
     /// bullet, and what clicking it does. Drawn only when the note opens
     /// with a plain bulleted line: see `takesLead`.
@@ -1351,7 +1360,16 @@ public final class NoteTextView: NSTextView {
             open.image = NSImage(systemSymbolName: "safari", accessibilityDescription: nil)
             menu.insertItem(open, at: 0)
             menu.insertItem(edit, at: 1)
-            menu.insertItem(.separator(), at: 2)
+            var at = 2
+            if coordinator?.parent.makeLinkPage != nil {
+                let page = NSMenuItem(title: "Make Link Page", action: #selector(makeLinkPageFromMenu(_:)), keyEquivalent: "")
+                page.target = self
+                page.representedObject = address
+                page.image = NSImage(systemSymbolName: "doc.badge.plus", accessibilityDescription: nil)
+                menu.insertItem(page, at: at)
+                at += 1
+            }
+            menu.insertItem(.separator(), at: at)
         }
         guard let row = row(at: at), let isCard = coordinator?.linkRowIsCard(row) else { return menu }
         let item = NSMenuItem(title: isCard ? "Show as Link" : "Show as Card", action: #selector(toggleCardFromMenu(_:)), keyEquivalent: "")
@@ -1372,6 +1390,11 @@ public final class NoteTextView: NSTextView {
     @objc private func editLinkFromMenu(_ item: NSMenuItem) {
         guard let at = item.representedObject as? LinkAt else { return }
         _ = editLink(at.address, at: at.point)
+    }
+
+    @objc private func makeLinkPageFromMenu(_ item: NSMenuItem) {
+        guard let address = item.representedObject as? String else { return }
+        coordinator?.parent.makeLinkPage?(address)
     }
 
     @objc private func openLinkFromMenu(_ item: NSMenuItem) {

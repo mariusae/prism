@@ -382,6 +382,18 @@ struct LinkCard: View {
                 }
                 Text(Self.host(address)).font(.caption).foregroundStyle(Color.inkSecondary).lineLimit(1)
                 showAsCard(written ?? .web(address))
+                // A link written in a note — not a link page's own — made a page of its own.
+                if written == nil, let draft {
+                    Button {
+                        NotificationCenter.default.post(name: NoteEditorView.hoverCardDone, object: nil)
+                        withAnimation(.snappy(duration: 0.28)) { _ = store.makeLinkPage(address: address, in: draft) }
+                    } label: {
+                        Label("Make Link Page", systemImage: "doc.badge.plus").font(.system(size: 12, weight: .medium)).frame(maxWidth: .infinity)
+                    }
+                    .buttonStyle(.bordered)
+                    .controlSize(.regular)
+                    .padding(.top, 8)
+                }
                 // An address written bare: written again as a link, with the page's title for words.
                 if title == nil, let named = found?.title, let draft, draft.hasBareLink(address) {
                     Button {

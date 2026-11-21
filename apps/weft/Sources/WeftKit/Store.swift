@@ -2233,6 +2233,17 @@ public final class PageDraft {
         return nil
     }
 
+    /// The words a link to an address is written with, `[words](address)`, if it has any of its own.
+    func linkWords(_ address: String) -> String? {
+        let at = NSRegularExpression.escapedPattern(for: address)
+        let text = markdown
+        guard let expression = try? NSRegularExpression(pattern: #"\[([^\]\n]+)\]\(<?"# + at + #">?\)"#),
+              let found = expression.firstMatch(in: text, range: NSRange(text.startIndex..., in: text)),
+              let range = Range(found.range(at: 1), in: text) else { return nil }
+        let words = String(text[range]).trimmingCharacters(in: .whitespaces)
+        return words.isEmpty || words == address ? nil : words
+    }
+
     /// Whether an address is written bare, and could be given a title.
     public func hasBareLink(_ address: String) -> Bool {
         _ = revision

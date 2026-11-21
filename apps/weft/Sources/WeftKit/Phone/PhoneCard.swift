@@ -335,7 +335,7 @@ struct PhoneCard: View {
             }
         }
         .fullScreenCover(item: $linkShown) { link in
-            BottomCard { PhoneLinkSheet(link: link, draft: draft) }
+            BottomCard { PhoneLinkSheet(link: link, draft: draft, store: store) }
         }
         .fullScreenCover(isPresented: $addsTag) {
             BottomCard { TagAdder(store: store, draft: draft) { addsTag = false; refresh() } }
@@ -1239,6 +1239,7 @@ struct PhoneLink: Identifiable {
 struct PhoneLinkSheet: View {
     let link: PhoneLink
     let draft: PageDraft
+    var store: GraphStore?
     @Environment(\.dismiss) private var dismiss
     @Environment(\.openURL) private var openURL
 
@@ -1304,6 +1305,16 @@ struct PhoneLinkSheet: View {
                         dismiss()
                     } label: {
                         Label(at.isCard ? "Show as Link" : "Show as Card", systemImage: at.isCard ? "link" : "rectangle.on.rectangle")
+                    }
+                    .buttonStyle(SheetButton())
+                }
+                // Made a page of its own: its link note, opened after this one, the link made a link to it.
+                if let store {
+                    Button {
+                        dismiss()
+                        withAnimation(.snappy(duration: 0.28)) { _ = store.makeLinkPage(address: link.address, in: draft) }
+                    } label: {
+                        Label("Make Link Page", systemImage: "doc.badge.plus")
                     }
                     .buttonStyle(SheetButton())
                 }

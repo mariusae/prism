@@ -115,6 +115,46 @@ extension GraphStore {
         if WebPageInfo.isBare(title: draft.title, url: address) { draft.rename(to: LinkNote.title(info.title, url: address)) }
     }
 
+    /// A link on the web in a note, made a page of its own: its link note —
+    /// made, or the one there is of that address — opened in the river
+    /// after the note, and the link in the note made a link to it.
+    /// Says whether it was.
+    @discardableResult
+    public func makeLinkPage(address: String, in source: PageDraft) -> Bool {
+        let known = WebCards.shared.found[address]?.title
+        let words = source.linkWords(address)
+        let title = LinkNote.title(known ?? words ?? "", url: address)
+        guard let path = linkNote(for: SharedPages.Page(url: address, title: title)) else { return false }
+        let name = Prism.linkName(path: path) ?? title
+        source.saveNow()
+        let text = source.markdown
+        let linked = Self.linking(address, in: text, to: name)
+        if linked != text, (try? engine.write(path: source.path, content: linked)) != nil { source.fileChanged() }
+        // Known only by its address: told what it is once the page is read.
+        if WebPageInfo.isBare(title: title, url: address) {
+            Task { if let info = await WebPageInfo.read(address) { self.fillLinkNote(path: path, from: info) } }
+        }
+        let river = rivers.first { $0.all.contains { $0.path == source.path } } ?? self.river
+        if let index = rivers.firstIndex(where: { $0 === river }) { currentRiver = index }
+        river.open(Card(path: path, title: title), after: river.all.first { $0.path == source.path }?.id)
+        rememberRivers()
+        note("link", "Made a link page of \(address)")
+        return true
+    }
+
+    /// A note's Markdown with every link to an address — `[words](address)`,
+    /// `<address>`, the address bare — made a link to a page.
+    static func linking(_ address: String, in text: String, to name: String) -> String {
+        let at = NSRegularExpression.escapedPattern(for: address)
+        let link = "[[\(name)]]"
+        var text = text
+        for pattern in [#"(?<!!)\[[^\]\n]*\]\(<?"# + at + #">?\)"#, "<" + at + ">", #"(?<![\S])"# + at + #"(?![^\s.,;:!?)])"#] {
+            guard let expression = try? NSRegularExpression(pattern: pattern) else { continue }
+            text = expression.stringByReplacingMatches(in: text, range: NSRange(text.startIndex..., in: text), withTemplate: NSRegularExpression.escapedTemplate(for: link))
+        }
+        return text
+    }
+
     /// The link note for a page shared — made, or found and stamped. Its path.
     private func linkNote(for page: SharedPages.Page) -> String? {
         let day = Days.name(page.shared)
