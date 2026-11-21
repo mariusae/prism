@@ -107,6 +107,7 @@ struct PhoneCard: View {
     @State private var newTitle = ""
     @State private var choosesLook = false
     @State private var addsTag = false
+    @State private var linksNote = false
     @State private var stampsDay = false
     /// The link on the web whose card is shown.
     @State private var linkShown: PhoneLink?
@@ -339,6 +340,9 @@ struct PhoneCard: View {
         .fullScreenCover(isPresented: $addsTag) {
             BottomCard { TagAdder(store: store, draft: draft) { addsTag = false; refresh() } }
         }
+        .fullScreenCover(isPresented: $linksNote) {
+            BottomCard { NoteLinker(store: store, draft: draft) { linksNote = false; refresh() } }
+        }
         .fullScreenCover(isPresented: $stampsDay) {
             BottomCard { DayStamper(draft: draft) { stampsDay = false; refresh() } }
         }
@@ -429,6 +433,7 @@ struct PhoneCard: View {
                 .cardMenu { holdMenu }
                 .onDrag { carry() } preview: { carriedLabel }
                 if store.isPinned(card.path) { Image(systemName: "pin.fill").font(.caption).foregroundStyle(Color.inkAccent) }
+                if river.card(card.id)?.pinned == true { Image(systemName: "arrow.up.to.line.compact").font(.caption).foregroundStyle(Color.inkSecondary) }
                 if store.isArchived(card.path) { ArchivedLabel() }
             }
         }
@@ -783,10 +788,16 @@ struct PhoneCard: View {
                     .disabled(draft.isStamped(today))
                 Button("Stamp with Day…", systemImage: "calendar") { stampsDay = true }
             }
+            if draft.exists { Button("Link to Note…", systemImage: "link") { linksNote = true } }
         }
         // Where it is.
         Section {
             if river.query == nil || !river.isFound(card.id) { MoveToRiverMenu(store: store, river: river, ids: [card.id]) }
+            let pinned = river.card(card.id)?.pinned == true
+            Button(pinned ? "Stop Keeping at Top" : "Keep at Top of River", systemImage: pinned ? "arrow.down.to.line" : "arrow.up.to.line.compact") {
+                withAnimation(.snappy(duration: 0.28)) { river.togglePin(card.id) }
+                store.rememberRivers()
+            }
             Button("Move to Top", systemImage: "arrow.up.to.line") {
                 withAnimation(.snappy(duration: 0.28)) { river.move(card.id, toPlace: 0) }
                 store.rememberRivers()

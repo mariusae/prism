@@ -130,6 +130,9 @@ pub struct Layout {
     /// How each line after the first was indented, when not the usual;
     /// `None` is the usual. See [`QUOTE_BARE`].
     continuation: Option<Vec<Option<isize>>>,
+    /// A quote written as a list item's — `- > words` — the bullet it is
+    /// written with: how a quote has rows under it.
+    pub listed: Option<char>,
 }
 
 /// Among a quote's continuation facts: a line written `>` with no space.
@@ -137,7 +140,7 @@ const QUOTE_BARE: isize = -1;
 
 impl Default for Layout {
     fn default() -> Self {
-        Layout { gap: Vec::new(), spacing: 1, extra_indent: 0, continuation: None }
+        Layout { gap: Vec::new(), spacing: 1, extra_indent: 0, continuation: None, listed: None }
     }
 }
 
@@ -269,7 +272,13 @@ impl Block {
     /// paragraph with rows under it is written as a `- ` item: Markdown has
     /// no other way to nest under one ([`Block::written_kind`]).
     pub fn can_have_children(&self) -> bool {
-        matches!(self.kind, BlockKind::Item(_) | BlockKind::Paragraph)
+        matches!(self.kind, BlockKind::Item(_) | BlockKind::Paragraph | BlockKind::Quote)
+    }
+
+    /// A quote written as a list item's — `- > words` — with the bullet it
+    /// is written with: one that has rows under it, or was read so.
+    fn listed_quote(&self) -> Option<char> {
+        (self.kind == BlockKind::Quote).then(|| self.layout.listed.or_else(|| (!self.children.is_empty()).then_some('-')))?
     }
 
     /// Whether this is a plain body row: a paragraph, or a `- ` item with
@@ -632,7 +641,19 @@ impl<'a> Parser<'a> {
         block.layout.extra_indent = indent - base;
         self.last_content_column = indent;
 
-        if let Some(item) = list_item(content) {
+        let listed = list_item(content).filter(|item| item.task.is_none() && matches!(item.marker, Marker::Bullet(_)) && item.spacing == 1 && item.text.starts_with('>'));
+        if let Some(item) = listed {
+            // A bullet whose words are a quote: the quote, with rows under it.
+            let Marker::Bullet(bullet) = item.marker else { unreachable!() };
+            let rest = &item.text[1..];
+            block.kind = BlockKind::Quote;
+            block.layout.listed = Some(bullet);
+            block.layout.spacing = usize::from(rest.starts_with(' '));
+            block.text = rest[block.layout.spacing..].to_owned();
+            let column = indent + 2;
+            self.open.push(column);
+            self.last_content_column = column;
+        } else if let Some(item) = list_item(content) {
             block.kind = BlockKind::Item(Item { marker: item.marker, task: item.task });
             block.layout.spacing = item.spacing;
             block.text = item.text.to_owned();
@@ -747,8 +768,8 @@ fn write(rows: &[(usize, &Block)], trailing: &[String], final_newline: bool, end
     // The depth of an empty item just written: Markdown reads its first
     // child as its own only with no blank line between them.
     let mut empty_item: Option<usize> = None;
-    // The depth of a quote just written: a quote straight after it, with no
-    // blank line between, would be read as more of it.
+    // The column a quote just written has its `>` at: a quote straight after
+    // it there, with no blank line between, would be read as more of it.
     let mut quote: Option<usize> = None;
     for &(row_depth, block) in rows {
         if block.kind == BlockKind::Raw {
@@ -762,14 +783,15 @@ fn write(rows: &[(usize, &Block)], trailing: &[String], final_newline: bool, end
         if !opens_empty {
             lines.extend(block.layout.gap.iter().cloned());
         }
-        if block.kind == BlockKind::Quote && block.layout.gap.is_empty() && quote == Some(row_depth) {
-            lines.push(String::new());
-        }
-        quote = (block.kind == BlockKind::Quote).then_some(row_depth);
+        let listed = block.listed_quote();
         let depth = row_depth.min(columns.len());
         columns.truncate(depth);
         let base = columns.last().copied().unwrap_or(0);
         let indent = base + block.layout.extra_indent;
+        if block.kind == BlockKind::Quote && listed.is_none() && block.layout.gap.is_empty() && !opens_empty && quote == Some(indent) {
+            lines.push(String::new());
+        }
+        quote = (block.kind == BlockKind::Quote).then_some(if listed.is_some() { indent + 2 } else { indent });
         let pad = " ".repeat(indent);
         let first_line = block.text.split('\n').next().unwrap_or("");
         let spaces = " ".repeat(block.layout.spacing);
@@ -806,7 +828,15 @@ fn write(rows: &[(usize, &Block)], trailing: &[String], final_newline: bool, end
                 head + first_line
             }
             BlockKind::Heading(level) => format!("{pad}{}{spaces}{first_line}", "#".repeat(usize::from(*level))),
-            BlockKind::Quote => format!("{pad}>{spaces}{first_line}"),
+            BlockKind::Quote => match listed {
+                // Its rows under it, indented to its words: as a list item's.
+                Some(bullet) => {
+                    continuation = indent + 2;
+                    columns.push(continuation);
+                    format!("{pad}{bullet} >{spaces}{first_line}")
+                }
+                None => format!("{pad}>{spaces}{first_line}"),
+            },
             _ => format!("{pad}{first_line}"),
         };
         empty_item = (matches!(&*kind, BlockKind::Item(item) if item.task.is_none()) && block.text.trim().is_empty()).then_some(row_depth);
@@ -825,8 +855,9 @@ fn write(rows: &[(usize, &Block)], trailing: &[String], final_newline: bool, end
         for (offset, line) in block.text.split('\n').skip(1).enumerate() {
             let fact = facts.get(offset).copied().flatten();
             if block.kind == BlockKind::Quote && (fact.is_none() || fact == Some(QUOTE_BARE)) {
-                // A quote's lines each with its `>`, as they were written.
+                // A quote's lines each with its `>`, as they were written — a listed one's under its words.
                 let space = if fact == Some(QUOTE_BARE) || line.is_empty() { "" } else { " " };
+                let pad = if listed.is_some() { " ".repeat(continuation) } else { pad.clone() };
                 lines.push(format!("{pad}>{space}{line}"));
             } else if let Some(written) = fact {
                 lines.push(format!("{}{line}", " ".repeat(written.max(0) as usize)));
@@ -999,6 +1030,24 @@ mod tests {
 
     fn kinds(document: &Document) -> Vec<(usize, &BlockKind, &str)> {
         document.rows().into_iter().map(|r| (r.depth, &r.block.kind, r.block.text.as_str())).collect()
+    }
+
+    #[test]
+    fn a_quote_has_rows_under_it_written_as_a_list_items() {
+        let document = round_trip("- > a quote\n  > of two lines\n  - under it\n  - and this\n- after\n");
+        let got = kinds(&document);
+        assert_eq!(got[0], (0, &BlockKind::Quote, "a quote\nof two lines"));
+        assert_eq!(got[1].0, 1);
+        assert_eq!(got[2].0, 1);
+        assert_eq!(got[3].0, 0);
+        // A quote given a row under it is written so.
+        let mut document = Document::parse("> said\n\n- reply\n");
+        let mut reply = document.blocks.remove(1);
+        reply.layout.gap.clear();
+        document.blocks[0].children.push(reply);
+        assert_eq!(document.to_markdown(), "- > said\n  - reply\n");
+        // A quote alone is written as it always was.
+        round_trip("> said\n> more\n\n> apart\n");
     }
 
     #[test]

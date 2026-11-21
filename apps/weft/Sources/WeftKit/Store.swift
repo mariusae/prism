@@ -718,7 +718,11 @@ public final class GraphStore {
             let key = nameKey(name: river)
             return savedRivers.first(where: { nameKey(name: $0.name) == key })?.icon
         }
-        guard let found = resolve(name), found.exists else { return nil }
+        guard let found = resolve(name), found.exists else {
+            // A name no note has but a river does leads to the river: its icon, or the stack every river has.
+            guard let river = riverNamed(name) else { return nil }
+            return savedRivers.first { $0.name == river }?.icon ?? "square.stack"
+        }
         return icons[found.path]
     }
 
@@ -931,11 +935,12 @@ public final class GraphStore {
         guard known[river.id] != river.signature else { return }
         defer { known[river.id] = river.signature }
         note("river", "Saved river “\(name)” (\(river.cards.count) cards)")
-        var saved = ((try? engine.river(name: name)) ?? nil) ?? SavedRiver(cards: [], query: nil, placed: [], folded: [], opened: [], hidden: [], icon: nil, color: nil, place: nil)
+        var saved = ((try? engine.river(name: name)) ?? nil) ?? SavedRiver(cards: [], query: nil, placed: [], folded: [], pinned: [], opened: [], hidden: [], icon: nil, color: nil, place: nil)
         // Cards are kept by their pages' own names; what the file said of each is found by where its name leads.
         let known = Dictionary(saved.cards.map { (path(named: $0.title), $0) }, uniquingKeysWith: { first, _ in first })
         saved.cards = river.cards.map { RiverCard(title: self.name(of: $0), focus: $0.focus, foldedRows: $0.foldedRows, placeRank: known[$0.path]?.placeRank, placeKey: known[$0.path]?.placeKey) }
         saved.folded = river.cards.filter(\.folded).map { self.name(of: $0) }
+        saved.pinned = river.cards.filter(\.pinned).map { self.name(of: $0) }
         saved.icon = river.icon
         saved.color = river.color
         saved.query = river.query
@@ -973,15 +978,18 @@ public final class GraphStore {
         // card showing where a page is spoken of stays so as its river is read again.
         var open = Dictionary(river.cards.map { (Card.spot(path: $0.path, focus: $0.focus), $0) }, uniquingKeysWith: { first, _ in first })
         let folded = Set(saved.folded.map { path(named: $0) })
+        let pinned = Set(saved.pinned.map { path(named: $0) })
         river.cards = saved.cards.compactMap { held in
             let path = path(named: held.title)
             guard !isGone(path: path) else { return nil }
             // A page may have several cards, each of a row of its own: each is found by both.
             var card = open.removeValue(forKey: Card.spot(path: path, focus: held.focus)) ?? Card(path: path, title: title(of: path, named: held.title), focus: held.focus)
             card.folded = folded.contains(path)
+            card.pinned = pinned.contains(path)
             card.foldedRows = held.foldedRows
             return card
         }
+        river.keepPinsOnTop()
         river.icon = saved.icon
         river.color = saved.color
         river.query = saved.query
@@ -1061,14 +1069,17 @@ public final class GraphStore {
         river.hidden = saved.hidden.map(ownName)
         river.opened = Set(saved.opened.map(ownName))
         let folded = Set(saved.folded.map { path(named: $0) })
+        let pinned = Set(saved.pinned.map { path(named: $0) })
         river.cards = saved.cards.compactMap { card in
             let path = path(named: card.title)
             guard !isGone(path: path) else { return nil }
             var made = Card(path: path, title: title(of: path, named: card.title), focus: card.focus)
             made.folded = folded.contains(path)
+            made.pinned = pinned.contains(path)
             made.foldedRows = card.foldedRows
             return made
         }
+        river.keepPinsOnTop()
         known[river.id] = river.signature
         // In place of a river with nothing in it, rather than beside it.
         if self.river.cards.isEmpty, self.river.name == nil { rivers[currentRiver] = river } else {
@@ -1241,6 +1252,7 @@ public final class GraphStore {
                 river.reveal(open.id)
             } else if !last.wasFound || river.query == nil {
                 river.cards.insert(last.card, at: min(max(last.index, 0), river.cards.count))
+                river.keepPinsOnTop()
                 river.reveal(last.card.id)
             }
             rememberRivers()
@@ -1503,6 +1515,12 @@ public struct Card: Identifiable, Hashable, Codable {
     public var path: String
     public var title: String
     public var folded = false
+    /// Kept at the river's top: `nil` for no — a river kept before pins had none.
+    var pin: Bool?
+    public var pinned: Bool {
+        get { pin == true }
+        set { pin = newValue ? true : nil }
+    }
     /// The rows of its outline folded away, in this river: each known by
     /// its place and its words, as the river's file keeps them.
     public var folds: [Fold]?
@@ -1729,6 +1747,7 @@ public final class River: Identifiable {
         var folds: [[Card.Fold]] = []
         var cards: [String]
         var folded: Set<String>
+        var pinned: [String] = []
         var icon: String?
         var color: String?
         var query: String?
@@ -1737,7 +1756,7 @@ public final class River: Identifiable {
     }
 
     var signature: Signature {
-        Signature(folds: cards.map { $0.folds ?? [] }, cards: cards.map { card in card.focus.map { "\(card.name)^\($0)" } ?? card.name }, folded: Set(cards.filter(\.folded).map(\.name)), icon: icon, color: color, query: query, hidden: query == nil ? [] : hidden, opened: query == nil ? [] : opened)
+        Signature(folds: cards.map { $0.folds ?? [] }, cards: cards.map { card in card.focus.map { "\(card.name)^\($0)" } ?? card.name }, folded: Set(cards.filter(\.folded).map(\.name)), pinned: cards.filter(\.pinned).map(\.name), icon: icon, color: color, query: query, hidden: query == nil ? [] : hidden, opened: query == nil ? [] : opened)
     }
 
     var kept: Kept {
@@ -1875,7 +1894,27 @@ public final class River: Identifiable {
         } else {
             cards.insert(card, at: 0)
         }
+        keepPinsOnTop()
         reveal(card.id, from: after)
+    }
+
+    /// The cards pinned at the river's top, in their order; the rest after, in theirs.
+    func keepPinsOnTop() {
+        let ordered = cards.filter(\.pinned) + cards.filter { !$0.pinned }
+        if ordered.map(\.id) != cards.map(\.id) { cards = ordered }
+    }
+
+    /// Pins a card at the river's top — always first, whatever comes in
+    /// after — or lets it go. One the query found is held by hand first.
+    public func togglePin(_ id: Card.ID) {
+        if found.contains(where: { $0.id == id }) { hold(id) }
+        guard let index = cards.firstIndex(where: { $0.id == id }) else { return }
+        let pinning = !cards[index].pinned
+        cards[index].pinned = pinning
+        // Pinned: last among the pinned. Let go: first after them.
+        let card = cards.remove(at: index)
+        let pins = cards.filter(\.pinned).count
+        cards.insert(card, at: pins)
     }
 
     /// Shows a card, and chooses it. Where the river was — the card the
@@ -1936,6 +1975,7 @@ public final class River: Identifiable {
         let to = min(max(place, 0), cards.count - 1)
         guard to != from else { return }
         cards.insert(cards.remove(at: from), at: to)
+        keepPinsOnTop()
     }
 
     public func move(_ id: Card.ID, by step: Int) {
@@ -1943,6 +1983,7 @@ public final class River: Identifiable {
         let to = index + step
         guard cards.indices.contains(to) else { return }
         cards.swapAt(index, to)
+        keepPinsOnTop()
     }
 
     public func select(step: Int) {
@@ -2305,6 +2346,23 @@ public final class PageDraft {
         setField("related", values: related + [day], asList: true)
         saveNow()
         return true
+    }
+
+    /// Links the note to another, in its frontmatter (`related:`), as a
+    /// day is stamped. Says whether it was new.
+    @discardableResult
+    public func relate(_ name: String) -> Bool {
+        let key = nameKey(name: name)
+        guard !related.contains(where: { nameKey(name: $0.trimmingCharacters(in: CharacterSet(charactersIn: "[] "))) == key }) else { return false }
+        setField("related", values: related + [name], asList: true)
+        saveNow()
+        return true
+    }
+
+    /// Whether the note names a page, by any of its names, among those it is related to.
+    func isRelated(_ path: String, in store: GraphStore) -> Bool {
+        let names = Set(store.names(of: path).map { nameKey(name: $0) })
+        return related.contains { names.contains(nameKey(name: $0.trimmingCharacters(in: CharacterSet(charactersIn: "[] ")))) }
     }
 
     /// Takes a page out of those the note names as related.

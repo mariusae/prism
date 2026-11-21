@@ -481,7 +481,9 @@ extension NoteEditorView {
         /// which is not always at the change's end: a word set right by
         /// the keyboard, after the space that followed it, is changed
         /// behind the caret, and the caret is not to go back to it.
-        func settle(_ edit: BodyEdit?, typed: Bool = false) {
+        /// `reveal`: the caret scrolled into sight — not when what was done was done
+        /// elsewhere, a box ticked by a click, which would carry the river to the caret.
+        func settle(_ edit: BodyEdit?, typed: Bool = false, reveal: Bool = true) {
             guard let view, let storage = view.noteStorage else { return }
             let text = editor.text()
             var edit = edit
@@ -508,7 +510,7 @@ extension NoteEditorView {
                 isApplying = false
             }
             restyle()
-            view.scrollRangeToVisible(view.caret)
+            if reveal { view.scrollRangeToVisible(view.caret) }
             parent.onChange()
             tellFolds()
             updateOffers()
@@ -751,7 +753,7 @@ extension NoteEditorView {
                 edit.selectionStart = UInt32(kept.location)
                 edit.selectionEnd = UInt32(NSMaxRange(kept))
             }
-            settle(edit)
+            settle(edit, reveal: place == nil)
             return true
         }
 

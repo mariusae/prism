@@ -64,4 +64,30 @@ final class HomeRiverTests: XCTestCase {
         XCTAssertEqual(store.river.name, "Inbox")
         XCTAssertNotNil(store.river.all.first { $0.path == made.path })
     }
+
+    func testACardKeptAtTheTopStaysThereAndIsSaved() throws {
+        let (folder, store) = try graph()
+        defer { store.close(); try? FileManager.default.removeItem(at: folder) }
+        store.open(name: "Plan")
+        store.open(name: "Other")
+        let river = store.river
+        let plan = try XCTUnwrap(river.cards.first { $0.title == "Plan" })
+        river.togglePin(plan.id)
+        XCTAssertEqual(river.cards.first?.id, plan.id)
+        // What comes in after goes under it.
+        store.open(name: "Third")
+        XCTAssertEqual(river.cards.first?.id, plan.id)
+        river.move(river.cards.last!.id, toPlace: 0)
+        XCTAssertEqual(river.cards.first?.id, plan.id)
+        // Saved, and read again: still kept at the top.
+        store.rename(river, to: "Work")
+        store.save(river)
+        let file = (try? String(contentsOf: folder.appendingPathComponent("rivers/Work.md"), encoding: .utf8)) ?? ""
+        XCTAssert(file.contains("pinned:\n  - plan"), file)
+        store.newRiver()
+        store.closeRiver(at: 0)
+        store.openSaved("Work")
+        XCTAssertEqual(store.river.cards.first?.path, plan.path)
+        XCTAssertTrue(store.river.cards.first?.pinned == true)
+    }
 }

@@ -136,6 +136,8 @@ pub struct River {
     pub placed: Vec<Card>,
     /// The cards showing only their titles.
     pub folded: Vec<String>,
+    /// The cards kept at its top, whatever comes into it after.
+    pub pinned: Vec<String>,
     /// Of what the query finds: those opened out of their peek.
     pub opened: Vec<String>,
     /// Of what the query finds: those taken out of the river.
@@ -158,6 +160,7 @@ impl PartialEq for River {
             && self.query == other.query
             && self.placed == other.placed
             && self.folded == other.folded
+            && self.pinned == other.pinned
             && self.opened == other.opened
             && self.hidden == other.hidden
             && self.icon == other.icon
@@ -174,6 +177,7 @@ impl River {
         let mut river = River::default();
         if let Some(front) = &front {
             river.folded = front.list("folded");
+            river.pinned = front.list("pinned");
             river.opened = front.list("opened");
             river.hidden = front.list("hidden");
             river.icon = front.text("icon").map(str::to_owned);
@@ -264,6 +268,8 @@ impl River {
             }
         };
         list("folded", held);
+        let pinned: Vec<String> = self.titles().filter(|title| self.pinned.iter().any(|p| p == title)).map(str::to_owned).collect();
+        list("pinned", pinned);
         let mut opened = self.opened.clone();
         opened.sort();
         list("opened", opened);
@@ -385,6 +391,15 @@ mod tests {
         assert_eq!(river.placed[0].folded_rows[0].text, "A row");
         assert_eq!((river.hidden.as_slice(), river.icon.as_deref(), river.place), (&["Old Notes".to_owned()][..], Some("tray"), Some(2.5)));
         assert_eq!(river.to_markdown(), QUERIED);
+    }
+
+    #[test]
+    fn pinned_cards_are_kept_in_the_frontmatter() {
+        let mut river = River::parse("- [[Alpha]]\n- [[Beta]]\n");
+        river.pinned = vec!["Beta".into(), "Gone".into()];
+        let written = river.to_markdown();
+        assert_eq!(written, "---\npinned:\n  - Beta\n---\n- [[Alpha]]\n- [[Beta]]\n");
+        assert_eq!(River::parse(&written).pinned, ["Beta"]);
     }
 
     #[test]

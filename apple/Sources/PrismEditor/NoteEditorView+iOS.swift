@@ -1017,7 +1017,7 @@ public final class NoteTextView: UITextView {
         ("9", [.command, .alternate], "foldByLevel"), ("0", [.command, .alternate], "unfoldByLevel"),
         ("9", [.command, .control], "foldAll"), ("0", [.command, .control], "unfoldAll"),
         ("9", [.command, .control, .alternate], "foldAllByLevel"), ("0", [.command, .control, .alternate], "unfoldAllByLevel"),
-        ("\r", [.command], "insertBelow"), ("\r", [.command, .shift], "insertAbove"), ("\r", [.command, .alternate], "insertChild"),
+        ("\r", [.shift], "lineBreak"), ("\r", [.command], "insertBelow"), ("\r", [.command, .shift], "insertAbove"), ("\r", [.command, .alternate], "insertChild"),
         (UIKeyCommand.inputUpArrow, [.command, .control], "moveUp"), (UIKeyCommand.inputDownArrow, [.command, .control], "moveDown"),
         (UIKeyCommand.inputRightArrow, [.command, .control], "indent"), (UIKeyCommand.inputLeftArrow, [.command, .control], "outdent"),
         (UIKeyCommand.inputUpArrow, [.command, .control, .alternate], "moveUpKeepingLevel"), (UIKeyCommand.inputDownArrow, [.command, .control, .alternate], "moveDownKeepingLevel"),
@@ -1065,6 +1065,18 @@ public final class NoteTextView: UITextView {
             coordinator.redo()
         case "escape":
             if coordinator.isOffering { coordinator.dismissOffers() } else { resignFirstResponder() }
+        case "lineBreak":
+            // ⇧↩: a line break within the row — a quote of several lines, a bullet's second line.
+            // In a heading, a table, a rule: a new row, as ↩.
+            let lines = coordinator.layout.lines
+            if let row = coordinator.caretRow, lines.indices.contains(row) {
+                switch lines[row].kind {
+                case .item, .quote, .paragraph, .code: insertText("\u{2028}")
+                default: insertText("\n")
+                }
+            } else {
+                insertText("\n")
+            }
         default:
             if let command = Self.commands[name] { coordinator.perform(command) }
         }

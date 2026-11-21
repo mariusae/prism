@@ -1,5 +1,6 @@
 import Foundation
 import Prism
+import PrismEmblem
 import SwiftUI
 
 /// A day's name, as the graph writes it: 2026-11-10.
@@ -255,6 +256,85 @@ struct TagAdder: View {
     }
 }
 
+
+/// Links a note to another — any note, as Stamp links it to a day: the
+/// other named in its frontmatter (`related:`), so that each lists the
+/// other, and the other's foot says it is linked from this one.
+struct NoteLinker: View {
+    let store: GraphStore
+    let draft: PageDraft
+    var done: () -> Void
+    @State private var typed = ""
+    @State private var offers: [PageInfo] = []
+    @State private var chosen = 0
+    @FocusState private var isTyping: Bool
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack(spacing: 8) {
+                Image(systemName: "link").foregroundStyle(Color.inkSecondary)
+                field
+            }
+            if !offers.isEmpty {
+                VStack(alignment: .leading, spacing: 0) {
+                    ForEach(Array(offers.enumerated()), id: \.element.path) { index, page in
+                        let linked = draft.isRelated(page.path, in: store)
+                        Button { link(page) } label: {
+                            HStack(spacing: 8) {
+                                EmblemView(store.emblem(page), size: 18, style: .tile, quiet: Color.inkSecondary)
+                                Text(page.label).lineLimit(1)
+                                Spacer(minLength: 8)
+                                if linked { Image(systemName: "checkmark").foregroundStyle(Color.inkSecondary) }
+                            }
+                            .padding(.horizontal, 8).frame(height: 30)
+                            .background(RoundedRectangle(cornerRadius: 6, style: .continuous).fill(index == chosen ? Color.inkHover : .clear))
+                            .contentShape(Rectangle())
+                        }
+                        .buttonStyle(.plain)
+                        .disabled(linked)
+                    }
+                }
+            }
+        }
+        .padding(14)
+        .foregroundStyle(Color.inkText)
+        .onAppear {
+            isTyping = true
+            find()
+        }
+        .onChange(of: typed) { _, _ in find() }
+    }
+
+    @ViewBuilder private var field: some View {
+        #if os(iOS)
+        TextField("Link to a note", text: $typed).autocorrectionDisabled().submitLabel(.done)
+            .focused($isTyping).onSubmit(choose)
+        #else
+        TextField("Link to a note", text: $typed).textFieldStyle(.plain).focused($isTyping).onSubmit(choose)
+            .onKeyPress(.downArrow) { chosen = min(chosen + 1, max(offers.count - 1, 0)); return .handled }
+            .onKeyPress(.upArrow) { chosen = max(chosen - 1, 0); return .handled }
+        #endif
+    }
+
+    /// The notes named what is typed — else those written in lately — but the note itself.
+    private func find() {
+        let name = typed.trimmingCharacters(in: .whitespaces)
+        let pages = name.isEmpty
+            ? ((try? store.engine.runQuery(body: "sort: -modified\nlimit: 9", this: nil).pages) ?? [])
+            : ((try? store.engine.complete(typed: name, limit: 9)) ?? [])
+        offers = Array(pages.filter { $0.path != draft.path }.prefix(8))
+        chosen = 0
+    }
+
+    private func choose() {
+        if offers.indices.contains(chosen) { link(offers[chosen]) }
+    }
+
+    private func link(_ page: PageInfo) {
+        draft.relate(Prism.linkName(path: page.path) ?? page.title)
+        done()
+    }
+}
 
 /// A river carried over another's tab, or its tile in the rivers'
 /// overview: the rivers put in that order as it passes, as Safari's tabs

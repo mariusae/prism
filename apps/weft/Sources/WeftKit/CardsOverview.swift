@@ -236,6 +236,7 @@ extension GraphStore {
                 other.cards.insert(moved, at: 0)
             }
         }
+        other.keepPinsOnTop()
         rememberRivers()
     }
 }

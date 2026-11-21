@@ -21,6 +21,7 @@ struct CardView: View {
     @State private var isRenaming = false
     @State private var choosesLook = false
     @State private var addsTag = false
+    @State private var linksNote = false
     @State private var stampsDay = false
     @State private var newTitle = ""
     @State private var backlinks: [Source] = []
@@ -113,6 +114,9 @@ struct CardView: View {
         .overlay(alignment: .topLeading) {
             Color.clear.frame(width: Measures.margin * 2, height: 30).allowsHitTesting(false)
                 // Where a tag is added: here whether or not the card has a line of tags yet.
+                .popover(isPresented: $linksNote, arrowEdge: .bottom) {
+                    NoteLinker(store: store, draft: draft) { linksNote = false; refresh() }.frame(width: 320)
+                }
                 .popover(isPresented: $addsTag, arrowEdge: .bottom) {
                     TagAdder(store: store, draft: draft) { addsTag = false; refresh() }.frame(width: 300)
                 }
@@ -415,6 +419,11 @@ struct CardView: View {
                     if store.isPinned(card.path) {
                         Image(systemName: "pin.fill").font(.caption).foregroundStyle(Color.inkAccent)
                     }
+                    // Kept at the river's top.
+                    if river.card(card.id)?.pinned == true {
+                        Image(systemName: "arrow.up.to.line.compact").font(.caption).foregroundStyle(Color.inkSecondary)
+                            .help("Kept at the top of this river")
+                    }
                 if store.isArchived(card.path) { ArchivedLabel() }
                 }
                 Spacer(minLength: 8)
@@ -689,8 +698,14 @@ struct CardView: View {
                 .disabled(draft.isStamped(today))
             Button("Stamp with Day…", systemImage: "calendar") { stampsDay = true }
         }
+        if draft.exists { Button("Link to Note…", systemImage: "link") { linksNote = true } }
         Divider()
         if river.query == nil || !river.isFound(card.id) { MoveToRiverMenu(store: store, river: river, ids: [card.id]) }
+        let pinned = river.card(card.id)?.pinned == true
+        Button(pinned ? "Stop Keeping at Top" : "Keep at Top of River", systemImage: pinned ? "arrow.down.to.line" : "arrow.up.to.line.compact") {
+            withAnimation(.snappy(duration: 0.28)) { river.togglePin(card.id) }
+            store.rememberRivers()
+        }
         Button("Move to Top", systemImage: "arrow.up.to.line") {
             withAnimation(.snappy(duration: 0.28)) { river.move(card.id, toPlace: 0) }
             store.rememberRivers()

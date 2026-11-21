@@ -295,7 +295,7 @@ final class PhoneFeaturesTests: XCTestCase {
         store.newRiver()
         let there = store.river
         store.currentRiver = 0
-        _ = try store.engine.saveRiver(name: "Kept", river: SavedRiver(cards: [], query: nil, placed: [], folded: [], opened: [], hidden: [], icon: nil, color: nil, place: nil))
+        _ = try store.engine.saveRiver(name: "Kept", river: SavedRiver(cards: [], query: nil, placed: [], folded: [], pinned: [], opened: [], hidden: [], icon: nil, color: nil, place: nil))
         store.engine.settle()
         // Open rivers first, then saved ones that are not.
         let targets = store.moveTargets(from: here)

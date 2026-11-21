@@ -57,7 +57,7 @@ extension GraphStore {
             rememberRivers()
         } else {
             var saved = ((try? engine.river(name: river)) ?? nil)
-                ?? SavedRiver(cards: [], query: nil, placed: [], folded: [], opened: [], hidden: [], icon: nil, color: nil, place: nil)
+                ?? SavedRiver(cards: [], query: nil, placed: [], folded: [], pinned: [], opened: [], hidden: [], icon: nil, color: nil, place: nil)
             let name = linkName(path: path, title: title)
             if isIn {
                 let card = RiverCard(title: name, focus: nil, foldedRows: [], placeRank: nil, placeKey: nil)

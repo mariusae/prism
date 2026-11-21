@@ -2843,6 +2843,20 @@ mod tests {
     }
 
     #[test]
+    fn a_row_after_a_quote_goes_in_under_it() {
+        let (mut session, mut view) = outline("- note\n  > a long quote\n  - not sure I agree\n");
+        let at = view.find("not sure").unwrap();
+        let change = session.perform(at..at, Command::Indent).unwrap();
+        shown(&mut view, &change);
+        assert_eq!(view, session.text());
+        assert_eq!(session.markdown(), "- note\n  - > a long quote\n    - not sure I agree\n");
+        // And out again: the quote is a quote.
+        let at = view.find("not sure").unwrap();
+        session.perform(at..at, Command::Outdent).unwrap();
+        assert!(session.markdown().contains("> a long quote"), "{}", session.markdown());
+    }
+
+    #[test]
     fn code_is_one_row_and_a_line_break_in_it_stays_in_it() {
         let (mut session, mut view) = outline("- before\n\n```\nlet x = 1;\n```\n");
         let at = view.find("let x = 1;").unwrap() + "let x = 1;".len();
