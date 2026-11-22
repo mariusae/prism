@@ -170,6 +170,8 @@ enum Snapshot {
         }
         // WEFT_OVERVIEW: the river shown whole, its cards as tiles.
         if environment["WEFT_OVERVIEW"] != nil { DispatchQueue.main.async { actions.overview += 1 } }
+        // WEFT_TABS: every river at once (⌘\\).
+        if environment["WEFT_TABS"] != nil { DispatchQueue.main.async { actions.tabsOverview += 1 } }
         // WEFT_GO_TO_ROW=words: Go to Row, with those words typed.
         if let typed = environment["WEFT_GO_TO_ROW"] { DispatchQueue.main.async { actions.goToRowSeed = typed; actions.goToRow += 1 } }
         // WEFT_STAMP: the note chosen stamped with today, as ⌃⌘T does.

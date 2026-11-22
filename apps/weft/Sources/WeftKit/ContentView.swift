@@ -15,6 +15,8 @@ public final class WindowActions {
     public var calendar = 0
     /// Moved to show the river whole, its cards as tiles — or, shown so, the river again.
     public var overview = 0
+    /// Moved to show every river at once, each a tile — or, shown so, the river again.
+    public var tabsOverview = 0
     /// Moved to name the river shown — which saves it.
     public var saveRiver = 0
     /// Moved to find among the river's own notes: by name, or in what they say.
@@ -79,6 +81,7 @@ public struct ContentView: View {
     @State private var seed = ""
     /// Whether the river is shown whole: its cards as tiles.
     @State private var showsOverview = false
+    @State private var showsTabs = false
     /// Whether what is being found is found among the river's own notes only.
     @State private var findsInRiver = false
     @State private var showsGoToRow = false
@@ -118,6 +121,14 @@ public struct ContentView: View {
                     }
                 }
                 .animation(.easeOut(duration: 0.16), value: showsOverview)
+                // Every river at once, over the river and its overview.
+                .overlay {
+                    if showsTabs {
+                        TabsOverview(store: store, isShown: $showsTabs)
+                            .transition(.opacity.combined(with: .scale(scale: 1.04)))
+                    }
+                }
+                .animation(.easeOut(duration: 0.16), value: showsTabs)
                 .onGeometryChange(for: CGFloat.self) { $0.size.width.rounded() } action: { detailWidth = $0 }
                 .overlay(alignment: .top) {
                     if showsQuickOpen {
@@ -241,7 +252,15 @@ public struct ContentView: View {
             actions.typed = ""
         }
         .onChange(of: actions.calendar) { _, _ in showsCalendar = true }
-        .onChange(of: actions.overview) { _, _ in showsOverview.toggle() }
+        .onChange(of: actions.overview) { _, _ in
+            showsTabs = false
+            showsOverview.toggle()
+        }
+        .onChange(of: actions.tabsOverview) { _, _ in
+            showsOverview = false
+            showsQuickOpen = false
+            showsTabs.toggle()
+        }
         .onChange(of: store.currentRiver) { _, _ in
             showsOverview = false
             if store.finding.isShown { store.finding.close() }

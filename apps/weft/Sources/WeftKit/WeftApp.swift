@@ -212,6 +212,7 @@ public struct WeftMacApp: App {
             CommandGroup(before: .windowList) {
                 Button("Show Previous Tab") { step(-1) }.keyboardShortcut("[", modifiers: [.command, .shift])
                 Button("Show Next Tab") { step(1) }.keyboardShortcut("]", modifiers: [.command, .shift])
+                Button("Show Tab Overview") { actions.tabsOverview += 1 }.keyboardShortcut("\\")
             }
         }
 

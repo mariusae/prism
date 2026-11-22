@@ -404,8 +404,13 @@ struct RiverTile: View {
 
     let store: GraphStore
     let tile: Model
+    /// What its corner says, in place of whether it is open or how many cards it holds.
+    var detail: String? = nil
+    /// Marked as the keys' place, as a tile under the pointer is.
+    var isCursor = false
     var action: () -> Void
     @State private var isHovered = false
+    private var isLit: Bool { isHovered || isCursor }
 
     var body: some View {
         Button(action: action) {
@@ -415,7 +420,7 @@ struct RiverTile: View {
                     EmblemView(tile.emblem, size: 18, quiet: Color.inkSecondary)
                     Text(tile.emblem.caption(tile.name)).font(.system(size: 13, weight: .medium)).foregroundStyle(Color.inkText).lineLimit(1)
                     Spacer(minLength: 4)
-                    Text(tile.open != nil ? "open" : "\(tile.count)").font(.system(size: 11)).foregroundStyle(Color.inkFaint)
+                    Text(detail ?? (tile.open != nil ? "open" : "\(tile.count)")).font(.system(size: 11)).foregroundStyle(Color.inkFaint)
                 }
                 .padding(.horizontal, 2)
             }
@@ -460,10 +465,10 @@ struct RiverTile: View {
         .mask(LinearGradient(stops: [.init(color: .black, location: 0.78), .init(color: .black.opacity(0.25), location: 1)], startPoint: .top, endPoint: .bottom))
         .background(Color.inkPaper)
         .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
-        .overlay(RoundedRectangle(cornerRadius: 12, style: .continuous).strokeBorder(isHovered ? (tile.emblem.color?.color ?? Color.inkAccent).opacity(0.8) : Color.inkRule, lineWidth: isHovered ? 1.5 : 1))
-        .shadow(color: .black.opacity(isHovered ? 0.12 : 0.06), radius: isHovered ? 10 : 5, y: isHovered ? 4 : 2)
-        .scaleEffect(isHovered ? 1.015 : 1)
-        .animation(.easeOut(duration: 0.12), value: isHovered)
+        .overlay(RoundedRectangle(cornerRadius: 12, style: .continuous).strokeBorder(isLit ? (tile.emblem.color?.color ?? Color.inkAccent).opacity(0.8) : Color.inkRule, lineWidth: isLit ? 1.5 : 1))
+        .shadow(color: .black.opacity(isLit ? 0.12 : 0.06), radius: isLit ? 10 : 5, y: isLit ? 4 : 2)
+        .scaleEffect(isLit ? 1.015 : 1)
+        .animation(.easeOut(duration: 0.12), value: isLit)
     }
 }
 
