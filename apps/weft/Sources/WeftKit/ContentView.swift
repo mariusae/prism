@@ -35,6 +35,27 @@ public final class WindowActions {
 /// river, and out of the way until asked for.
 /// Takes the window's own bar's line from under it, and lets the river
 /// run up to the window's top: the bar is filled with the page's paper.
+/// A tooltip over a view, drawn by AppKit: the area takes no clicks, drags
+/// or drops — they go to what is under it — and only says its words when
+/// the pointer rests on it.
+struct ToolTipArea: NSViewRepresentable {
+    let text: String
+
+    final class Area: NSView {
+        override func hitTest(_ point: NSPoint) -> NSView? { nil }
+    }
+
+    func makeNSView(context: Context) -> Area {
+        let view = Area()
+        view.toolTip = text
+        return view
+    }
+
+    func updateNSView(_ view: Area, context: Context) {
+        if view.toolTip != text { view.toolTip = text }
+    }
+}
+
 private struct ClearTitleBar: NSViewRepresentable {
     final class Watcher: NSView {
         override func viewDidMoveToWindow() {
@@ -333,6 +354,22 @@ struct RiverBar: View {
         }
     }
 
+    /// Whether a tab's name is cut short in its width: its words, and what is beside them, wider than it.
+    private func cutShort(_ river: River, current: Bool, width: CGFloat) -> Bool {
+        let font = NSFont.systemFont(ofSize: 12.5, weight: current ? .semibold : .regular)
+        let words = (store.title(of: river) as NSString).size(withAttributes: [.font: font]).width
+        let beside: CGFloat = river.icon != nil || river.color != nil ? 22 : 0
+        return words + beside + 24 > width
+    }
+
+    /// What a tab says under the pointer: its whole name when it is cut short, else what clicking it does.
+    private func tabTip(_ river: River, current: Bool, cut: Bool) -> String {
+        let name = store.title(of: river)
+        let unsaved = river.name == nil && store.rivers.count > 1 ? " — not saved (⌘S names and saves it)" : ""
+        if cut { return name + unsaved }
+        return current ? "Find a note, or name a new one (⌘O) — or just start typing" : name + unsaved
+    }
+
     var body: some View {
         let widths = widths
         HStack(spacing: 2) {
@@ -444,7 +481,9 @@ struct RiverBar: View {
                 .popover(isPresented: Binding(get: { styling == river.id }, set: { if !$0 { styling = nil } }), arrowEdge: .bottom) {
                     RiverLook(store: store, river: river)
                 }
-                .help(current ? "Find a note, or name a new one (⌘O) — or just start typing" : (river.name == nil ? "\(store.title(of: river)) — not saved (⌘S names and saves it)" : store.title(of: river)))
+                // Its whole name under the pointer, when the tab is too narrow to say it — drawn by AppKit, as
+                // SwiftUI's own help is not shown over a tab that is carried and dropped on.
+                .overlay { ToolTipArea(text: tabTip(river, current: current, cut: shrunk || cutShort(river, current: current, width: current ? widths.current : widths.other))) }
             }
             Button { withAnimation(.snappy(duration: 0.2)) { store.newRiver() } } label: {
                 Image(systemName: "plus").font(.system(size: 10.5, weight: .semibold)).frame(width: 24, height: 24).contentShape(Rectangle())
