@@ -637,6 +637,40 @@ public final class GraphStore {
         rememberRivers()
     }
 
+    /// A new row at the top of today — under its title, if it has one —
+    /// written in at once: today opened in the river, or gone to where it
+    /// is. A first row with nothing in it is written in rather than another
+    /// made. Says whether it was.
+    @discardableResult
+    public func writeAtTopOfToday() -> Bool {
+        let day = Days.name(Date())
+        open(name: day, after: river.selected)
+        guard let card = river.all.first(where: { $0.title == day || Prism.linkName(path: $0.path) == day }) else { return false }
+        let draft = draft(path: card.path, title: card.title)
+        // What is being written in it is written first: the file is what is added to.
+        draft.saveNow()
+        let text = ((try? engine.read(path: card.path)) ?? nil) ?? ""
+        let first = Self.firstBodyLine(of: text)
+        if first?.trimmingCharacters(in: .whitespaces) != "-" {
+            guard (try? engine.write(path: card.path, content: LinkNote.atTop("- \n", of: text))) != nil else { return false }
+            draft.fileChanged()
+        }
+        // Its first row: the one after the title, if the outline counts it.
+        let rows = draft.editor.outline()
+        guard let row = rows.first(where: { $0.heading != 1 }) else { return false }
+        goToRow(card: card.id, index: row.index)
+        return true
+    }
+
+    /// The first line of a note's body: after its frontmatter, its title and the blank lines round them.
+    static func firstBodyLine(of text: String) -> String? {
+        var lines = text.components(separatedBy: "\n")[...]
+        if lines.first == "---", let close = lines.dropFirst().firstIndex(of: "---") { lines = lines[(close + 1)...] }
+        lines = lines.drop { $0.trimmingCharacters(in: .whitespaces).isEmpty }
+        if lines.first?.hasPrefix("# ") == true { lines = lines.dropFirst().drop { $0.trimmingCharacters(in: .whitespaces).isEmpty } }
+        return lines.first
+    }
+
     /// The note being written in — else the one chosen — linked to today
     /// in its frontmatter. Says whether it was stamped.
     @discardableResult

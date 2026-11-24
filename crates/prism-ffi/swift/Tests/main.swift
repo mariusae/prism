@@ -177,7 +177,7 @@ expect(try engine.runQuery(body: "sort: -modified\nlimit: 1", this: nil).pages.c
 
 // A river.
 let river = SavedRiver(cards: [RiverCard(title: "Atlas Reborn", focus: nil, foldedRows: [RiverFoldedRow(index: 2, text: "Book a room")], placeRank: nil, placeKey: nil)],
-                       query: nil, placed: [], folded: ["Atlas Reborn"], opened: [], hidden: [], icon: "tray", color: nil, place: nil)
+                       query: nil, placed: [], folded: ["Atlas Reborn"], pinned: [], opened: [], hidden: [], icon: "tray", color: nil, place: nil)
 expect(try engine.saveRiver(name: "Work", river: river), "a river is saved")
 expect(try engine.river(name: "Work") == river && engine.riverNames() == ["Work"], "and read back as it was")
 expect(riverName(linkTarget: "rivers/Work") == "Work", "river links")

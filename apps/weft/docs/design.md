@@ -111,11 +111,11 @@ tiles 58 × 58 r14, Pinned (8) and Recent (10) rows 34 high.
 
 ## Keys (Mac)
 
-File: New ⌘N · New To-Do ⇧⌘N · New from Pasteboard ⌥⌘N · New Tab ⌘T ·
+File: New ⌘N · New Row in Today ⇧⌘N · New To-Do ⌃⌘N · New from Pasteboard ⌥⌘N · New Tab ⌘T ·
 Reopen Closed Tab ⇧⌘T · New Window ⌥⇧⌘N · Quick Open ⌘O · Open Folder
 ⇧⌘O · Close Tab ⌘W · Close Window ⌥⌘W · Sync Now ⌘R.
 Edit: Find ⌘F · Find Page ⌥⌘F. Format: Checklist Item ⌘↩ · Task ⇧⌘↩.
-Story: Today ⇧⌘D · Close All Cards ⇧⌘W · Fold ⌃⌘↑ · Unfold ⌃⌘↓ ·
+Story: Today ⌘D · Close All Cards ⇧⌘W · Fold ⌃⌘↑ · Unfold ⌃⌘↓ ·
 Fold All ⌃⌥⌘↑ · Unfold All ⌃⌥⌘↓ · To-Do ⌃⌘K · Inbox ⌃⌘I · Pin ⌃⌘P ·
 Home River ⌃⌘H · Read ⌃⌘R · Related ⌥⌘R · Inspector ⌥⌘I · Close Card
 ⌃⌘W · Delete ⌃⌘⌫ · Back ⌘[ · Forward ⌘] · Previous / Next Day ⌥⌘[ ⌥⌘]

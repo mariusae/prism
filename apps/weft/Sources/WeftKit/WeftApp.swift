@@ -65,7 +65,9 @@ public struct WeftMacApp: App {
             }
             CommandGroup(replacing: .newItem) {
                 Button("New Note") { newPage() }.keyboardShortcut("n")
-                Button("New To-Do") { newToDo() }.keyboardShortcut("n", modifiers: [.command, .shift])
+                // A row at the top of today, written in at once: as Prism's ⌘N was.
+                Button("New Row in Today") { withAnimation(.snappy(duration: 0.28)) { if store?.writeAtTopOfToday() != true { NSSound.beep() } } }.keyboardShortcut("n", modifiers: [.command, .shift])
+                Button("New To-Do") { newToDo() }.keyboardShortcut("n", modifiers: [.command, .control])
                 Button("New Note from Pasteboard") { newFromPasteboard() }.keyboardShortcut("v", modifiers: [.command, .shift])
                 Button("New Tab") { store?.newRiver() }.keyboardShortcut("t")
                 Button("New Query River…") { store?.queryAsk = .new }.keyboardShortcut("t", modifiers: [.command, .option])
@@ -140,7 +142,7 @@ public struct WeftMacApp: App {
                 Divider()
                 Group {
                     format("Join Rows", .joinRows, .delete, [.command, .control])
-                    format("Duplicate Rows", .duplicateRows, "d")
+                    format("Duplicate Rows", .duplicateRows, "d", [.command, .control])
                     format("Delete Row", .deleteRows, "k", [.command, .shift])
                     format("Delete Row (Rows Only)", .deleteRowOnly, "k", [.control, .option])
                     format("Indent", .indent, .rightArrow, [.command, .control])

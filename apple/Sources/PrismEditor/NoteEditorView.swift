@@ -2232,7 +2232,8 @@ public final class NoteTextView: NSTextView {
         case ([.command, .shift], "-"), ([.command, .shift], "_"): return .strikethrough
         case ([.command, .shift], "k"): return .deleteRows
         case ([.control, .option], "k"): return .deleteRowOnly
-        case ([.command], "d"): return .duplicateRows
+        // ⌃⌘D, not Bike's ⌘D: ⌘D is Today's, wherever the keys are.
+        case ([.command, .control], "d"): return .duplicateRows
         case ([.command, .option], "g"): return .group
         case ([.command, .shift], "8"), ([.command, .shift], "*"): return .bullet
         // The editor's own, before the menus: ⇧⌘L is also the system's Search With Google.

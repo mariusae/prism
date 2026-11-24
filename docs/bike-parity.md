@@ -56,7 +56,7 @@ Text and block mode alike unless noted.
 | ⌃⌘↑ / ⌃⌘↓ | move up / down past the next visible row, taking its level |
 | ⌃⌥⌘↑ / ⌃⌥⌘↓ | move up / down, keeping the level |
 | ⌃⌥↑ / ⌃⌥↓ | move the row alone |
-| ⌘D | duplicate (the copy chosen, as rows) |
+| ⌃⌘D | duplicate (the copy chosen, as rows) — Bike's ⌘D; in Weft ⌘D is Today's, wherever the keys are |
 | ⇧⌘K | delete the rows, with children (the next row chosen) |
 | ⌃⌥K | delete the row alone (children move up) |
 | ⌃⌘⌫ | join the next row into this, with a space |

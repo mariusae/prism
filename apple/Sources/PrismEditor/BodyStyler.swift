@@ -411,7 +411,12 @@ struct BodyStyler {
                 // An address shown as itself is cut to what says where it leads.
                 let bare = (storage.string as NSString).substring(with: range) == url
                 link(storage, range, to: .web(url), symbol: nil, missing: false, line: line, markupEnd: markupEnd, leaves: true)
-                if bare { shorten(storage, range, address: url as NSString) }
+                if bare {
+                    // An address is a technical thing, not words: set in the face for what is said about the writing.
+                    let size = (storage.attribute(.font, at: range.location, effectiveRange: nil) as? EditorFont)?.pointSize ?? 16
+                    storage.addAttribute(.font, value: theme.label((size * 0.92).rounded(), weight: .regular), range: range)
+                    shorten(storage, range, address: url as NSString)
+                }
             case .tag(let name):
                 link(storage, range, to: .tag(name), symbol: nil, missing: false, line: line, markupEnd: markupEnd)
             case .image:

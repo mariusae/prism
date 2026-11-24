@@ -1010,7 +1010,7 @@ public final class NoteTextView: UITextView {
         ("z", [.command], "undo"), ("z", [.command, .shift], "redo"),
         ("b", [.command], "bold"), ("i", [.command], "italic"), ("c", [.command, .shift], "code"),
         ("h", [.command, .shift], "highlight"), ("-", [.command, .shift], "strikethrough"),
-        ("k", [.command, .shift], "deleteRows"), ("k", [.control, .alternate], "deleteRowOnly"), ("d", [.command], "duplicateRows"),
+        ("k", [.command, .shift], "deleteRows"), ("k", [.control, .alternate], "deleteRowOnly"), ("d", [.command, .control], "duplicateRows"),
         ("g", [.command, .alternate], "group"), ("\u{8}", [.command, .control], "joinRows"),
         ("8", [.command, .shift], "bullet"), ("l", [.command, .shift], "cycleChecklist"), ("l", [.command, .control], "toggleTask"),
         ("9", [.command], "fold"), ("0", [.command], "unfold"),

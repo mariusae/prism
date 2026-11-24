@@ -745,7 +745,7 @@ extension NoteEditorView {
             ("heading3", "Heading 3", "", "textformat.size.smaller", "heading 3 h3", .turnHeading3),
             ("quote", "Quote", "", "text.quote", "quote blockquote", .turnQuote),
             ("text", "Plain Text", "", "text.alignleft", "plain text paragraph body", .turnParagraph),
-            ("duplicate", "Duplicate Row", "⌘D", "plus.square.on.square", "duplicate copy row", .duplicateRows),
+            ("duplicate", "Duplicate Row", "⌃⌘D", "plus.square.on.square", "duplicate copy row", .duplicateRows),
             ("top", "Move to Top", "", "arrow.up.to.line", "move top row", .moveToTop),
             ("bottom", "Move to Bottom", "", "arrow.down.to.line", "move bottom row", .moveToBottom),
             ("delete", "Delete Row", "⇧⌘K", "trash", "delete remove row", .deleteRows),
