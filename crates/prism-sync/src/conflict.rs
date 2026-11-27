@@ -73,6 +73,18 @@ pub fn detect(source: &str) -> bool {
 /// outside the blocks stays byte for byte; a block cut off before its end
 /// keeps what was chosen of it.
 pub fn resolve(source: &str, keep: Keep) -> String {
+    settle(source, None, keep)
+}
+
+/// Resolves one block — the `index`th, counting from 0 in order — and
+/// leaves the others as they are, markers and all: what settling a note
+/// one place at a time does. Out of range, the text is as it was.
+pub fn resolve_one(source: &str, index: usize, keep: Keep) -> String {
+    settle(source, Some(index), keep)
+}
+
+/// Resolves the blocks — one, or every one — keeping what was chosen.
+fn settle(source: &str, only: Option<usize>, keep: Keep) -> String {
     #[derive(PartialEq)]
     enum Section {
         Text,
@@ -81,19 +93,39 @@ pub fn resolve(source: &str, keep: Keep) -> String {
     }
     let mut out: Vec<&str> = Vec::new();
     let mut section = Section::Text;
+    // Which block is being read, and whether it is one being settled.
+    let mut block = 0;
+    let mut settling = true;
     for (raw, line) in lines(source) {
         match section {
-            Section::Text if line.starts_with("<<<<<<< ") => section = Section::Ours,
-            Section::Text => out.push(raw),
-            Section::Ours if line == "=======" => section = Section::Theirs,
-            Section::Ours => {
-                if keep != Keep::Theirs {
+            Section::Text if line.starts_with("<<<<<<< ") => {
+                section = Section::Ours;
+                settling = only.is_none_or(|only| only == block);
+                block += 1;
+                if !settling {
                     out.push(raw);
                 }
             }
-            Section::Theirs if line.starts_with(">>>>>>> ") => section = Section::Text,
+            Section::Text => out.push(raw),
+            Section::Ours if line == "=======" => {
+                section = Section::Theirs;
+                if !settling {
+                    out.push(raw);
+                }
+            }
+            Section::Ours => {
+                if !settling || keep != Keep::Theirs {
+                    out.push(raw);
+                }
+            }
+            Section::Theirs if line.starts_with(">>>>>>> ") => {
+                section = Section::Text;
+                if !settling {
+                    out.push(raw);
+                }
+            }
             Section::Theirs => {
-                if keep != Keep::Ours {
+                if !settling || keep != Keep::Ours {
                     out.push(raw);
                 }
             }
@@ -194,6 +226,19 @@ mod tests {
         assert_eq!(resolve(NOTE, Keep::Theirs), "before\ntheirs\nafter\n");
         assert_eq!(resolve(NOTE, Keep::Both), "before\nmine\nmore mine\ntheirs\nafter\n");
         assert_eq!(resolve("no conflict\n", Keep::Theirs), "no conflict\n");
+    }
+
+    #[test]
+    fn one_block_is_resolved_and_the_others_kept() {
+        let two = format!("{NOTE}{}", NOTE.replace("mine", "ours").replace("theirs", "yours"));
+        assert_eq!(count(&two), 2);
+        let first = resolve_one(&two, 0, Keep::Theirs);
+        assert_eq!(first, format!("before\ntheirs\nafter\n{}", NOTE.replace("mine", "ours").replace("theirs", "yours")));
+        assert_eq!(count(&first), 1);
+        let second = resolve_one(&two, 1, Keep::Both);
+        assert_eq!(second, format!("{NOTE}before\nours\nmore ours\nyours\nafter\n"));
+        assert_eq!(resolve_one(&first, 0, Keep::Ours), "before\ntheirs\nafter\nbefore\nours\nmore ours\nafter\n");
+        assert_eq!(resolve_one(&two, 5, Keep::Ours), two);
     }
 
     #[test]

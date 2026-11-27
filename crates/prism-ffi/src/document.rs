@@ -675,6 +675,19 @@ pub fn resolve_conflicts(source: String, keep: ConflictKeep) -> String {
     prism::sync::conflict::resolve(&source, keep)
 }
 
+/// Resolves one conflict — the `index`th, from 0 — keeping the chosen
+/// side, or both; the others are left as they are.
+#[uniffi::export]
+pub fn resolve_conflict(source: String, index: u32, keep: ConflictKeep) -> String {
+    use prism::sync::conflict::Keep;
+    let keep = match keep {
+        ConflictKeep::Ours => Keep::Ours,
+        ConflictKeep::Theirs => Keep::Theirs,
+        ConflictKeep::Both => Keep::Both,
+    };
+    prism::sync::conflict::resolve_one(&source, index as usize, keep)
+}
+
 /// A note's text as runs of plain text and conflicts: a review screen.
 #[uniffi::export]
 pub fn conflict_segments(source: String) -> Vec<ConflictSegment> {

@@ -103,6 +103,8 @@ struct PhoneCard: View {
     let card: Card
     @State private var draft: PageDraft
     @State private var bodyHeight: CGFloat = 24
+    /// A note in conflict, written in as it is rather than settled a place at a time.
+    @State private var conflictAsText = false
     @State private var isRenaming = false
     @State private var newTitle = ""
     @State private var choosesLook = false
@@ -293,8 +295,9 @@ struct PhoneCard: View {
                     peek
                 } else {
                     if showsHeader { header }
-                    if draft.isConflicted { conflict }
-                    editor(draft.editor, isFocus: false)
+                    // Changed on two devices in the same places: settled a place at a time — or written in as it is.
+                    if draft.isConflicted { ConflictResolver(draft: draft, asText: $conflictAsText) }
+                    if !draft.isConflicted || conflictAsText { editor(draft.editor, isFocus: false) }
                     if !tags.isEmpty || !draft.related.isEmpty { foot }
                     // In its own river, what links to a topic is the river: not said again under it.
                     if !backlinks.isEmpty, store.topic(of: river) != card.path { mentions }
@@ -606,19 +609,6 @@ struct PhoneCard: View {
             .background(Capsule().fill(tint.opacity(0.07)))
         }
         .buttonStyle(.plain)
-    }
-
-    private var conflict: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            Label("Two devices changed the same lines.", systemImage: "exclamationmark.triangle").font(.callout).foregroundStyle(.orange)
-            HStack {
-                Button("Keep This Device\u{2019}s") { draft.resolve(keeping: .ours) }
-                Button("The Other\u{2019}s") { draft.resolve(keeping: .theirs) }
-                Button("Both") { draft.resolve(keeping: .both) }
-            }
-            .buttonStyle(.bordered)
-            .controlSize(.small)
-        }
     }
 
     /// A folded card: its ring or icon, what it is called, and how it goes on — three lines of it.

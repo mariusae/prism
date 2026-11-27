@@ -2577,6 +2577,26 @@ public final class PageDraft {
         if saved.wasMerged { take(saved.content) }
     }
 
+    /// The page as it is in its file: runs of what both devices agree on,
+    /// and each place they do not — what the resolver shows.
+    public var conflictParts: [ConflictSegment] {
+        _ = revision
+        let file = ((try? store?.engine.read(path: path)) ?? nil) ?? markdown
+        return conflictSegments(source: file)
+    }
+
+    /// Settles one conflict — the `index`th, from 0 — keeping one side, or
+    /// both; the others are left to be settled.
+    public func resolve(conflict index: Int, keeping keep: ConflictKeep) {
+        saveNow()
+        guard let store, let file = (try? store.engine.read(path: path)) ?? nil else { return }
+        let settled = resolveConflict(source: file, index: UInt32(index), keep: keep)
+        guard settled != file else { return }
+        _ = try? store.engine.write(path: path, content: settled)
+        base = settled
+        take(settled)
+    }
+
     /// Settles every conflict in the page one way.
     public func resolve(keeping keep: ConflictKeep) {
         saveNow()

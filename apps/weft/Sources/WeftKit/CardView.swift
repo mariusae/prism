@@ -17,6 +17,8 @@ struct CardView: View {
     let card: Card
     @State private var draft: PageDraft
     @State private var bodyHeight: CGFloat = 24
+    /// A note in conflict, written in as it is rather than settled a place at a time.
+    @State private var conflictAsText = false
     @State private var isHovered = false
     @State private var isRenaming = false
     @State private var choosesLook = false
@@ -76,8 +78,9 @@ struct CardView: View {
                 peek
             } else {
                 if showsHeader { header }
-                if draft.isConflicted { conflict }
-                editor(draft.editor, isFocus: false)
+                // Changed on two devices in the same places: settled a place at a time — or written in as it is.
+                if draft.isConflicted { row { ConflictResolver(draft: draft, asText: $conflictAsText) } }
+                if !draft.isConflicted || conflictAsText { editor(draft.editor, isFocus: false) }
                 if !tags.isEmpty || !draft.related.isEmpty { foot }
                 // In its own river, what links to a topic is the river: not said again under it.
                 if !backlinks.isEmpty, store.topic(of: river) != card.path { mentions }
@@ -614,19 +617,6 @@ struct CardView: View {
     /// A page that links here, opened after this card — showing where it does.
     private func openMention(_ source: Source) {
         withAnimation(.snappy(duration: 0.28)) { store.openMention(in: source.path, title: source.name, of: card.path, after: card.id, in: river) }
-    }
-
-    private var conflict: some View {
-        row {
-            HStack(spacing: 8) {
-                Image(systemName: "exclamationmark.triangle").foregroundStyle(.orange).font(.callout)
-                Text("Two devices changed the same lines.").font(.callout).foregroundStyle(Color.inkSecondary)
-                Button("Keep This Device's") { draft.resolve(keeping: .ours) }
-                Button("Keep the Other's") { draft.resolve(keeping: .theirs) }
-                Button("Keep Both") { draft.resolve(keeping: .both) }
-            }
-            .controlSize(.small)
-        }
     }
 
     private var peek: some View {
